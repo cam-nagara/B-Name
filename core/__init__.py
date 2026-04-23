@@ -12,7 +12,7 @@ register 順序は PointerProperty の前方参照を避けるため、参照先
 from __future__ import annotations
 
 from ..utils import log
-from . import panel, panel_border, paper, page, safe_area_overlay, work, work_info
+from . import mode, panel, panel_border, paper, page, safe_area_overlay, work, work_info
 
 _logger = log.get_logger(__name__)
 
@@ -24,6 +24,7 @@ _MODULES = (
     panel,         # page が CollectionProperty で参照するため page より先
     page,
     work,          # 他すべてを参照する集約なので最後
+    mode,          # Scene.bname_mode を別途 attach (work とは独立)
 )
 
 
