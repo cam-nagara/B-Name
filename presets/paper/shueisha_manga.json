@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "presetType": "paper",
+  "presetName": "集英社マンガ誌汎用",
+  "description": "集英社マンガ誌汎用 (少年誌・少女誌・青年誌共通/新書・B6判単行本化)。CLIP STUDIO PAINT 同名プリセット準拠。",
+  "paper": {
+    "canvasWidthMm": 257.00,
+    "canvasHeightMm": 364.00,
+    "dpi": 600,
+    "unit": "mm",
+    "finishWidthMm": 221.81,
+    "finishHeightMm": 328.78,
+    "bleedMm": 7.00,
+    "innerFrameWidthMm": 180.00,
+    "innerFrameHeightMm": 270.00,
+    "innerFrameOffsetXMm": 0.00,
+    "innerFrameOffsetYMm": 0.00,
+    "safeTopMm": 17.49,
+    "safeBottomMm": 17.49,
+    "safeGutterMm": 20.90,
+    "safeForeEdgeMm": 17.23,
+    "colorMode": "monochrome",
+    "defaultLineCount": 60.00,
+    "paperColor": "#FFFFFF",
+    "paperColorAlpha": 1.0,
+    "colorProfile": "sRGB IEC61966-2.1",
+    "isSpreadLayout": false,
+    "presetName": "集英社マンガ誌汎用"
+  }
+}

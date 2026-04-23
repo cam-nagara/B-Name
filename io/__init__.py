@@ -1,8 +1,14 @@
 """io — ファイル入出力 (.bname / work.json / pages.json / page.blend / panel_NNN.*).
 
-Phase 0 では空。Phase 1 から work_io / page_io / panel_io を追加。
-Phase 5 で meldex_receiver (localhost HTTP)、Phase 6 で exporter を追加。
+Phase 1-B: work_io / page_io / presets / schema を提供。
+Blender への bpy.types 登録は無いが、他モジュールからの import 都合で
+register/unregister は空関数として残す。
 """
+
+from __future__ import annotations
+
+# 公開サブモジュール (他層からのインポート都合)
+from . import page_io, presets, schema, work_io  # noqa: F401
 
 
 def register() -> None:
