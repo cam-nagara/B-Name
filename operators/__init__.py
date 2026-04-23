@@ -1,13 +1,25 @@
-"""operators — bpy.types.Operator 群.
+"""operators — bpy.types.Operator 群."""
 
-Phase 0 では空。Phase 2 以降で panel_op / balloon_op / paint_op /
-effect_line_op / asset_op / thumbnail_op / io_op を追加する。
-"""
+from __future__ import annotations
+
+from . import page_op, preset_op, spread_op, work_op
+
+_MODULES = (
+    work_op,
+    page_op,
+    spread_op,
+    preset_op,
+)
 
 
 def register() -> None:
-    pass
+    for module in _MODULES:
+        module.register()
 
 
 def unregister() -> None:
-    pass
+    for module in reversed(_MODULES):
+        try:
+            module.unregister()
+        except Exception:
+            pass

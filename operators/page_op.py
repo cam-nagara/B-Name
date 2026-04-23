@@ -1,0 +1,217 @@
+"""ページ追加・削除・複製・並び替え・選択の Operator."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import bpy
+from bpy.props import IntProperty
+from bpy.types import Operator
+
+from ..core.work import get_work
+from ..io import page_io
+from ..utils import log, paths
+
+_logger = log.get_logger(__name__)
+
+
+def _require_loaded(op: Operator, work) -> bool:
+    if work is None or not work.loaded or not work.work_dir:
+        op.report({"ERROR"}, "作品が開かれていません")
+        return False
+    return True
+
+
+class BNAME_OT_page_add(Operator):
+    """新規ページを末尾に追加."""
+
+    bl_idname = "bname.page_add"
+    bl_label = "ページを追加"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        w = get_work(context)
+        return bool(w and w.loaded)
+
+    def execute(self, context):
+        work = get_work(context)
+        if not _require_loaded(self, work):
+            return {"CANCELLED"}
+        work_dir = Path(work.work_dir)
+        try:
+            entry = page_io.register_new_page(work)
+            page_io.ensure_page_dir(work_dir, entry.id)
+            page_io.save_pages_json(work_dir, work)
+        except Exception as exc:  # noqa: BLE001
+            _logger.exception("page_add failed")
+            self.report({"ERROR"}, f"ページ追加失敗: {exc}")
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"ページ追加: {entry.id}")
+        return {"FINISHED"}
+
+
+class BNAME_OT_page_remove(Operator):
+    """選択中のページを削除 (ディレクトリごと)."""
+
+    bl_idname = "bname.page_remove"
+    bl_label = "ページを削除"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        w = get_work(context)
+        return bool(w and w.loaded and 0 <= w.active_page_index < len(w.pages))
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_confirm(self, event)
+
+    def execute(self, context):
+        work = get_work(context)
+        if not _require_loaded(self, work):
+            return {"CANCELLED"}
+        idx = work.active_page_index
+        if not (0 <= idx < len(work.pages)):
+            self.report({"ERROR"}, "有効なページが選択されていません")
+            return {"CANCELLED"}
+        page_id = work.pages[idx].id
+        work_dir = Path(work.work_dir)
+        try:
+            page_io.remove_page_dir(work_dir, page_id)
+            work.pages.remove(idx)
+            # active index の補正
+            if len(work.pages) == 0:
+                work.active_page_index = -1
+            elif idx >= len(work.pages):
+                work.active_page_index = len(work.pages) - 1
+            page_io.save_pages_json(work_dir, work)
+        except Exception as exc:  # noqa: BLE001
+            _logger.exception("page_remove failed")
+            self.report({"ERROR"}, f"ページ削除失敗: {exc}")
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"ページ削除: {page_id}")
+        return {"FINISHED"}
+
+
+class BNAME_OT_page_duplicate(Operator):
+    """選択中のページを複製 (ディレクトリごとコピー)."""
+
+    bl_idname = "bname.page_duplicate"
+    bl_label = "ページを複製"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        w = get_work(context)
+        return bool(w and w.loaded and 0 <= w.active_page_index < len(w.pages))
+
+    def execute(self, context):
+        work = get_work(context)
+        if not _require_loaded(self, work):
+            return {"CANCELLED"}
+        idx = work.active_page_index
+        src = work.pages[idx]
+        work_dir = Path(work.work_dir)
+        try:
+            new_id = page_io.allocate_new_page_id(work)
+            page_io.copy_page_dir(work_dir, src.id, new_id)
+            new_entry = work.pages.add()
+            new_entry.id = new_id
+            new_entry.title = f"{src.title} (複製)"
+            new_entry.dir_rel = f"{paths.PAGES_DIR_NAME}/{new_id}/"
+            new_entry.spread = src.spread
+            new_entry.tombo_aligned = src.tombo_aligned
+            new_entry.tombo_gap_mm = src.tombo_gap_mm
+            new_entry.panel_count = src.panel_count
+            for ref in src.original_pages:
+                ref_new = new_entry.original_pages.add()
+                ref_new.page_id = ref.page_id
+            # 直後の位置 (idx+1) に配置
+            new_index = len(work.pages) - 1
+            if new_index != idx + 1:
+                work.pages.move(new_index, idx + 1)
+            work.active_page_index = idx + 1
+            page_io.save_pages_json(work_dir, work)
+        except Exception as exc:  # noqa: BLE001
+            _logger.exception("page_duplicate failed")
+            self.report({"ERROR"}, f"ページ複製失敗: {exc}")
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"ページ複製: {src.id} → {new_id}")
+        return {"FINISHED"}
+
+
+class BNAME_OT_page_move(Operator):
+    """選択ページを前後に移動."""
+
+    bl_idname = "bname.page_move"
+    bl_label = "ページ移動"
+    bl_options = {"REGISTER", "UNDO"}
+
+    direction: IntProperty(  # type: ignore[valid-type]
+        name="方向",
+        description="-1=前, 1=後ろ",
+        default=1,
+    )
+
+    @classmethod
+    def poll(cls, context):
+        w = get_work(context)
+        return bool(w and w.loaded and 0 <= w.active_page_index < len(w.pages))
+
+    def execute(self, context):
+        work = get_work(context)
+        if not _require_loaded(self, work):
+            return {"CANCELLED"}
+        idx = work.active_page_index
+        new_idx = idx + (1 if self.direction > 0 else -1)
+        if not (0 <= new_idx < len(work.pages)):
+            return {"CANCELLED"}  # 端では無効 (エラーにはしない)
+        work_dir = Path(work.work_dir)
+        try:
+            page_io.move_page(work, idx, new_idx)
+            page_io.save_pages_json(work_dir, work)
+        except Exception as exc:  # noqa: BLE001
+            _logger.exception("page_move failed")
+            self.report({"ERROR"}, f"ページ移動失敗: {exc}")
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
+class BNAME_OT_page_select(Operator):
+    """ページ一覧のクリックで active_page_index を設定."""
+
+    bl_idname = "bname.page_select"
+    bl_label = "ページ選択"
+    bl_options = {"REGISTER"}
+
+    index: IntProperty(default=0)  # type: ignore[valid-type]
+
+    def execute(self, context):
+        work = get_work(context)
+        if work is None:
+            return {"CANCELLED"}
+        if 0 <= self.index < len(work.pages):
+            work.active_page_index = self.index
+        return {"FINISHED"}
+
+
+_CLASSES = (
+    BNAME_OT_page_add,
+    BNAME_OT_page_remove,
+    BNAME_OT_page_duplicate,
+    BNAME_OT_page_move,
+    BNAME_OT_page_select,
+)
+
+
+def register() -> None:
+    for cls in _CLASSES:
+        bpy.utils.register_class(cls)
+
+
+def unregister() -> None:
+    for cls in reversed(_CLASSES):
+        try:
+            bpy.utils.unregister_class(cls)
+        except RuntimeError:
+            pass
