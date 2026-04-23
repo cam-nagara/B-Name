@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from . import (
+    balloon_panel,
+    effect_line_panel,
     page_panel,
     panel_detail_panel,
     panel_list_panel,
@@ -16,6 +18,8 @@ _MODULES = (
     page_panel,
     panel_list_panel,
     panel_detail_panel,
+    balloon_panel,
+    effect_line_panel,
 )
 
 

@@ -1,8 +1,8 @@
-"""typography — 日本語組版エンジン (blf + fontTools + Pillow の 3 層構成).
+"""typography — 日本語組版エンジン (blf + fontTools + Pillow の 3 層構成)."""
 
-Phase 0 では空。Phase 3 で layout / ruby / tatechuyoko / kinsoku / metrics /
-viewport_renderer / export_renderer を追加する。
-"""
+from __future__ import annotations
+
+from . import export_renderer, kinsoku, layout, metrics, ruby, tatechuyoko, viewport_renderer  # noqa: F401
 
 
 def register() -> None:

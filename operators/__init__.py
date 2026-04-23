@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from . import (
+    balloon_op,
+    effect_line_op,
     mode_op,
     page_op,
     panel_edit_op,
@@ -18,6 +20,8 @@ _MODULES = (
     spread_op,
     panel_op,
     panel_edit_op,
+    balloon_op,
+    effect_line_op,
     mode_op,
     preset_op,
 )
