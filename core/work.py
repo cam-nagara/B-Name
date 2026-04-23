@@ -1,0 +1,129 @@
+"""作品データの集約 PropertyGroup.
+
+work.json 全体を Blender 内で保持する root コンテナ。Scene.bname_work に
+PointerProperty で attach する。
+
+依存順: 参照先 (paper / work_info / safe_area_overlay / page) を先に
+register しておくこと。core/__init__.py が順序を保証する。
+"""
+
+from __future__ import annotations
+
+import bpy
+from bpy.props import (
+    BoolProperty,
+    CollectionProperty,
+    FloatProperty,
+    IntProperty,
+    PointerProperty,
+    StringProperty,
+)
+
+from ..utils import log
+from .page import BNamePageEntry
+from .paper import BNamePaperSettings
+from .safe_area_overlay import BNameSafeAreaOverlay
+from .work_info import BNameNombre, BNameWorkInfo
+
+_logger = log.get_logger(__name__)
+
+
+class BNamePanelGap(bpy.types.PropertyGroup):
+    """コマ間隔ルール (作品共通、計画書 3.2.5.4).
+
+    既定値: 上下 7.3mm / 左右 2.1mm。
+    """
+
+    vertical_mm: FloatProperty(  # type: ignore[valid-type]
+        name="上下スキマ",
+        default=7.3,
+        min=0.0,
+        soft_max=50.0,
+    )
+    horizontal_mm: FloatProperty(  # type: ignore[valid-type]
+        name="左右スキマ",
+        default=2.1,
+        min=0.0,
+        soft_max=50.0,
+    )
+
+
+class BNameWorkData(bpy.types.PropertyGroup):
+    """作品 1 件分のデータ (.bname フォルダ 1 個分)."""
+
+    # --- メタ ---
+    loaded: BoolProperty(  # type: ignore[valid-type]
+        name="作品ロード済み",
+        default=False,
+    )
+    work_dir: StringProperty(  # type: ignore[valid-type]
+        name="作品ディレクトリ",
+        description="MyWork.bname/ のフルパス",
+        default="",
+        subtype="DIR_PATH",
+    )
+
+    # --- 各セクション ---
+    work_info: PointerProperty(type=BNameWorkInfo)  # type: ignore[valid-type]
+    nombre: PointerProperty(type=BNameNombre)  # type: ignore[valid-type]
+    paper: PointerProperty(type=BNamePaperSettings)  # type: ignore[valid-type]
+    safe_area_overlay: PointerProperty(type=BNameSafeAreaOverlay)  # type: ignore[valid-type]
+    panel_gap: PointerProperty(type=BNamePanelGap)  # type: ignore[valid-type]
+
+    # --- ページ一覧 ---
+    pages: CollectionProperty(type=BNamePageEntry)  # type: ignore[valid-type]
+    active_page_index: IntProperty(  # type: ignore[valid-type]
+        name="アクティブページ",
+        default=-1,
+        min=-1,
+    )
+
+
+# ----- Scene attach ヘルパ -----
+
+
+def get_work(context: bpy.types.Context | None = None) -> BNameWorkData | None:
+    """現在のシーンに紐づく BNameWorkData を返す.
+
+    Scene に PointerProperty が attach されていなければ None。
+    """
+    ctx = context or bpy.context
+    scene = getattr(ctx, "scene", None)
+    if scene is None:
+        return None
+    return getattr(scene, "bname_work", None)
+
+
+def get_active_page(context: bpy.types.Context | None = None) -> BNamePageEntry | None:
+    work = get_work(context)
+    if work is None or not work.loaded:
+        return None
+    idx = work.active_page_index
+    if idx < 0 or idx >= len(work.pages):
+        return None
+    return work.pages[idx]
+
+
+_CLASSES = (
+    BNamePanelGap,
+    BNameWorkData,
+)
+
+
+def register() -> None:
+    for cls in _CLASSES:
+        bpy.utils.register_class(cls)
+    bpy.types.Scene.bname_work = PointerProperty(type=BNameWorkData)
+    _logger.debug("work registered")
+
+
+def unregister() -> None:
+    try:
+        del bpy.types.Scene.bname_work
+    except AttributeError:
+        pass
+    for cls in reversed(_CLASSES):
+        try:
+            bpy.utils.unregister_class(cls)
+        except RuntimeError:
+            pass
