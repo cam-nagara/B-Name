@@ -17,6 +17,7 @@ from bpy.props import (
 )
 
 from ..utils import log
+from .panel import BNamePanelEntry
 
 _logger = log.get_logger(__name__)
 
@@ -80,6 +81,14 @@ class BNamePageEntry(bpy.types.PropertyGroup):
         name="コマ数",
         default=0,
         min=0,
+    )
+
+    # --- コマ一覧 ---
+    panels: CollectionProperty(type=BNamePanelEntry)  # type: ignore[valid-type]
+    active_panel_index: IntProperty(  # type: ignore[valid-type]
+        name="アクティブコマ",
+        default=-1,
+        min=-1,
     )
 
 
