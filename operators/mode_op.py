@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import bpy
 from bpy.types import Operator
 
 from ..core.mode import MODE_PAGE, MODE_PANEL, get_mode, set_mode
 from ..core.work import get_active_page, get_work
-from ..utils import log
+from ..utils import log, paths
 
 _logger = log.get_logger(__name__)
 
@@ -52,9 +54,27 @@ class BNAME_OT_exit_panel_mode(Operator):
         return get_mode(context) == MODE_PANEL
 
     def execute(self, context):
+        # コマ編集終了時にスクショサムネイルを生成 (レンダリングはしない)
+        work = get_work(context)
+        page = get_active_page(context)
+        stem = getattr(context.scene, "bname_current_panel_stem", "")
+        if (
+            work is not None
+            and work.loaded
+            and page is not None
+            and stem
+            and paths.is_valid_panel_stem(stem)
+        ):
+            try:
+                from . import thumbnail_op
+
+                index = int(stem.split("_", 1)[1])
+                out = paths.panel_thumb_path(Path(work.work_dir), page.id, index)
+                thumbnail_op.take_area_screenshot(context, out)
+            except Exception:  # noqa: BLE001
+                _logger.exception("auto thumbnail failed on exit_panel_mode")
         set_mode(MODE_PAGE, context)
         context.scene.bname_current_panel_stem = ""
-        # Phase 4 でコマ編集終了時のスクショサムネイル生成を実装する。
         self.report({"INFO"}, "紙面編集モード")
         return {"FINISHED"}
 

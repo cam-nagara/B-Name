@@ -5,9 +5,9 @@ Phase 1-E: overlay (draw_handler_add) と overlay_shared (Pillow 共用ロジッ
 
 from __future__ import annotations
 
-from . import overlay, overlay_shared  # noqa: F401
+from . import context_menu, overlay, overlay_shared  # noqa: F401
 
-_MODULES = (overlay,)
+_MODULES = (overlay, context_menu)
 
 
 def register() -> None:
