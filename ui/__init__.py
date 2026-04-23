@@ -1,12 +1,23 @@
 """ui — gpu オーバーレイ描画とカスタムコンテキストメニュー/ポップアップ.
 
-Phase 0 では空。Phase 2 以降で overlay / context_menu / popup を追加する。
+Phase 1-E: overlay (draw_handler_add) と overlay_shared (Pillow 共用ロジック) を提供。
 """
+
+from __future__ import annotations
+
+from . import overlay, overlay_shared  # noqa: F401
+
+_MODULES = (overlay,)
 
 
 def register() -> None:
-    pass
+    for module in _MODULES:
+        module.register()
 
 
 def unregister() -> None:
-    pass
+    for module in reversed(_MODULES):
+        try:
+            module.unregister()
+        except Exception:
+            pass
