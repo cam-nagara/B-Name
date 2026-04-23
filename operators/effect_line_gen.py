@@ -12,7 +12,6 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass
-from typing import Iterable
 
 from ..utils import log
 from ..utils.geom import mm_to_m

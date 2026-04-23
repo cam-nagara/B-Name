@@ -19,18 +19,12 @@ CLIP STUDIO PAINT 準拠のショートカット:
 from __future__ import annotations
 
 import bpy
-from bpy.props import EnumProperty, FloatProperty, IntProperty
+from bpy.props import EnumProperty
 from bpy.types import Operator
 
-from ..preferences import get_preferences
 from ..utils import log
 
 _logger = log.get_logger(__name__)
-
-ZOOM_IN_DELTA = -120   # Blender の zoom mouse delta は符号が逆 (負がズームイン)
-ZOOM_OUT_DELTA = 120
-KEYMAP_ZOOM_IN_STEP = 0.9
-KEYMAP_ZOOM_OUT_STEP = 1.1
 
 
 def _find_view3d_context(context):
@@ -165,19 +159,20 @@ class BNAME_OT_view_layer_pick(Operator):
         y_mm = m_to_mm(world.y)
 
         # Z 順降順 (手前優先) でヒット判定
-        for i, entry in enumerate(sorted(page.panels, key=lambda p: -p.z_order)):
+        for entry in sorted(page.panels, key=lambda p: -p.z_order):
             if entry.shape_type != "rect":
                 continue
-            if (
+            if not (
                 entry.rect_x_mm <= x_mm <= entry.rect_x_mm + entry.rect_width_mm
                 and entry.rect_y_mm <= y_mm <= entry.rect_y_mm + entry.rect_height_mm
             ):
-                # collection 内の元 index を探す
-                for orig_idx, orig in enumerate(page.panels):
-                    if orig.panel_stem == entry.panel_stem:
-                        page.active_panel_index = orig_idx
-                        return {"FINISHED"}
-                break
+                continue
+            # ヒット: collection 内の元 index を探して active index を更新
+            for orig_idx, orig in enumerate(page.panels):
+                if orig.panel_stem == entry.panel_stem:
+                    page.active_panel_index = orig_idx
+                    return {"FINISHED"}
+            # stem 一致が無いのは異常。次の z 順候補へ
         return {"CANCELLED"}
 
 

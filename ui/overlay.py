@@ -24,6 +24,13 @@ import bpy
 import gpu
 from gpu_extras.batch import batch_for_shader
 
+try:
+    import gpu.texture as gpu_texture  # type: ignore
+    _HAS_GPU_TEXTURE = True
+except ImportError:  # pragma: no cover - 古い Blender
+    gpu_texture = None  # type: ignore
+    _HAS_GPU_TEXTURE = False
+
 from ..core.mode import MODE_PAGE, get_mode
 from ..core.work import get_active_page, get_work
 from ..utils import log
@@ -146,9 +153,7 @@ def _draw_image_layers(scene) -> None:
     coll = getattr(scene, "bname_image_layers", None)
     if coll is None or not len(coll):
         return
-    try:
-        import gpu.texture as gpu_texture  # type: ignore
-    except ImportError:
+    if not _HAS_GPU_TEXTURE:
         return
     shader = gpu.shader.from_builtin("IMAGE")
     for entry in coll:
@@ -185,15 +190,13 @@ def _draw_image_layers(scene) -> None:
 
 
 def _ensure_bpy_image(filepath: str):
-    """bpy.data.images に対象画像を読み込み (cached)."""
-    import os
-
+    """bpy.data.images に対象画像を読み込み (check_existing でキャッシュ)."""
+    if not filepath:
+        return None
     try:
-        name = os.path.basename(filepath)
-        img = bpy.data.images.get(name)
-        if img is not None and img.filepath == filepath:
-            return img
-        return bpy.data.images.load(filepath, check_existing=True)
+        # check_existing=True は filepath で既存画像を再利用する。basename での
+        # 自前ルックアップは同名異パスで誤判定するので使わない。
+        return bpy.data.images.load(bpy.path.abspath(filepath), check_existing=True)
     except Exception:  # noqa: BLE001
         return None
 
