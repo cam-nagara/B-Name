@@ -1,0 +1,32 @@
+schema_version = "1.0.0"
+
+id = "b_name"
+version = "0.1.0"
+name = "B-Name"
+tagline = "Blender manga name/storyboard authoring addon"
+maintainer = "B-Name Project"
+type = "add-on"
+
+blender_version_min = "4.3.0"
+
+# Blender API (GPL) に依存するため GPL を仮置き。後段で再検討可。
+license = [
+    "SPDX:GPL-2.0-or-later",
+]
+
+# Blender Extensions Platform の add-on 用公認タグから選択。
+# 参考: https://docs.blender.org/manual/en/latest/advanced/extensions/tags.html
+tags = ["Grease Pencil", "Paint", "User Interface"]
+
+# Extensions Platform permissions
+[permissions]
+network = "Meldex 連携用ローカル HTTP サーバー (localhost のみ)"
+files = "作品ファイル (.bname フォルダ) の読み書き"
+
+# Bundled Python wheels
+# Actual wheel files are placed under ./wheels/ and listed here.
+# Populated from Phase 3 / Phase 6 onward. Keep empty until then.
+wheels = []
+
+# Platforms (optional, omit to allow all). Populate when wheels become platform-specific.
+# platforms = ["windows-x64", "macos-arm64", "linux-x64"]

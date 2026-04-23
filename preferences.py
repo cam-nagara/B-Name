@@ -1,0 +1,142 @@
+"""B-Name AddonPreferences.
+
+Phase 0 時点では以下を提供:
+- ログレベル
+- Meldex 受信サーバーのポート（Phase 5 で利用、UI は先に用意）
+- B-Name 専用キーマップのトグル
+- 右クリック=スポイト モードのスイッチ
+- Spaceバー既定挙動の退避情報（デバッグ表示）
+- アセットライブラリ登録ガイド
+
+``__package__`` が ``b_name`` のようなアドオン ID 名を指す前提。
+Blender 4.3+ / 5.x の Extensions Platform 配下では ``bl_idname`` に
+``__package__`` を使う。
+"""
+
+from __future__ import annotations
+
+import bpy
+from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty
+
+from .utils import log
+
+ADDON_ID = __package__ or "b_name"
+
+_LOG_LEVEL_ITEMS = (
+    ("DEBUG", "Debug", "詳細ログ"),
+    ("INFO", "Info", "標準ログ (既定)"),
+    ("WARNING", "Warning", "警告以上のみ"),
+    ("ERROR", "Error", "エラーのみ"),
+)
+
+_SPACEBAR_PRESET_ITEMS = (
+    ("AUTO", "Auto", "現在の Blender 設定を検出して自動選択"),
+    ("TOOL", "Tool", "Space = ツール切替 (Blender 既定)"),
+    ("SEARCH", "Search", "Space = 検索メニュー"),
+    ("PLAY", "Playback", "Space = 再生"),
+)
+
+
+def _on_log_level_changed(self, _context) -> None:  # noqa: ANN001 - Blender callback
+    log.set_level(self.log_level)
+
+
+class BNamePreferences(bpy.types.AddonPreferences):
+    bl_idname = ADDON_ID
+
+    log_level: EnumProperty(  # type: ignore[valid-type]
+        name="ログレベル",
+        description="B-Name アドオンのログレベル",
+        items=_LOG_LEVEL_ITEMS,
+        default="INFO",
+        update=_on_log_level_changed,
+    )
+
+    meldex_port: IntProperty(  # type: ignore[valid-type]
+        name="Meldex 受信ポート",
+        description="Meldex からのシナリオ受信に使う localhost ポート (Phase 5)",
+        default=47817,
+        min=1024,
+        max=65535,
+    )
+
+    keymap_enabled: BoolProperty(  # type: ignore[valid-type]
+        name="B-Name 専用キーマップを有効化",
+        description="CLIP STUDIO PAINT 準拠のビューポート操作ショートカットを有効にする",
+        default=True,
+    )
+
+    right_click_eyedropper: BoolProperty(  # type: ignore[valid-type]
+        name="右クリックをスポイトに割り当てる",
+        description="B-Name モード中のみ、右クリックの既定動作をスポイトに切り替える",
+        default=False,
+    )
+
+    spacebar_preset: EnumProperty(  # type: ignore[valid-type]
+        name="Spaceバー挙動 (検出用)",
+        description="既定キーマップの Space キー挙動。AUTO 以外は退避処理のベースとして使用",
+        items=_SPACEBAR_PRESET_ITEMS,
+        default="AUTO",
+    )
+
+    global_asset_library: StringProperty(  # type: ignore[valid-type]
+        name="グローバルアセットライブラリ パス",
+        description="全作品共通で参照するアセットの格納先 (Blender 設定でアセットライブラリとして登録)",
+        default=r"D:\Develop\Blender\B-Name-Assets",
+        subtype="DIR_PATH",
+    )
+
+    def draw(self, context) -> None:  # noqa: D401, ANN001
+        layout = self.layout
+
+        box = layout.box()
+        box.label(text="ログ / デバッグ")
+        box.prop(self, "log_level")
+
+        box = layout.box()
+        box.label(text="Meldex 連携 (Phase 5)")
+        box.prop(self, "meldex_port")
+
+        box = layout.box()
+        box.label(text="キーマップ")
+        box.prop(self, "keymap_enabled")
+        sub = box.column()
+        sub.enabled = self.keymap_enabled
+        sub.prop(self, "right_click_eyedropper")
+        sub.prop(self, "spacebar_preset")
+
+        box = layout.box()
+        box.label(text="アセットライブラリ登録ガイド")
+        box.prop(self, "global_asset_library")
+        col = box.column(align=True)
+        col.label(text="1. 上のパスを Blender 本体の Preferences > File Paths > Asset Libraries に追加")
+        col.label(text="2. 作品固有アセットは MyWork.bname/assets/ 配下 (B-Name が自動管理)")
+        col.label(text="3. コマ編集モード中にアセットブラウザからドラッグ&ドロップでリンク参照")
+
+
+def get_preferences(context=None) -> "BNamePreferences | None":
+    ctx = context or bpy.context
+    prefs = ctx.preferences.addons.get(ADDON_ID)
+    return prefs.preferences if prefs else None
+
+
+_CLASSES = (BNamePreferences,)
+
+
+def register() -> None:
+    logger = log.get_logger(__name__)
+    for cls in _CLASSES:
+        bpy.utils.register_class(cls)
+    prefs = get_preferences()
+    if prefs is not None:
+        log.set_level(prefs.log_level)
+    logger.debug("preferences registered")
+
+
+def unregister() -> None:
+    for cls in reversed(_CLASSES):
+        try:
+            bpy.utils.unregister_class(cls)
+        except RuntimeError:
+            # 既に解除されている場合は黙殺
+            pass
