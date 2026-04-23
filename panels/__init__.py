@@ -1,13 +1,24 @@
-"""panels — サイドパネル UI (bpy.types.Panel).
+"""panels — N-Panel (View3D > UI region) の B-Name タブ."""
 
-Phase 0 では空。Phase 1 から page_panel / paper_panel、Phase 2 から
-panel_list_panel / layer_panel、Phase 3 から tool_panel を追加する。
-"""
+from __future__ import annotations
+
+from . import page_panel, paper_panel, work_panel
+
+_MODULES = (
+    work_panel,
+    paper_panel,
+    page_panel,
+)
 
 
 def register() -> None:
-    pass
+    for module in _MODULES:
+        module.register()
 
 
 def unregister() -> None:
-    pass
+    for module in reversed(_MODULES):
+        try:
+            module.unregister()
+        except Exception:
+            pass
