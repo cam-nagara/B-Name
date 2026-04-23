@@ -6,6 +6,7 @@ from . import (
     asset_op,
     balloon_op,
     effect_line_op,
+    io_op,
     mode_op,
     page_op,
     panel_edit_op,
@@ -28,6 +29,7 @@ _MODULES = (
     thumbnail_op,
     mode_op,
     preset_op,
+    io_op,
 )
 
 

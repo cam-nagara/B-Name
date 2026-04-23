@@ -5,6 +5,7 @@ from __future__ import annotations
 from . import (
     balloon_panel,
     effect_line_panel,
+    export_panel,
     page_panel,
     panel_detail_panel,
     panel_list_panel,
@@ -20,6 +21,7 @@ _MODULES = (
     panel_detail_panel,
     balloon_panel,
     effect_line_panel,
+    export_panel,
 )
 
 
