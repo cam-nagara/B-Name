@@ -8,12 +8,12 @@ register/unregister は空関数として残す。
 from __future__ import annotations
 
 # 公開サブモジュール (他層からのインポート都合)
-from . import page_io, panel_io, presets, schema, work_io  # noqa: F401
+from . import meldex_receiver, page_io, panel_io, presets, schema, work_io  # noqa: F401
 
 
 def register() -> None:
-    pass
+    meldex_receiver.register()
 
 
 def unregister() -> None:
-    pass
+    meldex_receiver.unregister()
