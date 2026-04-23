@@ -24,7 +24,8 @@ import bpy
 import gpu
 from gpu_extras.batch import batch_for_shader
 
-from ..core.work import get_work
+from ..core.mode import MODE_PAGE, get_mode
+from ..core.work import get_active_page, get_work
 from ..utils import log
 from ..utils.geom import Rect, mm_to_m
 from . import overlay_shared
@@ -120,6 +121,52 @@ def _apply_blend_mode(_mode: str) -> None:
     gpu.state.blend_set("ALPHA")
 
 
+def _panel_rect(entry) -> Rect | None:
+    """PanelEntry から描画用の Rect を得る (rect 形状のみ)."""
+    if entry.shape_type != "rect":
+        # 多角形/曲線は Phase 2.5 以降で実装。現段階は bbox で近似表示する案もあるが、
+        # Phase 2 段階ではスキップ。
+        return None
+    return Rect(
+        entry.rect_x_mm,
+        entry.rect_y_mm,
+        entry.rect_width_mm,
+        entry.rect_height_mm,
+    )
+
+
+def _draw_panels(page) -> None:
+    """ページ内のコマ枠・白フチを Z 順に従って描画.
+
+    Z順序昇順 (背面→手前) で描画することで重なり時も正しく表示される。
+    自動くり抜きは Phase 2 段階では未実装 (塗りつぶし描画ではなく枠線の
+    みのため Z 重なりでも視覚的には問題なし)。本格的なクリッピングは
+    Phase 2.5 で実装。
+    """
+    sorted_panels = sorted(page.panels, key=lambda p: p.z_order)
+    for entry in sorted_panels:
+        rect = _panel_rect(entry)
+        if rect is None:
+            continue
+        # 白フチ (枠線の外側)
+        wm = entry.white_margin
+        if wm.enabled and wm.width_mm > 0.0:
+            outer = rect.inset(-wm.width_mm)
+            color = (
+                float(wm.color[0]),
+                float(wm.color[1]),
+                float(wm.color[2]),
+                float(wm.color[3]),
+            )
+            _draw_rect_fill(outer, color)
+        # 枠線
+        b = entry.border
+        if b.visible:
+            color = (float(b.color[0]), float(b.color[1]), float(b.color[2]), float(b.color[3]))
+            line_width = max(1.0, b.width_mm * 2.0)  # mm→画面線幅の暫定換算
+            _draw_rect_outline(rect, color, line_width=line_width)
+
+
 def _draw_callback() -> None:
     context = bpy.context
     work = get_work(context)
@@ -127,6 +174,7 @@ def _draw_callback() -> None:
         return
     paper = work.paper
     rects = overlay_shared.compute_paper_rects(paper)
+    mode = get_mode(context)
 
     gpu.state.blend_set("ALPHA")
     try:
@@ -147,11 +195,17 @@ def _draw_callback() -> None:
             _draw_frame_with_hole(rects.canvas, rects.safe, color)
             gpu.state.blend_set("ALPHA")
 
-        # 枠線群
+        # 枠線群 (原稿ガイド)
         _draw_rect_outline(rects.canvas, (0.4, 0.4, 0.4, 0.8), line_width=1.0)
         _draw_rect_outline(rects.finish, (0.8, 0.2, 0.2, 0.9), line_width=1.5)  # 仕上がり=赤
         _draw_rect_outline(rects.inner_frame, (0.2, 0.6, 0.9, 0.9), line_width=1.0)  # 基本枠=青
         _draw_rect_outline(rects.safe, (0.2, 0.8, 0.4, 0.6), line_width=1.0)  # セーフ=緑
+
+        # コマ枠群 (紙面編集モード時のみ。コマ編集モードでは該当コマの 3D シーン表示になる想定)
+        if mode == MODE_PAGE:
+            page = get_active_page(context)
+            if page is not None:
+                _draw_panels(page)
     finally:
         gpu.state.blend_set("NONE")
 
