@@ -26,16 +26,39 @@ class BNAME_OT_effect_line_generate(Operator):
 
     def execute(self, context):
         params = context.scene.bname_effect_line_params
-        # TODO (Phase 3 後半): Grease Pencil v3 API でレイヤー生成
-        # - 基準図形の頂点座標算出
-        # - 線の角度/本数/長さに従ってストローク配列生成
-        # - params.in_percent / out_percent に基づいて入り抜きカーブ
-        _logger.info(
-            "effect_line_generate (stub): type=%s, shape=%s",
-            params.effect_type,
-            params.base_shape,
-        )
-        self.report({"INFO"}, "効果線生成 (Phase 3 骨格): パラメータを保持しました")
+        from ..utils import gpencil
+
+        from . import effect_line_gen
+
+        # ストローク配列生成
+        strokes = effect_line_gen.generate_strokes(params)
+        if not strokes:
+            self.report({"WARNING"}, "生成するストロークがありません")
+            return {"CANCELLED"}
+
+        # Grease Pencil v3 オブジェクト/レイヤー/フレーム確保
+        try:
+            gp_obj = gpencil.ensure_gpencil_object("BName_EffectLines")
+            gp_data = gp_obj.data
+            layer_name = f"effect_{params.effect_type}"
+            layer = gpencil.ensure_layer(gp_data, layer_name)
+            frame = gpencil.ensure_active_frame(layer)
+            if frame is None:
+                self.report({"ERROR"}, "Grease Pencil フレーム確保失敗")
+                return {"CANCELLED"}
+            drawing = frame.drawing
+            added = 0
+            for s in strokes:
+                if gpencil.add_stroke_to_drawing(
+                    drawing, s.points_xyz, radius=s.radius, cyclic=s.cyclic
+                ):
+                    added += 1
+        except Exception as exc:  # noqa: BLE001
+            _logger.exception("effect_line_generate failed")
+            self.report({"ERROR"}, f"効果線生成失敗: {exc}")
+            return {"CANCELLED"}
+
+        self.report({"INFO"}, f"効果線生成: {added}/{len(strokes)} ストローク")
         return {"FINISHED"}
 
 

@@ -135,6 +135,69 @@ def _panel_rect(entry) -> Rect | None:
     )
 
 
+def _draw_image_layers(scene) -> None:
+    """画像レイヤーを gpu.texture 経由でオーバーレイ描画.
+
+    Blender 4.x では gpu.texture モジュール + IMAGE ビルトインシェーダを
+    使うが、ここでは最も簡単な方法として bpy.types.Image.gl_load() が
+    無い環境を想定し、Blender が自動で管理する Image から
+    gpu.texture.from_image を取得する。
+    """
+    coll = getattr(scene, "bname_image_layers", None)
+    if coll is None or not len(coll):
+        return
+    try:
+        import gpu.texture as gpu_texture  # type: ignore
+    except ImportError:
+        return
+    shader = gpu.shader.from_builtin("IMAGE")
+    for entry in coll:
+        if not entry.visible or not entry.filepath:
+            continue
+        img = _ensure_bpy_image(entry.filepath)
+        if img is None:
+            continue
+        try:
+            tex = gpu_texture.from_image(img)
+        except Exception:  # noqa: BLE001
+            continue
+        # 矩形 (mm) を Blender unit に変換して頂点を組む
+        x0 = mm_to_m(entry.x_mm)
+        y0 = mm_to_m(entry.y_mm)
+        x1 = mm_to_m(entry.x_mm + entry.width_mm)
+        y1 = mm_to_m(entry.y_mm + entry.height_mm)
+        # flip 対応
+        u0, u1 = (1.0, 0.0) if entry.flip_x else (0.0, 1.0)
+        v0, v1 = (1.0, 0.0) if entry.flip_y else (0.0, 1.0)
+        verts = [(x0, y0, 0.0), (x1, y0, 0.0), (x1, y1, 0.0), (x0, y1, 0.0)]
+        uvs = [(u0, v0), (u1, v0), (u1, v1), (u0, v1)]
+        indices = [(0, 1, 2), (0, 2, 3)]
+        batch = batch_for_shader(
+            shader,
+            "TRIS",
+            {"pos": verts, "texCoord": uvs},
+            indices=indices,
+        )
+        shader.bind()
+        shader.uniform_sampler("image", tex)
+        gpu.state.blend_set("ALPHA")
+        batch.draw(shader)
+
+
+def _ensure_bpy_image(filepath: str):
+    """bpy.data.images に対象画像を読み込み (cached)."""
+    import os
+
+    try:
+        name = os.path.basename(filepath)
+        img = bpy.data.images.get(name)
+        if img is not None and img.filepath == filepath:
+            return img
+        return bpy.data.images.load(filepath, check_existing=True)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _draw_panels(page) -> None:
     """ページ内のコマ枠・白フチを Z 順に従って描画.
 
@@ -200,6 +263,10 @@ def _draw_callback() -> None:
         _draw_rect_outline(rects.finish, (0.8, 0.2, 0.2, 0.9), line_width=1.5)  # 仕上がり=赤
         _draw_rect_outline(rects.inner_frame, (0.2, 0.6, 0.9, 0.9), line_width=1.0)  # 基本枠=青
         _draw_rect_outline(rects.safe, (0.2, 0.8, 0.4, 0.6), line_width=1.0)  # セーフ=緑
+
+        # 画像レイヤー (紙面編集モード時のみ)
+        if mode == MODE_PAGE:
+            _draw_image_layers(context.scene)
 
         # コマ枠群 (紙面編集モード時のみ。コマ編集モードでは該当コマの 3D シーン表示になる想定)
         if mode == MODE_PAGE:

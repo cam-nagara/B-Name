@@ -15,6 +15,7 @@ from ..utils import log
 from . import (
     balloon,
     effect_line,
+    image_layer,
     mode,
     panel,
     panel_border,
@@ -32,14 +33,15 @@ _MODULES = (
     paper,
     work_info,
     safe_area_overlay,
-    panel_border,  # panel が PointerProperty で参照するため先に
-    panel,         # page が CollectionProperty で参照するため page より先
+    panel_border,
+    panel,
     page,
     text_entry,
     balloon,
     effect_line,
-    work,          # 他すべてを参照する集約なので最後
-    mode,          # Scene.bname_mode を別途 attach (work とは独立)
+    image_layer,
+    work,
+    mode,
 )
 
 

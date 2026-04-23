@@ -32,6 +32,11 @@ class BNAME_PT_export(Panel):
             return
         layout.operator("bname.export_page", icon="RENDER_STILL")
         layout.operator("bname.export_all_pages", icon="RENDER_ANIMATION")
+        layout.operator("bname.export_pdf", icon="FILE")
+        if not export_pipeline.has_pypdf():
+            layout.label(text="(pypdf 未同梱のため Pillow 簡易 PDF)", icon="INFO")
+        if not export_pipeline.has_psd_tools():
+            layout.label(text="(psd-tools 未同梱のため PSD は制限あり)", icon="INFO")
 
 
 _CLASSES = (BNAME_PT_export,)

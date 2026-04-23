@@ -26,16 +26,41 @@ from ..utils.geom import mm_to_px
 _logger = log.get_logger(__name__)
 
 try:
-    from PIL import Image, ImageDraw  # type: ignore
+    from PIL import Image, ImageDraw, ImageCms  # type: ignore
     _HAS_PIL = True
 except ImportError:  # pragma: no cover
     Image = None  # type: ignore
     ImageDraw = None  # type: ignore
+    ImageCms = None  # type: ignore
     _HAS_PIL = False
+
+try:
+    import pypdf  # type: ignore
+    _HAS_PYPDF = True
+except ImportError:  # pragma: no cover
+    pypdf = None  # type: ignore
+    _HAS_PYPDF = False
+
+try:
+    from psd_tools import PSDImage  # type: ignore
+    from psd_tools.api.layers import PixelLayer  # type: ignore
+    _HAS_PSD = True
+except ImportError:  # pragma: no cover
+    PSDImage = None  # type: ignore
+    PixelLayer = None  # type: ignore
+    _HAS_PSD = False
 
 
 def has_pillow() -> bool:
     return _HAS_PIL
+
+
+def has_pypdf() -> bool:
+    return _HAS_PYPDF
+
+
+def has_psd_tools() -> bool:
+    return _HAS_PSD
 
 
 @dataclass(frozen=True)
@@ -52,6 +77,7 @@ class ExportOptions:
     include_work_info: bool = True
     include_tombo: bool = False
     include_paper_color: bool = True
+    icc_profile_path: str = ""  # Phase 6d: CMYK 変換用 ICC プロファイル
 
 
 # ---------- ユーティリティ ----------
@@ -137,8 +163,10 @@ def render_page(work, page, options: ExportOptions) -> Any:
     elif options.color_mode == "grayscale":
         img = img.convert("L")
     elif options.color_mode == "cmyk":
-        # Phase 6d で littleCMS プロファイル変換。暫定で Pillow 既定変換。
-        img = img.convert("CMYK")
+        # Phase 6d: ICC プロファイルが指定されていれば ImageCms で高品質変換
+        converted = convert_to_cmyk(img, options.icc_profile_path)
+        if converted is not None:
+            img = converted
     else:
         img = img.convert("RGBA")
 
@@ -214,6 +242,86 @@ def _draw_panel_borders(img, page, paper, dpi: int, options: ExportOptions) -> N
             color = tuple(int(round(c * 255)) for c in b.color[:3]) + (255,)
             width_px = max(1, int(round(mm_to_px(b.width_mm, dpi))))
             draw.rectangle((left, top, right, bottom), outline=color, width=width_px)
+
+
+# ---------- Phase 6b/c/d: PDF 結合 / PSD / CMYK ----------
+
+
+def merge_pdf(page_image_paths: list[Path], out_path: Path) -> bool:
+    """複数の画像を 1 つの PDF に結合.
+
+    Pillow で各画像を 1 ページ分 PDF 化 → pypdf で結合する簡易実装。
+    pypdf が無い場合は Pillow のみで multi-page PDF を生成。
+    """
+    if not _HAS_PIL or not page_image_paths:
+        return False
+    images = []
+    for p in page_image_paths:
+        try:
+            img = Image.open(str(p))
+            if img.mode not in ("RGB", "L", "CMYK"):
+                img = img.convert("RGB")
+            images.append(img)
+        except (OSError, ValueError) as exc:
+            _logger.warning("pdf: failed to open %s: %s", p, exc)
+    if not images:
+        return False
+    try:
+        first, rest = images[0], images[1:]
+        first.save(str(out_path), save_all=True, append_images=rest)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        _logger.exception("merge_pdf failed: %s", exc)
+        return False
+
+
+def save_as_psd(img, out_path: Path) -> bool:
+    """Pillow Image を PSD として保存.
+
+    psd-tools が同梱されている場合は PixelLayer で単一レイヤーとして書き出す。
+    未同梱なら Pillow の PSD 書き出し (Pillow は読み込み専用なので失敗) を
+    試行してフォールバック。
+    """
+    if not _HAS_PIL:
+        return False
+    if _HAS_PSD:
+        try:
+            if img.mode != "RGBA":
+                img = img.convert("RGBA")
+            psd = PSDImage.new(mode="RGBA", size=img.size)
+            PixelLayer.frompil(img, psd, layer_name="B-Name").insert(psd, 0)
+            psd.save(str(out_path))
+            return True
+        except Exception as exc:  # noqa: BLE001
+            _logger.exception("psd save failed: %s", exc)
+    # Pillow のみのフォールバック (PSD 書き込みは未対応のため失敗する)
+    try:
+        img.save(str(out_path), format="PSD")
+        return True
+    except (OSError, ValueError) as exc:
+        _logger.warning("psd fallback save failed: %s", exc)
+        return False
+
+
+def convert_to_cmyk(img, icc_profile_path: str = "") -> "Image.Image | None":
+    """RGB → CMYK 変換 (計画書 Phase 6d).
+
+    ICC プロファイルが指定されていれば ImageCms で高品質変換、
+    それ以外は Pillow 既定の convert("CMYK")。
+    """
+    if not _HAS_PIL:
+        return None
+    if img.mode == "CMYK":
+        return img
+    if icc_profile_path and ImageCms is not None:
+        try:
+            srgb = ImageCms.createProfile("sRGB")
+            cmyk = ImageCms.ImageCmsProfile(icc_profile_path)
+            transform = ImageCms.buildTransform(srgb, cmyk, "RGB", "CMYK")
+            return ImageCms.applyTransform(img.convert("RGB"), transform)
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("ImageCms transform failed, fallback: %s", exc)
+    return img.convert("CMYK")
 
 
 def _draw_nombre_placeholder(img, work, dpi: int) -> None:

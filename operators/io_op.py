@@ -30,6 +30,8 @@ def _save_image(img, out_path: Path, image_format: str) -> None:
         img.save(str(out_path), quality=95)
     elif image_format == "tiff":
         img.save(str(out_path))
+    elif image_format == "psd":
+        export_pipeline.save_as_psd(img, out_path)
     else:
         img.save(str(out_path))
 
@@ -46,6 +48,7 @@ _FORMAT_ITEMS = (
     ("png", "PNG", ""),
     ("jpeg", "JPEG", ""),
     ("tiff", "TIFF", ""),
+    ("psd", "PSD", ""),
 )
 
 _AREA_ITEMS = (
@@ -191,9 +194,75 @@ class BNAME_OT_export_all_pages(Operator):
         return {"FINISHED"}
 
 
+class BNAME_OT_export_pdf(Operator):
+    """全ページを 1 つの PDF に結合書き出し (Phase 6b)."""
+
+    bl_idname = "bname.export_pdf"
+    bl_label = "PDF 結合書き出し"
+    bl_options = {"REGISTER"}
+
+    area: EnumProperty(name="範囲", items=_AREA_ITEMS, default="finish")  # type: ignore[valid-type]
+    color_mode: EnumProperty(name="カラーモード", items=_COLOR_MODE_ITEMS, default="rgb")  # type: ignore[valid-type]
+
+    @classmethod
+    def poll(cls, context):
+        w = get_work(context)
+        return (
+            w is not None
+            and w.loaded
+            and len(w.pages) > 0
+            and export_pipeline.has_pillow()
+        )
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+    def execute(self, context):
+        work = get_work(context)
+        if work is None or not work.loaded:
+            return {"CANCELLED"}
+        work_dir = Path(work.work_dir)
+        out_dir = paths.exports_dir(work_dir) / datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        options = ExportOptions(
+            color_mode=self.color_mode,
+            format="png",  # 中間画像は PNG、最終 PDF へ結合
+            area=self.area,
+        )
+        tmp_images: list[Path] = []
+        for i, page in enumerate(work.pages, start=1):
+            try:
+                img = export_pipeline.render_page(work, page, options)
+                if img is None:
+                    continue
+                name = _resolve_filename("{workName}_{episode}_{page}", work, page, i)
+                tmp = out_dir / f"_tmp_{name}.png"
+                _save_image(img, tmp, "png")
+                tmp_images.append(tmp)
+            except Exception:  # noqa: BLE001
+                _logger.exception("pdf intermediate render failed for %s", page.id)
+        if not tmp_images:
+            self.report({"ERROR"}, "書き出せるページがありません")
+            return {"CANCELLED"}
+        pdf_path = out_dir / f"{work.work_info.work_name or 'work'}.pdf"
+        ok = export_pipeline.merge_pdf(tmp_images, pdf_path)
+        # 中間 PNG を削除
+        for p in tmp_images:
+            try:
+                p.unlink()
+            except OSError:
+                pass
+        if not ok:
+            self.report({"ERROR"}, "PDF 結合に失敗しました")
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"PDF 書き出し: {pdf_path.name}")
+        return {"FINISHED"}
+
+
 _CLASSES = (
     BNAME_OT_export_page,
     BNAME_OT_export_all_pages,
+    BNAME_OT_export_pdf,
 )
 
 

@@ -91,8 +91,38 @@ class KeymapState:
             region_type=BNAME_REGION_TYPE,
         )
         self.bname_keymaps.append(km)
+        self._populate_keymap_items(km)
         _logger.debug("bname keymap created: %s", BNAME_KEYMAP_NAME)
         return km
+
+    def _populate_keymap_items(self, km) -> None:
+        """B-Name 専用のキーマップエントリを追加 (計画書 3.6)."""
+        # Space + ドラッグ → パン
+        kmi = km.keymap_items.new("bname.view_pan", "SPACE", "PRESS")
+        self.bname_items.append(kmi)
+        # Shift + Space + ドラッグ → 回転
+        kmi = km.keymap_items.new("bname.view_rotate", "SPACE", "PRESS", shift=True)
+        self.bname_items.append(kmi)
+        # Ctrl + Space + ドラッグ → ズーム (連続)
+        kmi = km.keymap_items.new("bname.view_zoom_drag", "SPACE", "PRESS", ctrl=True)
+        self.bname_items.append(kmi)
+        # Ctrl + マウスホイール → ズーム (1 ステップ)
+        kmi = km.keymap_items.new(
+            "bname.view_zoom_step", "WHEELUPMOUSE", "PRESS", ctrl=True
+        )
+        kmi.properties.direction = "IN"
+        self.bname_items.append(kmi)
+        kmi = km.keymap_items.new(
+            "bname.view_zoom_step", "WHEELDOWNMOUSE", "PRESS", ctrl=True
+        )
+        kmi.properties.direction = "OUT"
+        self.bname_items.append(kmi)
+        # Ctrl + Shift + クリック → レイヤー選択
+        kmi = km.keymap_items.new(
+            "bname.view_layer_pick", "LEFTMOUSE", "PRESS", ctrl=True, shift=True
+        )
+        self.bname_items.append(kmi)
+        _logger.debug("bname keymap items: %d", len(self.bname_items))
 
     def remove_bname_keymaps(self) -> None:
         wm = bpy.context.window_manager

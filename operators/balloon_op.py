@@ -7,11 +7,14 @@ Phase 3 後半以降で拡張。
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import bpy
-from bpy.props import EnumProperty
+from bpy.props import BoolProperty, EnumProperty, StringProperty
 from bpy.types import Operator, Scene
 
-from ..core.work import get_active_page
+from ..core.work import get_active_page, get_work
+from ..io import balloon_presets
 from ..utils import log
 
 _logger = log.get_logger(__name__)
@@ -128,10 +131,74 @@ class BNAME_OT_balloon_tail_add(Operator):
         return {"FINISHED"}
 
 
+class BNAME_OT_balloon_save_preset(Operator):
+    """選択中フキダシの形状をカスタムプリセット JSON として保存."""
+
+    bl_idname = "bname.balloon_save_preset"
+    bl_label = "カスタム形状として保存"
+    bl_options = {"REGISTER"}
+
+    preset_name: StringProperty(name="プリセット名", default="新規フキダシ")  # type: ignore[valid-type]
+    description: StringProperty(name="説明", default="")  # type: ignore[valid-type]
+    absolute_coords: BoolProperty(name="絶対座標で登録", default=False)  # type: ignore[valid-type]
+    to_global: BoolProperty(  # type: ignore[valid-type]
+        name="グローバルに登録",
+        description="ON: <addon>/presets/balloons/ に保存 / OFF: 作品ローカル",
+        default=False,
+    )
+
+    @classmethod
+    def poll(cls, context):
+        balloons = _get_balloons_collection(context.scene)
+        if balloons is None:
+            return False
+        idx = getattr(context.scene, "bname_active_balloon_index", -1)
+        return 0 <= idx < len(balloons)
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+    def execute(self, context):
+        balloons = _get_balloons_collection(context.scene)
+        idx = context.scene.bname_active_balloon_index
+        entry = balloons[idx]
+        # Phase 3 骨格: 矩形 4 頂点を保存。パスツール実装後は任意形状へ。
+        verts = [
+            (entry.x_mm, entry.y_mm),
+            (entry.x_mm + entry.width_mm, entry.y_mm),
+            (entry.x_mm + entry.width_mm, entry.y_mm + entry.height_mm),
+            (entry.x_mm, entry.y_mm + entry.height_mm),
+        ]
+        try:
+            if self.to_global:
+                out = balloon_presets.save_global_preset(
+                    self.preset_name, self.description, verts, self.absolute_coords
+                )
+            else:
+                work = get_work(context)
+                if work is None or not work.loaded or not work.work_dir:
+                    self.report({"ERROR"}, "ローカル保存には作品を開く必要があります")
+                    return {"CANCELLED"}
+                out = balloon_presets.save_local_preset(
+                    Path(work.work_dir),
+                    self.preset_name,
+                    self.description,
+                    verts,
+                    self.absolute_coords,
+                )
+        except Exception as exc:  # noqa: BLE001
+            _logger.exception("balloon_save_preset failed")
+            self.report({"ERROR"}, f"保存失敗: {exc}")
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"フキダシプリセット保存: {out.name}")
+        return {"FINISHED"}
+
+
 _CLASSES = (
     BNAME_OT_balloon_add,
     BNAME_OT_balloon_remove,
     BNAME_OT_balloon_tail_add,
+    BNAME_OT_balloon_save_preset,
 )
 
 
