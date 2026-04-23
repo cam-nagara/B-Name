@@ -18,6 +18,28 @@ from . import schema
 _logger = log.get_logger(__name__)
 
 
+# ---------- page.json (個別ページメタ) ----------
+
+
+def save_page_json(work_dir: Path, page_entry) -> Path:
+    paths.validate_page_id(page_entry.id)
+    out = paths.page_meta_path(Path(work_dir), page_entry.id)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    data = schema.page_to_dict(page_entry)
+    json_io.write_json(out, data)
+    return out
+
+
+def load_page_json(work_dir: Path, page_entry) -> dict:
+    paths.validate_page_id(page_entry.id)
+    path = paths.page_meta_path(Path(work_dir), page_entry.id)
+    if not path.is_file():
+        return {}
+    data = json_io.read_json(path)
+    schema.page_from_dict(page_entry, data)
+    return data
+
+
 # ---------- pages.json ----------
 
 

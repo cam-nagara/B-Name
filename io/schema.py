@@ -16,6 +16,7 @@ from typing import Any
 WORK_SCHEMA_VERSION = 1
 PAGES_SCHEMA_VERSION = 1
 PAGE_SCHEMA_VERSION = 1
+PANEL_SCHEMA_VERSION = 1
 
 # ---------- 共通変換 ----------
 
@@ -305,6 +306,196 @@ def pages_to_dict(work, *, last_modified: str = "") -> dict[str, Any]:
         "activePageIndex": int(work.active_page_index),
         "lastModified": last_modified,
     }
+
+
+# ---------- Panel (border/white_margin/entry) ----------
+
+
+def _edge_override_to_dict(edge) -> dict[str, Any]:
+    if not edge.use_override:
+        return {"useOverride": False}
+    out: dict[str, Any] = {"useOverride": True}
+    # border edge / white margin edge で持つフィールドが違うため hasattr で判定
+    if hasattr(edge, "style"):
+        out["style"] = edge.style
+    if hasattr(edge, "width_mm"):
+        out["widthMm"] = round(edge.width_mm, 3)
+    if hasattr(edge, "color"):
+        out["color"] = color_to_hex(edge.color)
+    if hasattr(edge, "visible"):
+        out["visible"] = bool(edge.visible)
+    if hasattr(edge, "enabled"):
+        out["enabled"] = bool(edge.enabled)
+    return out
+
+
+def _edge_override_from_dict(edge, data: dict[str, Any]) -> None:
+    data = data or {}
+    edge.use_override = bool(data.get("useOverride", False))
+    if "style" in data and hasattr(edge, "style"):
+        edge.style = data["style"]
+    if "widthMm" in data and hasattr(edge, "width_mm"):
+        edge.width_mm = float(data["widthMm"])
+    if "color" in data and hasattr(edge, "color"):
+        edge.color = hex_to_rgba(data["color"])
+    if "visible" in data and hasattr(edge, "visible"):
+        edge.visible = bool(data["visible"])
+    if "enabled" in data and hasattr(edge, "enabled"):
+        edge.enabled = bool(data["enabled"])
+
+
+def panel_border_to_dict(border) -> dict[str, Any]:
+    return {
+        "style": border.style,
+        "widthMm": round(border.width_mm, 3),
+        "color": color_to_hex(border.color),
+        "corner": {
+            "type": border.corner_type,
+            "radiusMm": round(border.corner_radius_mm, 3),
+        },
+        "visible": bool(border.visible),
+        "perEdge": {
+            "top": _edge_override_to_dict(border.edge_top),
+            "right": _edge_override_to_dict(border.edge_right),
+            "bottom": _edge_override_to_dict(border.edge_bottom),
+            "left": _edge_override_to_dict(border.edge_left),
+        },
+    }
+
+
+def panel_border_from_dict(border, data: dict[str, Any]) -> None:
+    data = data or {}
+    border.style = data.get("style", "solid")
+    border.width_mm = float(data.get("widthMm", 0.8))
+    border.color = hex_to_rgba(data.get("color", "#000000"))
+    corner = data.get("corner", {})
+    border.corner_type = corner.get("type", "square")
+    border.corner_radius_mm = float(corner.get("radiusMm", 0.0))
+    border.visible = bool(data.get("visible", True))
+    per = data.get("perEdge", {})
+    _edge_override_from_dict(border.edge_top, per.get("top", {}))
+    _edge_override_from_dict(border.edge_right, per.get("right", {}))
+    _edge_override_from_dict(border.edge_bottom, per.get("bottom", {}))
+    _edge_override_from_dict(border.edge_left, per.get("left", {}))
+
+
+def panel_white_margin_to_dict(wm) -> dict[str, Any]:
+    return {
+        "enabled": bool(wm.enabled),
+        "widthMm": round(wm.width_mm, 3),
+        "color": color_to_hex(wm.color),
+        "perEdge": {
+            "top": _edge_override_to_dict(wm.edge_top),
+            "right": _edge_override_to_dict(wm.edge_right),
+            "bottom": _edge_override_to_dict(wm.edge_bottom),
+            "left": _edge_override_to_dict(wm.edge_left),
+        },
+    }
+
+
+def panel_white_margin_from_dict(wm, data: dict[str, Any]) -> None:
+    data = data or {}
+    wm.enabled = bool(data.get("enabled", False))
+    wm.width_mm = float(data.get("widthMm", 0.37))
+    wm.color = hex_to_rgba(data.get("color", "#FFFFFF"))
+    per = data.get("perEdge", {})
+    _edge_override_from_dict(wm.edge_top, per.get("top", {}))
+    _edge_override_from_dict(wm.edge_right, per.get("right", {}))
+    _edge_override_from_dict(wm.edge_bottom, per.get("bottom", {}))
+    _edge_override_from_dict(wm.edge_left, per.get("left", {}))
+
+
+def panel_entry_to_dict(entry) -> dict[str, Any]:
+    d: dict[str, Any] = {
+        "schemaVersion": PANEL_SCHEMA_VERSION,
+        "id": entry.id,
+        "title": entry.title,
+        "panelStem": entry.panel_stem,
+        "shape": {
+            "type": entry.shape_type,
+            "rect": {
+                "x": round(entry.rect_x_mm, 3),
+                "y": round(entry.rect_y_mm, 3),
+                "widthMm": round(entry.rect_width_mm, 3),
+                "heightMm": round(entry.rect_height_mm, 3),
+            },
+            "vertices": [[round(v.x_mm, 3), round(v.y_mm, 3)] for v in entry.vertices],
+        },
+        "zOrder": int(entry.z_order),
+        "overlapClipping": bool(entry.overlap_clipping),
+        "border": panel_border_to_dict(entry.border),
+        "whiteMargin": panel_white_margin_to_dict(entry.white_margin),
+        "layerRefs": [r.layer_id for r in entry.layer_refs],
+        "panelGap": {
+            "verticalMm": round(entry.panel_gap_vertical_mm, 3),
+            "horizontalMm": round(entry.panel_gap_horizontal_mm, 3),
+        },
+    }
+    return d
+
+
+def panel_entry_from_dict(entry, data: dict[str, Any]) -> None:
+    data = data or {}
+    entry.id = data.get("id", "")
+    entry.title = data.get("title", "")
+    entry.panel_stem = data.get("panelStem", "")
+    shape = data.get("shape", {})
+    entry.shape_type = shape.get("type", "rect")
+    rect = shape.get("rect", {})
+    entry.rect_x_mm = float(rect.get("x", 0.0))
+    entry.rect_y_mm = float(rect.get("y", 0.0))
+    entry.rect_width_mm = float(rect.get("widthMm", 50.0))
+    entry.rect_height_mm = float(rect.get("heightMm", 50.0))
+    entry.vertices.clear()
+    for pair in shape.get("vertices", []):
+        v = entry.vertices.add()
+        v.x_mm = float(pair[0]) if len(pair) > 0 else 0.0
+        v.y_mm = float(pair[1]) if len(pair) > 1 else 0.0
+    entry.z_order = int(data.get("zOrder", 0))
+    entry.overlap_clipping = bool(data.get("overlapClipping", True))
+    panel_border_from_dict(entry.border, data.get("border", {}))
+    panel_white_margin_from_dict(entry.white_margin, data.get("whiteMargin", {}))
+    entry.layer_refs.clear()
+    for lid in data.get("layerRefs", []):
+        ref = entry.layer_refs.add()
+        ref.layer_id = str(lid)
+    gap = data.get("panelGap", {})
+    entry.panel_gap_vertical_mm = float(gap.get("verticalMm", -1.0))
+    entry.panel_gap_horizontal_mm = float(gap.get("horizontalMm", -1.0))
+
+
+# ---------- page.json ----------
+
+
+def page_to_dict(page_entry) -> dict[str, Any]:
+    """page.json (個別ページメタ) を書き出す.
+
+    page_entry は BNamePageEntry。panels コレクションから panel エントリを
+    シリアライズする。
+    """
+    return {
+        "schemaVersion": PAGE_SCHEMA_VERSION,
+        "id": page_entry.id,
+        "title": page_entry.title,
+        "spread": bool(page_entry.spread),
+        "activePanelIndex": int(page_entry.active_panel_index),
+        "panels": [panel_entry_to_dict(p) for p in page_entry.panels],
+    }
+
+
+def page_from_dict(page_entry, data: dict[str, Any]) -> None:
+    data = data or {}
+    page_entry.id = data.get("id", page_entry.id)
+    if "title" in data:
+        page_entry.title = data["title"]
+    page_entry.panels.clear()
+    for panel_data in data.get("panels", []):
+        entry = page_entry.panels.add()
+        panel_entry_from_dict(entry, panel_data)
+    idx = int(data.get("activePanelIndex", -1))
+    if idx < -1 or idx >= len(page_entry.panels):
+        idx = 0 if len(page_entry.panels) > 0 else -1
+    page_entry.active_panel_index = idx
 
 
 def pages_from_dict(work, data: dict[str, Any]) -> None:
