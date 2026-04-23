@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
-from . import page_panel, paper_panel, work_panel
+from . import (
+    page_panel,
+    panel_detail_panel,
+    panel_list_panel,
+    paper_panel,
+    work_panel,
+)
 
 _MODULES = (
     work_panel,
     paper_panel,
     page_panel,
+    panel_list_panel,
+    panel_detail_panel,
 )
 
 
