@@ -18,6 +18,7 @@ class BNAME_PT_export(Panel):
     bl_region_type = "UI"
     bl_category = B_NAME_CATEGORY
     bl_order = 20
+    bl_options = {"DEFAULT_CLOSED"}
 
     @classmethod
     def poll(cls, context):

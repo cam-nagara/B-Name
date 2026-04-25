@@ -35,9 +35,10 @@ _MODULES = (
     safe_area_overlay,
     panel_border,
     panel,
-    page,
     text_entry,
     balloon,
+    # ↓ page は text_entry / balloon を参照するため後に register
+    page,
     effect_line,
     image_layer,
     work,

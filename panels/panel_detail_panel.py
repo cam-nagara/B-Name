@@ -27,6 +27,7 @@ class BNAME_PT_panel_shape(Panel):
     bl_region_type = "UI"
     bl_category = B_NAME_CATEGORY
     bl_order = 7
+    bl_options = {"DEFAULT_CLOSED"}
 
     @classmethod
     def poll(cls, context):
@@ -47,6 +48,23 @@ class BNAME_PT_panel_shape(Panel):
             row.prop(entry, "rect_height_mm")
         else:
             layout.label(text=f"頂点数: {len(entry.vertices)}", icon="VERTEXSEL")
+
+        # 頂点/辺のドラッグ編集 (modal)
+        row = layout.row(align=True)
+        row.operator(
+            "bname.panel_edit_vertices",
+            text="頂点/辺をドラッグ編集",
+            icon="EDITMODE_HLT",
+        )
+        layout.label(text="(Enter=確定 / ESC=キャンセル / 緑線=スナップ)", icon="INFO")
+
+        # 形状変換ボタン
+        row = layout.row(align=True)
+        if entry.shape_type == "rect":
+            row.operator("bname.panel_to_polygon", text="多角形化", icon="MESH_DATA")
+        else:
+            row.operator("bname.panel_to_rect", text="矩形化 (外接)", icon="MESH_PLANE")
+
         layout.prop(entry, "overlap_clipping")
         row = layout.row(align=True)
         row.prop(entry, "panel_gap_vertical_mm", text="上下 (個別)")
@@ -61,6 +79,7 @@ class BNAME_PT_panel_border(Panel):
     bl_region_type = "UI"
     bl_category = B_NAME_CATEGORY
     bl_order = 8
+    bl_options = {"DEFAULT_CLOSED"}
 
     @classmethod
     def poll(cls, context):
@@ -113,6 +132,7 @@ class BNAME_PT_panel_white_margin(Panel):
     bl_region_type = "UI"
     bl_category = B_NAME_CATEGORY
     bl_order = 9
+    bl_options = {"DEFAULT_CLOSED"}
 
     @classmethod
     def poll(cls, context):

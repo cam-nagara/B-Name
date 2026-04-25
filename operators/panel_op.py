@@ -33,6 +33,63 @@ def _save_page_and_pages(work, page, work_dir: Path) -> None:
     page_io.save_pages_json(work_dir, work)
 
 
+# ---------- コマ生成ヘルパ (page_op などから再利用) ----------
+
+
+def create_rect_panel(
+    work,
+    page,
+    work_dir: Path,
+    x_mm: float,
+    y_mm: float,
+    width_mm: float,
+    height_mm: float,
+    title: str | None = None,
+):
+    """指定矩形の新規コマを page.panels に追加し、panel.json と page.json を保存.
+
+    pages.json の保存は呼出側の責務。新規 entry を返す。
+    """
+    stem = panel_io.allocate_new_panel_stem(work_dir, page.id)
+    entry = page.panels.add()
+    entry.panel_stem = stem
+    entry.id = stem.split("_", 1)[1]
+    entry.title = title if title is not None else stem
+    entry.shape_type = "rect"
+    entry.rect_x_mm = x_mm
+    entry.rect_y_mm = y_mm
+    entry.rect_width_mm = width_mm
+    entry.rect_height_mm = height_mm
+    # 追加直後の entry を除いて max を取る (entry 自身は初期値 0)
+    max_z = max(
+        (pe.z_order for pe in page.panels if pe is not entry),
+        default=-1,
+    )
+    entry.z_order = max_z + 1
+    page.active_panel_index = len(page.panels) - 1
+    panel_io.save_panel_meta(work_dir, page.id, entry)
+    page_io.save_page_json(work_dir, page)
+    page.panel_count = len(page.panels)
+    return entry
+
+
+def create_basic_frame_panel(work, page, work_dir: Path):
+    """基本枠 (用紙の inner_frame) サイズの矩形コマを 1 個生成して返す."""
+    p = work.paper
+    x_mm = (p.canvas_width_mm - p.inner_frame_width_mm) / 2.0 + p.inner_frame_offset_x_mm
+    y_mm = (p.canvas_height_mm - p.inner_frame_height_mm) / 2.0 + p.inner_frame_offset_y_mm
+    return create_rect_panel(
+        work,
+        page,
+        work_dir,
+        x_mm,
+        y_mm,
+        p.inner_frame_width_mm,
+        p.inner_frame_height_mm,
+        title="基本枠",
+    )
+
+
 # ---------- コマ追加 ----------
 
 
@@ -53,28 +110,13 @@ class BNAME_OT_panel_add(Operator):
             return {"CANCELLED"}
         work_dir = Path(work.work_dir)
         try:
-            stem = panel_io.allocate_new_panel_stem(work_dir, page.id)
-            entry = page.panels.add()
-            entry.panel_stem = stem
-            entry.id = stem.split("_", 1)[1]  # "001" 等
-            entry.title = stem
-            entry.shape_type = "rect"
-            # デフォルト配置: 基本枠中央あたり
+            # デフォルトは中央に 60×40mm の矩形
             p = work.paper
-            entry.rect_x_mm = (p.canvas_width_mm - 60.0) / 2.0
-            entry.rect_y_mm = (p.canvas_height_mm - 40.0) / 2.0
-            entry.rect_width_mm = 60.0
-            entry.rect_height_mm = 40.0
-            # 追加したばかりの entry を除いて max を取る (entry 自身は初期値 0)
-            max_z = max(
-                (p.z_order for p in page.panels if p is not entry),
-                default=-1,
-            )
-            entry.z_order = max_z + 1
-            # 最新要素をアクティブに
-            page.active_panel_index = len(page.panels) - 1
-            panel_io.save_panel_meta(work_dir, page.id, entry)
-            _save_page_and_pages(work, page, work_dir)
+            x_mm = (p.canvas_width_mm - 60.0) / 2.0
+            y_mm = (p.canvas_height_mm - 40.0) / 2.0
+            entry = create_rect_panel(work, page, work_dir, x_mm, y_mm, 60.0, 40.0)
+            stem = entry.panel_stem
+            page_io.save_pages_json(work_dir, work)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("panel_add failed")
             self.report({"ERROR"}, f"コマ追加失敗: {exc}")

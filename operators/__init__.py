@@ -6,16 +6,22 @@ from . import (
     asset_op,
     balloon_op,
     effect_line_op,
+    gpencil_op,
     image_layer_op,
     io_op,
     mode_op,
     page_op,
     panel_edit_op,
+    panel_knife_cut_op,
     panel_op,
+    panel_picker,  # noqa: F401 — ヘルパのみ (register 対象外)
+    panel_vertex_edit_op,
     preset_op,
     snap_op,
     spread_op,
+    text_op,
     thumbnail_op,
+    view_op,
     work_op,
 )
 
@@ -25,8 +31,11 @@ _MODULES = (
     spread_op,
     panel_op,
     panel_edit_op,
+    panel_vertex_edit_op,
+    panel_knife_cut_op,
     snap_op,
     balloon_op,
+    text_op,
     effect_line_op,
     image_layer_op,
     asset_op,
@@ -34,6 +43,8 @@ _MODULES = (
     mode_op,
     preset_op,
     io_op,
+    gpencil_op,
+    view_op,
 )
 
 

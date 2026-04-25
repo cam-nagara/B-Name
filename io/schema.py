@@ -464,14 +464,141 @@ def panel_entry_from_dict(entry, data: dict[str, Any]) -> None:
     entry.panel_gap_horizontal_mm = float(gap.get("horizontalMm", -1.0))
 
 
+# ---------- Balloon / Text (Phase 3) ----------
+
+
+def balloon_entry_to_dict(entry) -> dict[str, Any]:
+    return {
+        "id": entry.id,
+        "shape": entry.shape,
+        "customPresetName": entry.custom_preset_name,
+        "xMm": round(entry.x_mm, 3),
+        "yMm": round(entry.y_mm, 3),
+        "widthMm": round(entry.width_mm, 3),
+        "heightMm": round(entry.height_mm, 3),
+        "rotationDeg": round(entry.rotation_deg, 3),
+        "roundedCornerEnabled": bool(entry.rounded_corner_enabled),
+        "roundedCornerRadiusMm": round(entry.rounded_corner_radius_mm, 3),
+        "lineStyle": entry.line_style,
+        "lineWidthMm": round(entry.line_width_mm, 3),
+        "lineColor": color_to_hex(entry.line_color),
+        "lineColorAlpha": round(entry.line_color[3], 3),
+        "fillColor": color_to_hex(entry.fill_color),
+        "fillColorAlpha": round(entry.fill_color[3], 3),
+        "tails": [
+            {
+                "type": t.type,
+                "directionDeg": round(t.direction_deg, 3),
+                "lengthMm": round(t.length_mm, 3),
+                "rootWidthMm": round(t.root_width_mm, 3),
+                "tipWidthMm": round(t.tip_width_mm, 3),
+                "curveBend": round(t.curve_bend, 3),
+            }
+            for t in entry.tails
+        ],
+        "shapeParams": {
+            "cloudWaveCount": int(entry.shape_params.cloud_wave_count),
+            "cloudWaveAmplitudeMm": round(entry.shape_params.cloud_wave_amplitude_mm, 3),
+            "spikeCount": int(entry.shape_params.spike_count),
+            "spikeDepthMm": round(entry.shape_params.spike_depth_mm, 3),
+            "spikeJitter": round(entry.shape_params.spike_jitter, 3),
+        },
+        "textId": entry.text_id,
+    }
+
+
+def balloon_entry_from_dict(entry, data: dict[str, Any]) -> None:
+    data = data or {}
+    entry.id = data.get("id", entry.id)
+    entry.shape = data.get("shape", entry.shape)
+    entry.custom_preset_name = data.get("customPresetName", "")
+    entry.x_mm = float(data.get("xMm", 0.0))
+    entry.y_mm = float(data.get("yMm", 0.0))
+    entry.width_mm = float(data.get("widthMm", 40.0))
+    entry.height_mm = float(data.get("heightMm", 20.0))
+    entry.rotation_deg = float(data.get("rotationDeg", 0.0))
+    entry.rounded_corner_enabled = bool(data.get("roundedCornerEnabled", False))
+    entry.rounded_corner_radius_mm = float(data.get("roundedCornerRadiusMm", 3.0))
+    entry.line_style = data.get("lineStyle", "solid")
+    entry.line_width_mm = float(data.get("lineWidthMm", 0.6))
+    alpha = float(data.get("lineColorAlpha", 1.0))
+    entry.line_color = hex_to_rgba(data.get("lineColor", "#000000"), alpha)
+    alpha = float(data.get("fillColorAlpha", 1.0))
+    entry.fill_color = hex_to_rgba(data.get("fillColor", "#FFFFFF"), alpha)
+    entry.tails.clear()
+    for td in data.get("tails", []):
+        tail = entry.tails.add()
+        tail.type = td.get("type", "straight")
+        tail.direction_deg = float(td.get("directionDeg", 270.0))
+        tail.length_mm = float(td.get("lengthMm", 6.0))
+        tail.root_width_mm = float(td.get("rootWidthMm", 3.0))
+        tail.tip_width_mm = float(td.get("tipWidthMm", 0.0))
+        tail.curve_bend = float(td.get("curveBend", 0.0))
+    sp = data.get("shapeParams", {})
+    entry.shape_params.cloud_wave_count = int(sp.get("cloudWaveCount", 12))
+    entry.shape_params.cloud_wave_amplitude_mm = float(sp.get("cloudWaveAmplitudeMm", 3.0))
+    entry.shape_params.spike_count = int(sp.get("spikeCount", 24))
+    entry.shape_params.spike_depth_mm = float(sp.get("spikeDepthMm", 6.0))
+    entry.shape_params.spike_jitter = float(sp.get("spikeJitter", 0.2))
+    entry.text_id = data.get("textId", "")
+
+
+def text_entry_to_dict(entry) -> dict[str, Any]:
+    return {
+        "id": entry.id,
+        "body": entry.body,
+        "speakerType": entry.speaker_type,
+        "speakerName": entry.speaker_name,
+        "font": entry.font,
+        "fontSizePt": round(entry.font_size_pt, 3),
+        "color": color_to_hex(entry.color),
+        "colorAlpha": round(entry.color[3], 3),
+        "writingMode": entry.writing_mode,
+        "lineHeight": round(entry.line_height, 3),
+        "letterSpacing": round(entry.letter_spacing, 3),
+        "strokeEnabled": bool(entry.stroke_enabled),
+        "strokeWidthMm": round(entry.stroke_width_mm, 3),
+        "strokeColor": color_to_hex(entry.stroke_color),
+        "strokeColorAlpha": round(entry.stroke_color[3], 3),
+        "xMm": round(entry.x_mm, 3),
+        "yMm": round(entry.y_mm, 3),
+        "widthMm": round(entry.width_mm, 3),
+        "heightMm": round(entry.height_mm, 3),
+        "parentBalloonId": entry.parent_balloon_id,
+    }
+
+
+def text_entry_from_dict(entry, data: dict[str, Any]) -> None:
+    data = data or {}
+    entry.id = data.get("id", entry.id)
+    entry.body = data.get("body", "")
+    entry.speaker_type = data.get("speakerType", "normal")
+    entry.speaker_name = data.get("speakerName", "")
+    entry.font = data.get("font", "")
+    entry.font_size_pt = float(data.get("fontSizePt", 9.0))
+    alpha = float(data.get("colorAlpha", 1.0))
+    entry.color = hex_to_rgba(data.get("color", "#000000"), alpha)
+    entry.writing_mode = data.get("writingMode", "vertical")
+    entry.line_height = float(data.get("lineHeight", 1.4))
+    entry.letter_spacing = float(data.get("letterSpacing", 0.0))
+    entry.stroke_enabled = bool(data.get("strokeEnabled", False))
+    entry.stroke_width_mm = float(data.get("strokeWidthMm", 0.2))
+    alpha = float(data.get("strokeColorAlpha", 1.0))
+    entry.stroke_color = hex_to_rgba(data.get("strokeColor", "#FFFFFF"), alpha)
+    entry.x_mm = float(data.get("xMm", 0.0))
+    entry.y_mm = float(data.get("yMm", 0.0))
+    entry.width_mm = float(data.get("widthMm", 30.0))
+    entry.height_mm = float(data.get("heightMm", 15.0))
+    entry.parent_balloon_id = data.get("parentBalloonId", "")
+
+
 # ---------- page.json ----------
 
 
 def page_to_dict(page_entry) -> dict[str, Any]:
     """page.json (個別ページメタ) を書き出す.
 
-    page_entry は BNamePageEntry。panels コレクションから panel エントリを
-    シリアライズする。
+    page_entry は BNamePageEntry。panels / balloons / texts をシリアライズする。
     """
     return {
         "schemaVersion": PAGE_SCHEMA_VERSION,
@@ -479,7 +606,11 @@ def page_to_dict(page_entry) -> dict[str, Any]:
         "title": page_entry.title,
         "spread": bool(page_entry.spread),
         "activePanelIndex": int(page_entry.active_panel_index),
+        "activeBalloonIndex": int(page_entry.active_balloon_index),
+        "activeTextIndex": int(page_entry.active_text_index),
         "panels": [panel_entry_to_dict(p) for p in page_entry.panels],
+        "balloons": [balloon_entry_to_dict(b) for b in page_entry.balloons],
+        "texts": [text_entry_to_dict(t) for t in page_entry.texts],
     }
 
 
@@ -492,10 +623,26 @@ def page_from_dict(page_entry, data: dict[str, Any]) -> None:
     for panel_data in data.get("panels", []):
         entry = page_entry.panels.add()
         panel_entry_from_dict(entry, panel_data)
+    page_entry.balloons.clear()
+    for b_data in data.get("balloons", []):
+        entry = page_entry.balloons.add()
+        balloon_entry_from_dict(entry, b_data)
+    page_entry.texts.clear()
+    for t_data in data.get("texts", []):
+        entry = page_entry.texts.add()
+        text_entry_from_dict(entry, t_data)
     idx = int(data.get("activePanelIndex", -1))
     if idx < -1 or idx >= len(page_entry.panels):
         idx = 0 if len(page_entry.panels) > 0 else -1
     page_entry.active_panel_index = idx
+    idx = int(data.get("activeBalloonIndex", -1))
+    if idx < -1 or idx >= len(page_entry.balloons):
+        idx = 0 if len(page_entry.balloons) > 0 else -1
+    page_entry.active_balloon_index = idx
+    idx = int(data.get("activeTextIndex", -1))
+    if idx < -1 or idx >= len(page_entry.texts):
+        idx = 0 if len(page_entry.texts) > 0 else -1
+    page_entry.active_text_index = idx
 
 
 def pages_from_dict(work, data: dict[str, Any]) -> None:

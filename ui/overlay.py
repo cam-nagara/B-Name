@@ -201,7 +201,74 @@ def _ensure_bpy_image(filepath: str):
         return None
 
 
-def _draw_panels(page) -> None:
+def _draw_balloons(page, ox_mm: float = 0.0, oy_mm: float = 0.0) -> None:
+    """ページ内のフキダシをオーバーレイ描画 (Phase 3 骨格: 矩形プレビュー).
+
+    形状別の厳密な描画 (雲/トゲ/曲線尻尾) は Phase 6 の書き出しパイプラインで
+    Pillow 実装側で本番化する。overview での視覚的配置確認用の描画として、
+    ここでは矩形 + 塗り色 + 線色で概形を描く。
+    """
+    balloons = getattr(page, "balloons", None)
+    if balloons is None:
+        return
+    active_idx = getattr(page, "active_balloon_index", -1)
+    for i, entry in enumerate(balloons):
+        if entry.shape == "none":
+            continue  # テキスト単体
+        rect = Rect(
+            entry.x_mm + ox_mm,
+            entry.y_mm + oy_mm,
+            entry.width_mm,
+            entry.height_mm,
+        )
+        fill = (
+            float(entry.fill_color[0]),
+            float(entry.fill_color[1]),
+            float(entry.fill_color[2]),
+            float(entry.fill_color[3]),
+        )
+        _draw_rect_fill(rect, fill)
+        line = (
+            float(entry.line_color[0]),
+            float(entry.line_color[1]),
+            float(entry.line_color[2]),
+            float(entry.line_color[3]),
+        )
+        line_width = max(1.0, float(entry.line_width_mm) * 2.0)
+        _draw_rect_outline(rect, line, line_width=line_width)
+        if i == active_idx:
+            highlight = rect.inset(-1.0)
+            _draw_rect_outline(highlight, (1.0, 0.6, 0.0, 0.9), line_width=2.0)
+
+
+def _draw_texts(page, ox_mm: float = 0.0, oy_mm: float = 0.0) -> None:
+    """ページ内のテキストエントリの外接矩形を淡く描画 (Phase 3 骨格).
+
+    実際のテキスト組版描画は ``typography/viewport_renderer.py`` が担当する
+    想定。ここでは「どこにテキストがあるか」の配置ガイドだけ。
+    """
+    texts = getattr(page, "texts", None)
+    if texts is None:
+        return
+    active_idx = getattr(page, "active_text_index", -1)
+    for i, entry in enumerate(texts):
+        rect = Rect(
+            entry.x_mm + ox_mm,
+            entry.y_mm + oy_mm,
+            entry.width_mm,
+            entry.height_mm,
+        )
+        # 白フチ背景 (うっすら) → ガイド枠
+        _draw_rect_fill(rect, (1.0, 1.0, 1.0, 0.25))
+        # 親子連動中なら親フキダシと同色系のガイド (シアン)、独立なら黄
+        color = (0.2, 0.7, 1.0, 0.9) if entry.parent_balloon_id else (0.9, 0.9, 0.1, 0.9)
+        _draw_rect_outline(rect, color, line_width=1.0)
+        if i == active_idx:
+            highlight = rect.inset(-1.0)
+            _draw_rect_outline(highlight, (1.0, 0.6, 0.0, 0.9), line_width=2.0)
+
+
+def _draw_panels(page, ox_mm: float = 0.0, oy_mm: float = 0.0) -> None:
     """ページ内のコマ枠・白フチを Z 順に従って描画.
 
     Z順序昇順 (背面→手前) で描画することで重なり時も正しく表示される。
@@ -214,6 +281,8 @@ def _draw_panels(page) -> None:
         rect = _panel_rect(entry)
         if rect is None:
             continue
+        if ox_mm != 0.0 or oy_mm != 0.0:
+            rect = Rect(rect.x + ox_mm, rect.y + oy_mm, rect.width, rect.height)
         # 白フチ (枠線の外側)
         wm = entry.white_margin
         if wm.enabled and wm.width_mm > 0.0:
@@ -233,6 +302,79 @@ def _draw_panels(page) -> None:
             _draw_rect_outline(rect, color, line_width=line_width)
 
 
+def _translate_rect(r: Rect, ox_mm: float, oy_mm: float) -> Rect:
+    """Rect を (ox_mm, oy_mm) だけ平行移動."""
+    if ox_mm == 0.0 and oy_mm == 0.0:
+        return r
+    return Rect(r.x + ox_mm, r.y + oy_mm, r.width, r.height)
+
+
+def _draw_canvas_fill_only(paper, rects, ox_mm: float, oy_mm: float) -> None:
+    """キャンバス塗りのみを描画 (PRE_VIEW から呼び出し、GP ストロークの下に敷く).
+
+    PRE_VIEW 時代 (Phase 1-2) は POST_VIEW でオブジェクトを透かすため半透明
+    (display_alpha=0.85) だったが、Phase 3 以降は PRE_VIEW で紙の下敷きとして
+    描くため **不透明** (alpha=1.0) で固定。Blender 既定の暗い背景が用紙を
+    通して透けるのを防ぐ。
+    """
+    canvas_r = _translate_rect(rects.canvas, ox_mm, oy_mm)
+    canvas_color = (
+        float(paper.paper_color[0]),
+        float(paper.paper_color[1]),
+        float(paper.paper_color[2]),
+        1.0,
+    )
+    _draw_rect_fill(canvas_r, canvas_color)
+
+
+def _draw_page_overlay(
+    context,
+    work,
+    paper,
+    rects,
+    page,
+    mode: str,
+    ox_mm: float = 0.0,
+    oy_mm: float = 0.0,
+    draw_image_layers: bool = True,
+) -> None:
+    """1 ページ分のガイド/コマ枠を (ox_mm, oy_mm) オフセットで描画.
+
+    **キャンバス塗りは描画しない** (PRE_VIEW の ``_draw_callback_pre`` で
+    GP ストロークの下に敷くため)。この関数は POST_VIEW 用で、ストロークの
+    上に乗るべき要素 (枠線・コマ・フキダシ・テキスト・画像レイヤー) のみ
+    描画する。
+    """
+    canvas_r = _translate_rect(rects.canvas, ox_mm, oy_mm)
+    finish_r = _translate_rect(rects.finish, ox_mm, oy_mm)
+    inner_r = _translate_rect(rects.inner_frame, ox_mm, oy_mm)
+    safe_r = _translate_rect(rects.safe, ox_mm, oy_mm)
+
+    # セーフライン外オーバーレイ (アクティブページのみ。overview 中は重いので省略)
+    sa = work.safe_area_overlay
+    if sa.enabled and ox_mm == 0.0 and oy_mm == 0.0:
+        _apply_blend_mode(sa.blend_mode)
+        color = (float(sa.color[0]), float(sa.color[1]), float(sa.color[2]), float(sa.opacity))
+        _draw_frame_with_hole(canvas_r, safe_r, color)
+        gpu.state.blend_set("ALPHA")
+
+    # 枠線群
+    _draw_rect_outline(canvas_r, (0.4, 0.4, 0.4, 0.8), line_width=1.0)
+    _draw_rect_outline(finish_r, (0.8, 0.2, 0.2, 0.9), line_width=1.5)
+    _draw_rect_outline(inner_r, (0.2, 0.6, 0.9, 0.9), line_width=1.0)
+    _draw_rect_outline(safe_r, (0.2, 0.8, 0.4, 0.6), line_width=1.0)
+
+    # 画像レイヤー (アクティブページのみ — 全ページ一覧時は負荷とレイヤーの per-scene 制約で省略)
+    if mode == MODE_PAGE and draw_image_layers:
+        _draw_image_layers(context.scene)
+
+    # コマ枠 / フキダシ / テキスト (紙面編集モード時のみ)
+    if mode == MODE_PAGE and page is not None:
+        _draw_panels(page, ox_mm=ox_mm, oy_mm=oy_mm)
+        _draw_balloons(page, ox_mm=ox_mm, oy_mm=oy_mm)
+        _draw_texts(page, ox_mm=ox_mm, oy_mm=oy_mm)
+
+
 def _draw_callback() -> None:
     context = bpy.context
     work = get_work(context)
@@ -241,43 +383,90 @@ def _draw_callback() -> None:
     paper = work.paper
     rects = overlay_shared.compute_paper_rects(paper)
     mode = get_mode(context)
+    scene = context.scene
 
     gpu.state.blend_set("ALPHA")
     try:
-        # キャンバス薄塗り (視認用、ペーパーカラー)
-        canvas_color = (
-            float(paper.paper_color[0]),
-            float(paper.paper_color[1]),
-            float(paper.paper_color[2]),
-            0.25,  # 背景として薄く表示
-        )
-        _draw_rect_fill(rects.canvas, canvas_color)
-
-        # セーフライン外オーバーレイ (表示専用、書き出しに含まれない)
-        sa = work.safe_area_overlay
-        if sa.enabled:
-            _apply_blend_mode(sa.blend_mode)
-            color = (float(sa.color[0]), float(sa.color[1]), float(sa.color[2]), float(sa.opacity))
-            _draw_frame_with_hole(rects.canvas, rects.safe, color)
-            gpu.state.blend_set("ALPHA")
-
-        # 枠線群 (原稿ガイド)
-        _draw_rect_outline(rects.canvas, (0.4, 0.4, 0.4, 0.8), line_width=1.0)
-        _draw_rect_outline(rects.finish, (0.8, 0.2, 0.2, 0.9), line_width=1.5)  # 仕上がり=赤
-        _draw_rect_outline(rects.inner_frame, (0.2, 0.6, 0.9, 0.9), line_width=1.0)  # 基本枠=青
-        _draw_rect_outline(rects.safe, (0.2, 0.8, 0.4, 0.6), line_width=1.0)  # セーフ=緑
-
-        # 画像レイヤー (紙面編集モード時のみ)
-        if mode == MODE_PAGE:
-            _draw_image_layers(context.scene)
-
-        # コマ枠群 (紙面編集モード時のみ。コマ編集モードでは該当コマの 3D シーン表示になる想定)
-        if mode == MODE_PAGE:
+        # panel モード中は overview を描かず、単ページの 2D 表示のみ
+        # (計画書 3. Phase 1 — overlay は panel 編集モード時は従来動作)
+        if (
+            mode == MODE_PAGE
+            and getattr(scene, "bname_overview_mode", False)
+            and len(work.pages) > 0
+        ):
+            # 全ページ一覧モード.
+            # 日本の漫画は右→左に読むため、ページ 0001 を右端に置き、追加した
+            # ページ (0002, 0003...) を左方向に展開する。オフセットは負の X。
+            cols = max(1, int(getattr(scene, "bname_overview_cols", 4)))
+            gap = float(getattr(scene, "bname_overview_gap_mm", 30.0))
+            cw = paper.canvas_width_mm
+            ch = paper.canvas_height_mm
+            active_idx = work.active_page_index
+            for i, page in enumerate(work.pages):
+                col = i % cols
+                row = i // cols
+                ox = -col * (cw + gap)  # 左方向 (負の X) に展開
+                oy = -row * (ch + gap)
+                _draw_page_overlay(
+                    context, work, paper, rects, page, mode,
+                    ox_mm=ox, oy_mm=oy, draw_image_layers=False,
+                )
+                # アクティブページにハイライト枠
+                if i == active_idx:
+                    canvas_r = _translate_rect(rects.canvas, ox, oy)
+                    highlight = canvas_r.inset(-5.0)
+                    _draw_rect_outline(highlight, (1.0, 0.85, 0.0, 0.9), line_width=3.0)
+        else:
             page = get_active_page(context)
-            if page is not None:
-                _draw_panels(page)
+            _draw_page_overlay(
+                context, work, paper, rects, page, mode,
+                ox_mm=0.0, oy_mm=0.0, draw_image_layers=True,
+            )
     finally:
         gpu.state.blend_set("NONE")
+
+
+def apply_paper_background_color(context=None) -> int:
+    """全ウィンドウの全 VIEW_3D の solid shading 背景を paper_color で塗る.
+
+    PRE_VIEW で GPU 塗りをすると Blender 5.x で重なり順が不安定なため、
+    確実に「白い用紙の上に GP ストローク」を実現するために Blender 自身の
+    ビューポート solid 背景色を直接書き換える。
+    用紙外の領域もこの色になるが、フレーム枠線で用紙領域は識別できる。
+    """
+    ctx = context or bpy.context
+    work = get_work(ctx)
+    if work is None or not work.loaded:
+        return 0
+    color3 = (
+        float(work.paper.paper_color[0]),
+        float(work.paper.paper_color[1]),
+        float(work.paper.paper_color[2]),
+    )
+    wm = ctx.window_manager
+    if wm is None:
+        return 0
+    count = 0
+    for window in wm.windows:
+        screen = getattr(window, "screen", None)
+        if screen is None:
+            continue
+        for area in screen.areas:
+            if area.type != "VIEW_3D":
+                continue
+            space = area.spaces.active
+            if space is None:
+                continue
+            shading = getattr(space, "shading", None)
+            if shading is None:
+                continue
+            try:
+                shading.background_type = "VIEWPORT"
+                shading.background_color = color3
+                count += 1
+            except Exception:  # noqa: BLE001
+                _logger.exception("apply_paper_background_color: set failed")
+    return count
 
 
 # ---------- register / unregister ----------
@@ -285,21 +474,19 @@ def _draw_callback() -> None:
 
 def register() -> None:
     global _handle
-    if _handle is not None:
-        return
-    _handle = bpy.types.SpaceView3D.draw_handler_add(
-        _draw_callback, (), "WINDOW", "POST_VIEW"
-    )
-    _logger.debug("overlay draw_handler registered")
+    if _handle is None:
+        _handle = bpy.types.SpaceView3D.draw_handler_add(
+            _draw_callback, (), "WINDOW", "POST_VIEW"
+        )
+    _logger.debug("overlay draw_handler registered (POST_VIEW)")
 
 
 def unregister() -> None:
     global _handle
-    if _handle is None:
-        return
-    try:
-        bpy.types.SpaceView3D.draw_handler_remove(_handle, "WINDOW")
-    except (ValueError, RuntimeError):
-        pass
-    _handle = None
-    _logger.debug("overlay draw_handler removed")
+    if _handle is not None:
+        try:
+            bpy.types.SpaceView3D.draw_handler_remove(_handle, "WINDOW")
+        except (ValueError, RuntimeError):
+            pass
+        _handle = None
+    _logger.debug("overlay draw_handlers removed")

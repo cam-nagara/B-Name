@@ -26,6 +26,7 @@ class BNAME_PT_image_layers(Panel):
     bl_region_type = "UI"
     bl_category = B_NAME_CATEGORY
     bl_order = 12
+    bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
         layout = self.layout

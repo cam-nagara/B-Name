@@ -64,6 +64,7 @@ class BNAME_PT_nombre(Panel):
     bl_region_type = "UI"
     bl_category = B_NAME_CATEGORY
     bl_order = 1
+    bl_options = {"DEFAULT_CLOSED"}
 
     @classmethod
     def poll(cls, context):

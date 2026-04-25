@@ -41,6 +41,24 @@ def _on_log_level_changed(self, _context) -> None:  # noqa: ANN001 - Blender cal
     log.set_level(self.log_level)
 
 
+def _on_gpencil_follow_changed(prefs) -> None:
+    """preferences.gpencil_follow_cursor 変更で watcher を即時起動/停止.
+
+    アドオン register/unregister の過渡状態 (operators モジュールがまだ
+    完全に初期化されていない / 既に unregister 済) でも安全に no-op
+    できるよう、全例外を握り潰す。
+    """
+    try:
+        from .operators import gpencil_op
+
+        if bool(prefs.gpencil_follow_cursor):
+            gpencil_op._follow_start()
+        else:
+            gpencil_op._follow_stop()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class BNamePreferences(bpy.types.AddonPreferences):
     bl_idname = ADDON_ID
 
@@ -86,6 +104,16 @@ class BNamePreferences(bpy.types.AddonPreferences):
         subtype="DIR_PATH",
     )
 
+    gpencil_follow_cursor: BoolProperty(  # type: ignore[valid-type]
+        name="カーソル追従で active GP 切替",
+        description=(
+            "overview モード中、マウス位置のページ GP を自動で active に切替える "
+            "(Blender 標準のドロー/消しゴムを overview 全ページに適用するため)"
+        ),
+        default=True,
+        update=lambda self, _ctx: _on_gpencil_follow_changed(self),
+    )
+
     def draw(self, context) -> None:  # noqa: D401, ANN001
         layout = self.layout
 
@@ -112,6 +140,10 @@ class BNamePreferences(bpy.types.AddonPreferences):
         col.label(text="1. 上のパスを Blender 本体の Preferences > File Paths > Asset Libraries に追加")
         col.label(text="2. 作品固有アセットは MyWork.bname/assets/ 配下 (B-Name が自動管理)")
         col.label(text="3. コマ編集モード中にアセットブラウザからドラッグ&ドロップでリンク参照")
+
+        box = layout.box()
+        box.label(text="Grease Pencil (overview)")
+        box.prop(self, "gpencil_follow_cursor")
 
 
 def get_preferences(context=None) -> "BNamePreferences | None":

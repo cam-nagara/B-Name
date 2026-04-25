@@ -17,7 +17,9 @@ from bpy.props import (
 )
 
 from ..utils import log
+from .balloon import BNameBalloonEntry
 from .panel import BNamePanelEntry
+from .text_entry import BNameTextEntry
 
 _logger = log.get_logger(__name__)
 
@@ -87,6 +89,20 @@ class BNamePageEntry(bpy.types.PropertyGroup):
     panels: CollectionProperty(type=BNamePanelEntry)  # type: ignore[valid-type]
     active_panel_index: IntProperty(  # type: ignore[valid-type]
         name="アクティブコマ",
+        default=-1,
+        min=-1,
+    )
+
+    # --- フキダシ / テキスト (Phase 3 以降: ページ単位保持) ---
+    balloons: CollectionProperty(type=BNameBalloonEntry)  # type: ignore[valid-type]
+    active_balloon_index: IntProperty(  # type: ignore[valid-type]
+        name="アクティブフキダシ",
+        default=-1,
+        min=-1,
+    )
+    texts: CollectionProperty(type=BNameTextEntry)  # type: ignore[valid-type]
+    active_text_index: IntProperty(  # type: ignore[valid-type]
+        name="アクティブテキスト",
         default=-1,
         min=-1,
     )

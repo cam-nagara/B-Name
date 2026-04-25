@@ -6,6 +6,7 @@ from . import (
     balloon_panel,
     effect_line_panel,
     export_panel,
+    gpencil_panel,
     layer_panel,
     page_panel,
     panel_detail_panel,
@@ -23,6 +24,7 @@ _MODULES = (
     layer_panel,
     balloon_panel,
     effect_line_panel,
+    gpencil_panel,
     export_panel,
 )
 

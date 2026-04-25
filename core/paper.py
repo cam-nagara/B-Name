@@ -169,6 +169,14 @@ class BNamePaperSettings(bpy.types.PropertyGroup):
         min=0.0,
         max=1.0,
     )
+    display_alpha: FloatProperty(  # type: ignore[valid-type]
+        name="紙面表示アルファ",
+        description="ビューポート上の紙面 (キャンバス色) の表示透明度. 0 で非表示、1 で完全不透明",
+        default=0.85,
+        min=0.0,
+        max=1.0,
+        subtype="FACTOR",
+    )
     color_profile: StringProperty(  # type: ignore[valid-type]
         name="カラープロファイル",
         description="表示/書き出し用 ICC プロファイル名",

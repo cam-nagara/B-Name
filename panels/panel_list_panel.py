@@ -11,6 +11,29 @@ from ..core.work import get_active_page, get_work
 B_NAME_CATEGORY = "B-Name"
 
 
+class BNAME_OT_panel_enter_from_list(bpy.types.Operator):
+    """UIList 行の「コマ編集へ」ボタン用: 指定 index のコマを選択してから enter_panel_mode."""
+
+    bl_idname = "bname.panel_enter_from_list"
+    bl_label = "このコマを編集"
+    bl_options = {"REGISTER"}
+
+    index: bpy.props.IntProperty(default=-1)  # type: ignore[valid-type]
+
+    def execute(self, context):
+        page = get_active_page(context)
+        if page is None:
+            self.report({"ERROR"}, "ページが選択されていません")
+            return {"CANCELLED"}
+        if not (0 <= self.index < len(page.panels)):
+            self.report({"ERROR"}, "コマ index が不正です")
+            return {"CANCELLED"}
+        page.active_panel_index = self.index
+        # enter_panel_mode.execute は active panel を対象にするので、
+        # ここで invoke ではなく execute 経由で呼び出せば ok。
+        return bpy.ops.bname.enter_panel_mode("EXEC_DEFAULT")
+
+
 class BNAME_UL_panels(UIList):
     bl_idname = "BNAME_UL_panels"
 
@@ -30,6 +53,14 @@ class BNAME_UL_panels(UIList):
             row.label(text=item.panel_stem, icon="IMAGE_DATA")
             row.prop(item, "title", text="", emboss=False)
             row.label(text=f"z={item.z_order}")
+            # 行内「コマ編集へ」ボタン (overview ダブルクリックと同等の導線)
+            op = row.operator(
+                "bname.panel_enter_from_list",
+                text="",
+                icon="PLAY",
+                emboss=False,
+            )
+            op.index = index
         elif self.layout_type == "GRID":
             layout.alignment = "CENTER"
             layout.label(text=item.panel_stem)
@@ -42,6 +73,7 @@ class BNAME_PT_panels(Panel):
     bl_region_type = "UI"
     bl_category = B_NAME_CATEGORY
     bl_order = 6
+    bl_options = {"DEFAULT_CLOSED"}
 
     @classmethod
     def poll(cls, context):
@@ -101,8 +133,24 @@ class BNAME_PT_panels(Panel):
         box.label(text="分割テンプレート")
         box.operator("bname.panel_split_template", text="縦横均等分割", icon="GRID")
 
+        # 枠線カットツール (選択中コマを 2 つに分割)
+        box = layout.box()
+        box.label(text="枠線カット (選択中コマを分割)")
+        row = box.row(align=True)
+        op = row.operator("bname.panel_cut", text="水平カット (上下)", icon="SNAP_EDGE")
+        op.axis = 0
+        op = row.operator("bname.panel_cut", text="垂直カット (左右)", icon="SNAP_MIDPOINT")
+        op.axis = 1
+        # ナイフツール (ビューポートでドラッグして切断)
+        box.operator(
+            "bname.panel_knife_cut",
+            text="ナイフツール (ドラッグで切断)",
+            icon="SCULPTMODE_HLT",
+        )
+
 
 _CLASSES = (
+    BNAME_OT_panel_enter_from_list,
     BNAME_UL_panels,
     BNAME_PT_panels,
 )

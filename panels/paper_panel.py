@@ -17,6 +17,7 @@ class BNAME_PT_paper(Panel):
     bl_region_type = "UI"
     bl_category = B_NAME_CATEGORY
     bl_order = 2
+    bl_options = {"DEFAULT_CLOSED"}
 
     @classmethod
     def poll(cls, context):
@@ -76,6 +77,7 @@ class BNAME_PT_paper(Panel):
         box.prop(p, "color_mode")
         box.prop(p, "default_line_count")
         box.prop(p, "paper_color")
+        box.prop(p, "display_alpha", slider=True)
         box.prop(p, "color_profile")
         box.prop(p, "is_spread_layout")
 
@@ -87,6 +89,7 @@ class BNAME_PT_safe_area_overlay(Panel):
     bl_region_type = "UI"
     bl_category = B_NAME_CATEGORY
     bl_order = 3
+    bl_options = {"DEFAULT_CLOSED"}
 
     @classmethod
     def poll(cls, context):
@@ -118,6 +121,7 @@ class BNAME_PT_panel_gap(Panel):
     bl_region_type = "UI"
     bl_category = B_NAME_CATEGORY
     bl_order = 4
+    bl_options = {"DEFAULT_CLOSED"}
 
     @classmethod
     def poll(cls, context):

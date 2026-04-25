@@ -57,10 +57,28 @@ class BNameRubySpan(bpy.types.PropertyGroup):
 
 
 class BNameTextEntry(bpy.types.PropertyGroup):
-    """1 つのテキストオブジェクト."""
+    """1 つのテキストオブジェクト.
+
+    Phase 3 以降、テキストはページ単位 (``BNamePageEntry.texts``) で保持し、
+    ``parent_balloon_id`` 経由でフキダシと親子連動する (フキダシ移動で子
+    テキストも同じ delta で動く)。
+    """
 
     id: StringProperty(name="ID", default="")  # type: ignore[valid-type]
     body: StringProperty(name="本文", default="")  # type: ignore[valid-type]
+
+    # ページローカル座標 (mm). overlay 描画時にページ grid offset を加算する。
+    x_mm: FloatProperty(name="X", default=0.0)  # type: ignore[valid-type]
+    y_mm: FloatProperty(name="Y", default=0.0)  # type: ignore[valid-type]
+    width_mm: FloatProperty(name="幅", default=30.0, min=0.1)  # type: ignore[valid-type]
+    height_mm: FloatProperty(name="高さ", default=15.0, min=0.1)  # type: ignore[valid-type]
+
+    # 親フキダシ (同一ページの BNameBalloonEntry.id を参照). 空文字なら独立テキスト。
+    parent_balloon_id: StringProperty(  # type: ignore[valid-type]
+        name="親フキダシ ID",
+        description="同じページの BNameBalloonEntry.id を参照。空で独立テキスト。",
+        default="",
+    )
     speaker_type: EnumProperty(  # type: ignore[valid-type]
         name="セリフ種別",
         items=_SPEAKER_TYPE_ITEMS,

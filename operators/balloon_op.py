@@ -1,8 +1,10 @@
-"""フキダシ関連 Operator (Phase 3 骨格).
+"""フキダシ関連 Operator (Phase 3 ページ単位対応).
 
-Phase 3 段階では PropertyGroup への追加/削除/種別変更の最小 Operator の
-み。形状ごとの頂点ベース描画・パスツールによるカスタム形状登録は
-Phase 3 後半以降で拡張。
+- 各ページの ``page.balloons`` CollectionProperty にフキダシを追加/削除
+- invoke ではマウス直下のページを逆引きして active に追随 (overview 対応)
+- 親子連動: 子テキスト (``BNameTextEntry.parent_balloon_id`` でリンク) は
+  フキダシの移動に合わせて同じ delta で追随する
+- 旧 ``Scene.bname_balloons`` (グローバル) は廃止
 """
 
 from __future__ import annotations
@@ -10,8 +12,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import bpy
-from bpy.props import BoolProperty, EnumProperty, StringProperty
-from bpy.types import Operator, Scene
+from bpy.props import BoolProperty, EnumProperty, FloatProperty, StringProperty
+from bpy.types import Operator
 
 from ..core.work import get_active_page, get_work
 from ..io import balloon_presets
@@ -29,15 +31,80 @@ _SHAPE_FOR_ADD = (
 )
 
 
-def _get_balloons_collection(scene: Scene):
-    """Scene にフキダシコレクションを lazy に確保.
+def _allocate_balloon_id(page) -> str:
+    used = {b.id for b in page.balloons}
+    i = 1
+    while True:
+        candidate = f"balloon_{i:04d}"
+        if candidate not in used:
+            return candidate
+        i += 1
 
-    Phase 3 骨格では Scene に attach しておき、将来ページ/コマ配下に移す
-    設計変更が発生しても移行しやすいよう 1 層のコレクションで保持。
+
+def _resolve_page_from_event(context, event):
+    """event.mouse_x/y の位置からアクティブページを逆引き + local mm 座標を返す.
+
+    戻り値: (work, page, local_x_mm, local_y_mm) or (work, page, None, None)
+    VIEW_3D 領域外クリック (N パネル等) の場合は active ページのみ返し、
+    mm 座標は None。overview OFF モードなら常に active ページ + None。
     """
-    if not hasattr(scene, "bname_balloons"):
-        return None
-    return scene.bname_balloons
+    from bpy_extras.view3d_utils import region_2d_to_location_3d
+
+    from ..utils import geom, page_grid
+
+    work = get_work(context)
+    page = get_active_page(context)
+    if work is None or not work.loaded or page is None:
+        return work, page, None, None
+
+    screen = getattr(context, "screen", None)
+    if screen is None:
+        return work, page, None, None
+    for area in screen.areas:
+        if area.type != "VIEW_3D":
+            continue
+        for region in area.regions:
+            if region.type != "WINDOW":
+                continue
+            if not (
+                region.x <= event.mouse_x < region.x + region.width
+                and region.y <= event.mouse_y < region.y + region.height
+            ):
+                continue
+            rv3d = getattr(area.spaces.active, "region_3d", None)
+            if rv3d is None:
+                continue
+            mx = event.mouse_x - region.x
+            my = event.mouse_y - region.y
+            loc = region_2d_to_location_3d(region, rv3d, (mx, my), (0.0, 0.0, 0.0))
+            if loc is None:
+                continue
+            x_mm = geom.m_to_mm(loc.x)
+            y_mm = geom.m_to_mm(loc.y)
+            scene = context.scene
+            page_idx = page_grid.page_index_at_world_mm(work, scene, x_mm, y_mm)
+            if page_idx is not None and 0 <= page_idx < len(work.pages):
+                work.active_page_index = page_idx
+                page = work.pages[page_idx]
+                cols = max(1, int(getattr(scene, "bname_overview_cols", 4)))
+                gap = float(getattr(scene, "bname_overview_gap_mm", 30.0))
+                cw = work.paper.canvas_width_mm
+                ch = work.paper.canvas_height_mm
+                ox, oy = page_grid.page_grid_offset_mm(page_idx, cols, gap, cw, ch)
+                return work, page, x_mm - ox, y_mm - oy
+            return work, page, None, None
+    return work, page, None, None
+
+
+def _default_position_for(work, page, local_x_mm: float | None, local_y_mm: float | None):
+    """配置 mm 座標を決定.
+
+    カーソル解決に成功すればその座標、失敗すればキャンバス中央付近を返す。
+    """
+    if local_x_mm is not None and local_y_mm is not None:
+        return local_x_mm, local_y_mm
+    paper = work.paper
+    return paper.canvas_width_mm / 2.0, paper.canvas_height_mm / 2.0
 
 
 class BNAME_OT_balloon_add(Operator):
@@ -50,29 +117,41 @@ class BNAME_OT_balloon_add(Operator):
         items=_SHAPE_FOR_ADD,
         default="rect",
     )
+    x_mm: FloatProperty(name="X (mm)", default=0.0)  # type: ignore[valid-type]
+    y_mm: FloatProperty(name="Y (mm)", default=0.0)  # type: ignore[valid-type]
+    width_mm: FloatProperty(name="幅 (mm)", default=40.0, min=0.1)  # type: ignore[valid-type]
+    height_mm: FloatProperty(name="高さ (mm)", default=20.0, min=0.1)  # type: ignore[valid-type]
 
     @classmethod
     def poll(cls, context):
-        return get_active_page(context) is not None
+        work = get_work(context)
+        return work is not None and work.loaded and get_active_page(context) is not None
 
     def invoke(self, context, event):
+        work, page, lx, ly = _resolve_page_from_event(context, event)
+        if work is None or page is None:
+            self.report({"ERROR"}, "ページが選択されていません")
+            return {"CANCELLED"}
+        cx, cy = _default_position_for(work, page, lx, ly)
+        # 追加時はカーソル位置を左下ではなく中央と解釈し、規定サイズで周囲に広げる
+        self.x_mm = cx - self.width_mm / 2.0
+        self.y_mm = cy - self.height_mm / 2.0
         return context.window_manager.invoke_props_dialog(self)
 
     def execute(self, context):
-        balloons = _get_balloons_collection(context.scene)
-        if balloons is None:
-            self.report({"ERROR"}, "balloon collection が初期化されていません")
+        page = get_active_page(context)
+        if page is None:
+            self.report({"ERROR"}, "ページが選択されていません")
             return {"CANCELLED"}
-        entry = balloons.add()
-        entry.id = f"balloon_{len(balloons):04d}"
+        entry = page.balloons.add()
+        entry.id = _allocate_balloon_id(page)
         entry.shape = self.shape
-        # 既定で画面中央あたりに配置
-        entry.x_mm = 100.0
-        entry.y_mm = 200.0
-        entry.width_mm = 40.0
-        entry.height_mm = 20.0
+        entry.x_mm = self.x_mm
+        entry.y_mm = self.y_mm
+        entry.width_mm = self.width_mm
+        entry.height_mm = self.height_mm
         entry.rounded_corner_enabled = (self.shape == "rect")
-        context.scene.bname_active_balloon_index = len(balloons) - 1
+        page.active_balloon_index = len(page.balloons) - 1
         self.report({"INFO"}, f"フキダシ追加: {entry.id} ({self.shape})")
         return {"FINISHED"}
 
@@ -84,25 +163,28 @@ class BNAME_OT_balloon_remove(Operator):
 
     @classmethod
     def poll(cls, context):
-        balloons = _get_balloons_collection(context.scene)
-        if balloons is None:
+        page = get_active_page(context)
+        if page is None:
             return False
-        idx = getattr(context.scene, "bname_active_balloon_index", -1)
-        return 0 <= idx < len(balloons)
+        return 0 <= page.active_balloon_index < len(page.balloons)
 
     def execute(self, context):
-        balloons = _get_balloons_collection(context.scene)
-        if balloons is None:
+        page = get_active_page(context)
+        if page is None:
             return {"CANCELLED"}
-        idx = context.scene.bname_active_balloon_index
-        if not (0 <= idx < len(balloons)):
+        idx = page.active_balloon_index
+        if not (0 <= idx < len(page.balloons)):
             return {"CANCELLED"}
-        bid = balloons[idx].id
-        balloons.remove(idx)
-        if len(balloons) == 0:
-            context.scene.bname_active_balloon_index = -1
-        elif idx >= len(balloons):
-            context.scene.bname_active_balloon_index = len(balloons) - 1
+        bid = page.balloons[idx].id
+        # 子テキストの parent_balloon_id をクリア (孤立テキスト化)
+        for txt in page.texts:
+            if txt.parent_balloon_id == bid:
+                txt.parent_balloon_id = ""
+        page.balloons.remove(idx)
+        if len(page.balloons) == 0:
+            page.active_balloon_index = -1
+        elif idx >= len(page.balloons):
+            page.active_balloon_index = len(page.balloons) - 1
         self.report({"INFO"}, f"フキダシ削除: {bid}")
         return {"FINISHED"}
 
@@ -114,20 +196,65 @@ class BNAME_OT_balloon_tail_add(Operator):
 
     @classmethod
     def poll(cls, context):
-        balloons = _get_balloons_collection(context.scene)
-        if balloons is None:
+        page = get_active_page(context)
+        if page is None:
             return False
-        idx = getattr(context.scene, "bname_active_balloon_index", -1)
-        return 0 <= idx < len(balloons)
+        return 0 <= page.active_balloon_index < len(page.balloons)
 
     def execute(self, context):
-        balloons = _get_balloons_collection(context.scene)
-        idx = context.scene.bname_active_balloon_index
-        entry = balloons[idx]
+        page = get_active_page(context)
+        if page is None:
+            return {"CANCELLED"}
+        idx = page.active_balloon_index
+        if not (0 <= idx < len(page.balloons)):
+            return {"CANCELLED"}
+        entry = page.balloons[idx]
         tail = entry.tails.add()
         tail.type = "straight"
         tail.length_mm = 6.0
         tail.root_width_mm = 3.0
+        return {"FINISHED"}
+
+
+class BNAME_OT_balloon_move(Operator):
+    """アクティブフキダシを delta だけ平行移動. 子テキストも連動.
+
+    UI の数値ドラッグではなく、親子連動を保証するための専用オペレータ。
+    N パネルのフキダシ詳細 UI から x_mm/y_mm を直接編集した場合は
+    連動しない (ユーザーが意図的に独立移動したとみなす)。
+    """
+
+    bl_idname = "bname.balloon_move"
+    bl_label = "フキダシを平行移動"
+    bl_options = {"REGISTER", "UNDO"}
+
+    delta_x_mm: FloatProperty(name="ΔX (mm)", default=0.0)  # type: ignore[valid-type]
+    delta_y_mm: FloatProperty(name="ΔY (mm)", default=0.0)  # type: ignore[valid-type]
+
+    @classmethod
+    def poll(cls, context):
+        page = get_active_page(context)
+        if page is None:
+            return False
+        return 0 <= page.active_balloon_index < len(page.balloons)
+
+    def execute(self, context):
+        page = get_active_page(context)
+        if page is None:
+            return {"CANCELLED"}
+        idx = page.active_balloon_index
+        if not (0 <= idx < len(page.balloons)):
+            return {"CANCELLED"}
+        entry = page.balloons[idx]
+        dx = float(self.delta_x_mm)
+        dy = float(self.delta_y_mm)
+        entry.x_mm += dx
+        entry.y_mm += dy
+        # 親子連動: 子テキストも同じ delta で追随
+        for txt in page.texts:
+            if txt.parent_balloon_id == entry.id:
+                txt.x_mm += dx
+                txt.y_mm += dy
         return {"FINISHED"}
 
 
@@ -149,19 +276,20 @@ class BNAME_OT_balloon_save_preset(Operator):
 
     @classmethod
     def poll(cls, context):
-        balloons = _get_balloons_collection(context.scene)
-        if balloons is None:
+        page = get_active_page(context)
+        if page is None:
             return False
-        idx = getattr(context.scene, "bname_active_balloon_index", -1)
-        return 0 <= idx < len(balloons)
+        return 0 <= page.active_balloon_index < len(page.balloons)
 
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self)
 
     def execute(self, context):
-        balloons = _get_balloons_collection(context.scene)
-        idx = context.scene.bname_active_balloon_index
-        entry = balloons[idx]
+        page = get_active_page(context)
+        if page is None:
+            return {"CANCELLED"}
+        idx = page.active_balloon_index
+        entry = page.balloons[idx]
         # Phase 3 骨格: 矩形 4 頂点を保存。パスツール実装後は任意形状へ。
         verts = [
             (entry.x_mm, entry.y_mm),
@@ -198,15 +326,12 @@ _CLASSES = (
     BNAME_OT_balloon_add,
     BNAME_OT_balloon_remove,
     BNAME_OT_balloon_tail_add,
+    BNAME_OT_balloon_move,
     BNAME_OT_balloon_save_preset,
 )
 
 
 def register() -> None:
-    from ..core.balloon import BNameBalloonEntry
-
-    bpy.types.Scene.bname_balloons = bpy.props.CollectionProperty(type=BNameBalloonEntry)
-    bpy.types.Scene.bname_active_balloon_index = bpy.props.IntProperty(default=-1, min=-1)
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
 
@@ -216,9 +341,4 @@ def unregister() -> None:
         try:
             bpy.utils.unregister_class(cls)
         except RuntimeError:
-            pass
-    for attr in ("bname_active_balloon_index", "bname_balloons"):
-        try:
-            delattr(bpy.types.Scene, attr)
-        except AttributeError:
             pass

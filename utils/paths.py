@@ -11,9 +11,9 @@ from pathlib import Path
 from typing import Iterable
 
 WORK_META_NAME = "work.json"
+WORK_BLEND_NAME = "work.blend"
 PAGES_META_NAME = "pages.json"
 PAGE_META_NAME = "page.json"
-PAGE_BLEND_NAME = "page.blend"
 PAGES_DIR_NAME = "pages"
 PANELS_DIR_NAME = "panels"
 ASSETS_DIR_NAME = "assets"
@@ -90,8 +90,9 @@ def page_meta_path(work_dir: Path, page_id: str) -> Path:
     return page_dir(work_dir, page_id) / PAGE_META_NAME
 
 
-def page_blend_path(work_dir: Path, page_id: str) -> Path:
-    return page_dir(work_dir, page_id) / PAGE_BLEND_NAME
+def work_blend_path(work_dir: Path) -> Path:
+    """作品マスター .blend のパス (``<work>.bname/work.blend``)."""
+    return Path(work_dir) / WORK_BLEND_NAME
 
 
 def panels_dir(work_dir: Path, page_id: str) -> Path:

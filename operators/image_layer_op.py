@@ -19,16 +19,30 @@ def _get_collection(scene):
 
 
 class BNAME_OT_image_layer_add(Operator, ImportHelper):
-    """画像ファイルを選択して新規画像レイヤーを追加."""
+    """画像ファイルを選択して新規画像レイヤーを追加.
+
+    ``bl_label`` はファイル選択ダイアログの確定ボタン表記にも流用される
+    ため「画像を選択」とする。N パネル側の起動ボタンはアイコンのみ
+    (text="") で呼び出しているので、このラベル変更は UI に悪影響しない。
+    """
 
     bl_idname = "bname.image_layer_add"
-    bl_label = "画像レイヤーを追加"
+    bl_label = "画像を選択"
     bl_options = {"REGISTER", "UNDO"}
 
     filter_glob: StringProperty(  # type: ignore[valid-type]
         default="*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.psd;*.bmp",
         options={"HIDDEN"},
     )
+
+    def invoke(self, context, event):
+        # ImportHelper 既定挙動では ``self.filepath`` に現在の .blend (``work.blend``)
+        # の絶対パスが流用されダイアログのファイル名欄に "work.blend" が
+        # 表示される。画像フィルタでは選択できない拡張子なのでユーザーを
+        # 混乱させるため、空に差し替える。
+        self.filepath = ""
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
 
     def execute(self, context):
         coll = _get_collection(context.scene)

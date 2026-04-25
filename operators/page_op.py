@@ -1,4 +1,10 @@
-"""ページ追加・削除・複製・並び替え・選択の Operator."""
+"""ページ追加・削除・複製・並び替え・選択の Operator.
+
+Phase 1 以降: work.blend 一本化に伴い、ページ切替時の mainfile swap は
+廃止された。ページ操作は Scene 上のページメタ (work.pages) と JSON ファイル
+(pages.json / page.json) を対象にするのみで、.blend は触らない。
+コマ編集モード遷移のみ ``operators.mode_op`` で panel_NNN.blend を開閉する。
+"""
 
 from __future__ import annotations
 
@@ -8,9 +14,11 @@ import bpy
 from bpy.props import IntProperty
 from bpy.types import Operator
 
+from ..core.mode import MODE_PAGE, set_mode
 from ..core.work import get_work
 from ..io import page_io
-from ..utils import log, paths
+from ..utils import gpencil as gp_utils
+from ..utils import log, page_grid, paths
 
 _logger = log.get_logger(__name__)
 
@@ -40,8 +48,17 @@ class BNAME_OT_page_add(Operator):
             return {"CANCELLED"}
         work_dir = Path(work.work_dir)
         try:
+            # 新規ページを登録 (register_new_page が active を新ページへ変更)
             entry = page_io.register_new_page(work)
             page_io.ensure_page_dir(work_dir, entry.id)
+            # 基本枠サイズの矩形コマを 1 個自動生成 (クリスタ準拠の初期状態)
+            from .panel_op import create_basic_frame_panel
+
+            create_basic_frame_panel(work, entry, work_dir)
+            # ページ Collection + GP オブジェクトを生成
+            gp_utils.ensure_page_gpencil(context.scene, entry.id)
+            # 全ページの Collection transform を grid 位置に再配置
+            page_grid.apply_page_collection_transforms(context, work)
             page_io.save_pages_json(work_dir, work)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("page_add failed")
@@ -76,14 +93,19 @@ class BNAME_OT_page_remove(Operator):
             return {"CANCELLED"}
         page_id = work.pages[idx].id
         work_dir = Path(work.work_dir)
+
         try:
             page_io.remove_page_dir(work_dir, page_id)
             work.pages.remove(idx)
+            # GP オブジェクト / データ / Collection も削除
+            gp_utils.remove_page_gpencil(page_id)
             # active index の補正
             if len(work.pages) == 0:
                 work.active_page_index = -1
             elif idx >= len(work.pages):
                 work.active_page_index = len(work.pages) - 1
+            # 残りページの Collection transform を再計算 (index が詰まるため)
+            page_grid.apply_page_collection_transforms(context, work)
             page_io.save_pages_json(work_dir, work)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("page_remove failed")
@@ -131,6 +153,11 @@ class BNAME_OT_page_duplicate(Operator):
             if new_index != idx + 1:
                 work.pages.move(new_index, idx + 1)
             work.active_page_index = idx + 1
+            # 複製ページの GP/Collection は新規生成 (元ページのストロークは
+            # 引き継がない: 複製は JSON/コマ構成のみとし、GP データは白紙
+            # から始める設計)
+            gp_utils.ensure_page_gpencil(context.scene, new_id)
+            page_grid.apply_page_collection_transforms(context, work)
             page_io.save_pages_json(work_dir, work)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("page_duplicate failed")
@@ -169,12 +196,29 @@ class BNAME_OT_page_move(Operator):
         work_dir = Path(work.work_dir)
         try:
             page_io.move_page(work, idx, new_idx)
+            # 順序が変わったので Collection transform を再計算
+            page_grid.apply_page_collection_transforms(context, work)
             page_io.save_pages_json(work_dir, work)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("page_move failed")
             self.report({"ERROR"}, f"ページ移動失敗: {exc}")
             return {"CANCELLED"}
         return {"FINISHED"}
+
+
+def _switch_to_page(context, work, work_dir: Path, new_index: int) -> bool:
+    """指定ページを active に切替. mainfile は差し替えない (overview 前提).
+
+    Phase 1 以降は 1 つの work.blend が全ページを保持するため、切替は
+    ``active_page_index`` を更新するだけ。ビューフィット等は呼び出し側で
+    必要に応じて実行する。
+    """
+    if not (0 <= new_index < len(work.pages)):
+        return False
+    work.active_page_index = new_index
+    set_mode(MODE_PAGE, context)
+    context.scene.bname_current_panel_stem = ""
+    return True
 
 
 class BNAME_OT_page_select(Operator):
@@ -188,10 +232,18 @@ class BNAME_OT_page_select(Operator):
 
     def execute(self, context):
         work = get_work(context)
-        if work is None:
+        if work is None or not work.loaded or not work.work_dir:
             return {"CANCELLED"}
-        if 0 <= self.index < len(work.pages):
-            work.active_page_index = self.index
+        if not (0 <= self.index < len(work.pages)):
+            return {"CANCELLED"}
+        if self.index == work.active_page_index:
+            return {"FINISHED"}
+        try:
+            _switch_to_page(context, work, Path(work.work_dir), self.index)
+        except Exception as exc:  # noqa: BLE001
+            _logger.exception("page_select failed")
+            self.report({"ERROR"}, f"ページ切替失敗: {exc}")
+            return {"CANCELLED"}
         return {"FINISHED"}
 
 

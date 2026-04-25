@@ -18,11 +18,6 @@ license = [
 # 参考: https://docs.blender.org/manual/en/latest/advanced/extensions/tags.html
 tags = ["Grease Pencil", "Paint", "User Interface"]
 
-# Extensions Platform permissions
-[permissions]
-network = "Meldex 連携用ローカル HTTP サーバー (localhost のみ)"
-files = "作品ファイル (.bname フォルダ) の読み書き"
-
 # Bundled Python wheels
 # Actual wheel files are placed under ./wheels/ and listed here.
 # Populated from Phase 3 / Phase 6 onward. Keep empty until then.
@@ -30,3 +25,11 @@ wheels = []
 
 # Platforms (optional, omit to allow all). Populate when wheels become platform-specific.
 # platforms = ["windows-x64", "macos-arm64", "linux-x64"]
+
+# Extensions Platform permissions
+# NOTE: [permissions] はテーブルセクションなので、このセクション以降に
+# top-level キー (wheels 等) を書くと、そのキーが permissions 配下のキーと
+# みなされてパースエラーになる。top-level キーは必ずこの行より上に書くこと。
+[permissions]
+network = "Meldex 連携用ローカル HTTP サーバー (localhost のみ)"
+files = "作品ファイル (.bname フォルダ) の読み書き"
