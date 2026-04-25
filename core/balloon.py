@@ -28,7 +28,13 @@ _logger = log.get_logger(__name__)
 _SHAPE_ITEMS = (
     ("rect", "矩形", "直線で囲まれた長方形"),
     ("ellipse", "楕円", "楕円形のフキダシ"),
+    ("pill", "ピル", "両端が半円の丸長方形"),
+    ("hexagon", "六角形", "六角形 (Meldex hexagon)"),
+    ("octagon", "八角形", "八角形 (Meldex octagon)"),
+    ("diamond", "ひし形", "ダイヤ形 (Meldex diamond)"),
+    ("star", "星", "5 角星 (Meldex star)"),
     ("cloud", "雲", "モクモクとした雲形 (思考向け)"),
+    ("fluffy", "もやもや", "緩い波の楕円 (Meldex fluffy)"),
     ("spike_curve", "トゲ (曲線)", "各トゲが曲線 (叫び向け)"),
     ("spike_straight", "トゲ (直線)", "各トゲが直線 (叫び向け)"),
     ("custom", "カスタム", "カスタム形状プリセット参照"),
@@ -107,6 +113,17 @@ class BNameBalloonEntry(bpy.types.PropertyGroup):
     line_width_mm: FloatProperty(name="線幅", default=0.6, min=0.0, soft_max=10.0)  # type: ignore[valid-type]
     line_color: FloatVectorProperty(subtype="COLOR", size=4, default=(0.0, 0.0, 0.0, 1.0), min=0.0, max=1.0)  # type: ignore[valid-type]
     fill_color: FloatVectorProperty(subtype="COLOR", size=4, default=(1.0, 1.0, 1.0, 1.0), min=0.0, max=1.0)  # type: ignore[valid-type]
+
+    # 反転 / 不透明度 (Meldex flipH/flipV/opacity 相当)
+    flip_h: BoolProperty(name="水平反転", default=False)  # type: ignore[valid-type]
+    flip_v: BoolProperty(name="垂直反転", default=False)  # type: ignore[valid-type]
+    opacity: FloatProperty(  # type: ignore[valid-type]
+        name="不透明度",
+        default=1.0,
+        min=0.0,
+        max=1.0,
+        subtype="FACTOR",
+    )
 
     # 形状固有パラメータ・尻尾
     shape_params: PointerProperty(type=BNameBalloonShapeParams)  # type: ignore[valid-type]

@@ -20,18 +20,92 @@ from .geom import mm_to_m
 _logger = log.get_logger(__name__)
 
 
+def _logical_slot_index(page_index: int, start_side: str = "right") -> int:
+    """見開きスロット index (= 「1 ページ目の逆側の空白」分の補正込み).
+
+    start_side="right" (日本マンガ): page1 は「最初の論理見開きの右半分」.
+      左半分 (slot 0) は空白扱い。slot = page_index + 1
+        page_index=0 → slot 1 (右), page_index=1 → slot 2 (左, 見開み 2 開始),
+        page_index=2 → slot 3 (右), ...
+    start_side="left" (西洋本): page1 は「最初の論理見開きの左半分」.
+      右半分 (slot 1) は空白扱い。page_index=0 だけ slot 0、以降は slot=page_index+1.
+        page_index=0 → slot 0 (左), page_index=1 → slot 2 (左, 見開み 2 開始),
+        page_index=2 → slot 3 (右), page_index=3 → slot 4 (左), ...
+      これにより 2 ページ目以降が「次の論理見開きの左半分」から始まる。
+    """
+    if start_side == "left":
+        if page_index <= 0:
+            return 0
+        return page_index + 1
+    return page_index + 1
+
+
+def is_left_half_page(page_index: int, start_side: str = "right",
+                      read_direction: str = "left") -> bool:
+    """そのページが見開きペアの「物理左半分」かを返す.
+
+    ``page_grid_offset_mm`` で計算される X 軸位置に基づき、ペア (col=偶, col=奇)
+    の中で物理的に X が小さい側 (= 画面左) のページに True を返す。
+
+    ペア内の物理左右は ``read_direction`` で決まる:
+      - "right" (西洋本): col 増加 = 画面右へ進む → c=0 が物理左、c=1 が物理右
+      - "left"  (日本マンガ): col 増加 = 画面左へ進む → c=0 が物理右、c=1 が物理左
+
+    例: 日本マンガ (start_side="right", read_direction="left") の場合
+      - page 1 (slot 1, c=1): 物理左判定だが空白の隣で実質単独右ページとして扱う
+      - page 2 (slot 2, c=0): 物理右 = ペアの右ページ
+      - page 3 (slot 3, c=1): 物理左 = ペアの左ページ
+    """
+    slot = _logical_slot_index(page_index, start_side)
+    c_in_pair = slot % 2
+    if read_direction == "right":
+        return c_in_pair == 0
+    return c_in_pair == 1
+
+
 def page_grid_offset_mm(
     page_index: int,
     cols: int,
     gap_mm: float,
     canvas_width_mm: float,
     canvas_height_mm: float,
+    start_side: str = "right",
+    read_direction: str = "left",
 ) -> tuple[float, float]:
-    """``page_index`` の grid offset (mm) を返す (overlay と同一式)."""
+    """``page_index`` の grid offset (mm) を返す.
+
+    見開きペアロジック:
+      - 「論理スロット」を start_side で補正 (1 ページ目の単独ページの逆側に
+        空白スロットを 1 つ置く)
+      - 偶スロット (左半分) と次の奇スロット (右半分) で見開きペア
+      - ペア内: 隙間 0 (密着)
+      - ペア間: gap_mm 隙間あり
+
+    read_direction:
+      - "left":  X が負方向に進む (col が増えるほど左へ) — 日本マンガ既定
+      - "right": X が正方向に進む — 西洋本
+      - "down":  すべて X=0 で Y のみ進む (縦スクロール)。cols は無視。
+    """
     cols = max(1, int(cols))
-    col = page_index % cols
-    row = page_index // cols
-    ox = -col * (canvas_width_mm + gap_mm)
+    if read_direction == "down":
+        # 縦スクロール: 全ページが 1 列に並ぶ。見開きの概念は無視。
+        return (0.0, -page_index * (canvas_height_mm + gap_mm))
+
+    slot = _logical_slot_index(page_index, start_side)
+    col = slot % cols
+    row = slot // cols
+    # X 方向は「列 c=0..col-1 の幅 + ペア境界 gap」を累積
+    # ペア境界: c 番目スロットが偶数 (= 左半分の終わり) の次は奇数 (右半分の始まり)
+    #          → c が奇数 (右半分) の次 c+1 (= 左半分の頭) で gap
+    x_total = 0.0
+    for c in range(col):
+        x_total += canvas_width_mm
+        # c 番目 → c+1 番目で gap が入るのは「c が奇数 (= 右半分) の次」
+        if c % 2 == 1:
+            x_total += gap_mm
+    # read_direction で符号を決定
+    sign = -1.0 if read_direction == "left" else 1.0
+    ox = sign * x_total
     oy = -row * (canvas_height_mm + gap_mm)
     return (ox, oy)
 
@@ -87,12 +161,16 @@ def apply_page_collection_transforms(context, work) -> int:
     if scene is None or work is None:
         return 0
     cols, gap, cw, ch = _resolve_overview_params(scene, work)
+    start_side = getattr(work.paper, "start_side", "right")
+    read_direction = getattr(work.paper, "read_direction", "left")
     updated = 0
     for i, page_entry in enumerate(work.pages):
         coll = gp_utils.get_page_collection(page_entry.id)
         if coll is None:
             continue
-        ox_mm, oy_mm = page_grid_offset_mm(i, cols, gap, cw, ch)
+        ox_mm, oy_mm = page_grid_offset_mm(
+            i, cols, gap, cw, ch, start_side, read_direction
+        )
         for obj in coll.objects:
             sub_x, sub_y = _obj_subpage_offset_mm(obj)
             # GP は用紙 (z=0) より手前に持ち上げる
@@ -121,8 +199,12 @@ def page_index_at_world_mm(
     if work is None or scene is None:
         return None
     cols, gap, cw, ch = _resolve_overview_params(scene, work)
+    start_side = getattr(work.paper, "start_side", "right")
+    read_direction = getattr(work.paper, "read_direction", "left")
     for i, _ in enumerate(work.pages):
-        ox_mm, oy_mm = page_grid_offset_mm(i, cols, gap, cw, ch)
+        ox_mm, oy_mm = page_grid_offset_mm(
+            i, cols, gap, cw, ch, start_side, read_direction
+        )
         if ox_mm <= x_mm <= ox_mm + cw and oy_mm <= y_mm <= oy_mm + ch:
             return i
     return None

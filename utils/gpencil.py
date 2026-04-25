@@ -202,6 +202,71 @@ def ensure_page_collection(scene, page_id: str):
     return coll
 
 
+# ---------- master GP (作品全ページ共通の単一 GP) ----------
+#
+# 旧仕様: ページごとに page_NNNN_sketch GP を生成 → ストロークがどのページに
+# 属するか分かりにくい問題があった。
+# 新仕様: 作品全体で 1 つの ``bname_master_sketch`` GP を持つ。各レイヤーは
+# 全ページに横断的に存在する (CSP のレイヤーパネル感覚)。ストロークの
+# world 座標がそのままページ位置を表す。
+# 既存 .blend に残る page_NNNN_sketch は「残置」(削除も移行もしない)。
+
+MASTER_GP_OBJECT_NAME = "bname_master_sketch"
+MASTER_GP_DATA_NAME = "bname_master_sketch_data"
+
+
+def ensure_master_gpencil(scene, layer_name: str = "ネーム"):
+    """作品全体で唯一の master GP オブジェクトを取得/生成して返す.
+
+    - Object 名: ``bname_master_sketch``
+    - Data 名: ``bname_master_sketch_data``
+    - ルート Collection (B-Name) 直下にリンク
+    - location は (0, 0, GP_Z_LIFT_M) 固定 (紙メッシュ z=0 より +1mm 手前)
+    - 既定レイヤー + 現在フレーム + 黒線マテリアルを自動補完
+    """
+    from .page_grid import GP_Z_LIFT_M
+
+    root = ensure_root_collection(scene)
+    obj = bpy.data.objects.get(MASTER_GP_OBJECT_NAME)
+    if obj is None:
+        gp_data = ensure_gpencil(MASTER_GP_DATA_NAME)
+        obj = bpy.data.objects.new(MASTER_GP_OBJECT_NAME, gp_data)
+    # ルート Collection にリンク (他コレクションからは外す)
+    _relink_object_to_collection_only(scene, obj, root)
+    # location を固定 (Z リフトのみ)
+    try:
+        obj.location = (0.0, 0.0, GP_Z_LIFT_M)
+    except Exception:  # noqa: BLE001
+        pass
+    # 既定レイヤー + フレーム
+    layer = None
+    if len(obj.data.layers) == 0:
+        try:
+            layer = ensure_layer(obj.data, layer_name)
+        except Exception:  # noqa: BLE001
+            _logger.exception("ensure_master_gpencil: default layer create failed")
+    else:
+        layer = getattr(obj.data.layers, "active", None) or obj.data.layers[0]
+    if layer is not None and hasattr(layer, "frames"):
+        if len(layer.frames) == 0:
+            try:
+                frame_num = scene.frame_current if scene is not None else 1
+                ensure_active_frame(layer, frame_number=frame_num)
+            except Exception:  # noqa: BLE001
+                _logger.exception("ensure_master_gpencil: default frame create failed")
+    # 黒線マテリアル
+    try:
+        ensure_default_stroke_material(obj)
+    except Exception:  # noqa: BLE001
+        _logger.exception("ensure_master_gpencil: default stroke material setup failed")
+    return obj
+
+
+def get_master_gpencil():
+    """既存の master GP オブジェクトを返す (無ければ None)."""
+    return bpy.data.objects.get(MASTER_GP_OBJECT_NAME)
+
+
 # ---------- 紙メッシュ (用紙の白い実体) ----------
 
 PAPER_MATERIAL_NAME = "BName_Paper_White"
@@ -292,18 +357,18 @@ def get_page_paper(page_id: str):
 
 
 def ensure_page_gpencil(scene, page_id: str, layer_name: str = "ネーム"):
-    """ページ GP オブジェクト + 既定レイヤー + 既定フレームを取得/生成して返す.
+    """[新仕様] master GP のラッパー — ページ単位の GP は作らない.
 
-    - Object 名: ``page_NNNN_sketch``
-    - Data 名: ``page_NNNN_sketch_data``
-    - ページ Collection 配下にリンク (scene 直下には link しない)
-    - デフォルトレイヤーにシーン現在フレーム (通常は 1) の GreasePencilFrame を
-      自動生成。GP v3 では Draw モードで描画するにはレイヤーに 1 枚以上の
-      フレームが必要 (Blender 5.x は空レイヤーに直接ドローできず
-      「ドローするグリースペンシルフレームがありません」エラーになる)。
+    旧仕様 (page_NNNN_sketch) は廃止。ストロークがどのページにあるかを
+    座標で判定する master GP 方式に統一。
+    この関数は既存呼び出し箇所の互換維持のために残し、内部で:
+      - ページ Collection を確保 (紙メッシュの入れ物)
+      - 紙メッシュを生成/更新
+      - master GP を ensure (作品で 1 つだけ)
+    を実行し、master GP オブジェクトを返す。
     """
-    coll = ensure_page_collection(scene, page_id)
-    # 用紙メッシュも併設 (GP より背面の白い実体)
+    # ページ Collection は紙メッシュ用途で残す
+    ensure_page_collection(scene, page_id)
     try:
         from ..core.work import get_work
         work = get_work(bpy.context)
@@ -315,42 +380,8 @@ def ensure_page_gpencil(scene, page_id: str, layer_name: str = "ネーム"):
             )
     except Exception:  # noqa: BLE001
         _logger.exception("ensure_page_gpencil: paper mesh setup failed for %s", page_id)
-    obj_name = page_gp_object_name(page_id)
-    data_name = page_gp_data_name(page_id)
-    obj = bpy.data.objects.get(obj_name)
-    if obj is None:
-        gp_data = ensure_gpencil(data_name)
-        obj = bpy.data.objects.new(obj_name, gp_data)
-    # ページ Collection にリンク (他コレクションからは外す)
-    _relink_object_to_collection_only(scene, obj, coll)
-    # 既定レイヤー + 現在フレーム用の空フレームを確保
-    layer = None
-    if len(obj.data.layers) == 0:
-        try:
-            layer = ensure_layer(obj.data, layer_name)
-        except Exception:  # noqa: BLE001
-            _logger.exception("ensure_page_gpencil: default layer create failed")
-    else:
-        layer = getattr(obj.data.layers, "active", None) or obj.data.layers[0]
-    if layer is not None and hasattr(layer, "frames"):
-        if len(layer.frames) == 0:
-            try:
-                frame_num = scene.frame_current if scene is not None else 1
-                ensure_active_frame(layer, frame_number=frame_num)
-            except Exception:  # noqa: BLE001
-                _logger.exception(
-                    "ensure_page_gpencil: default frame create failed for %s",
-                    page_id,
-                )
-    # 黒線ストロークマテリアルを確保 (白い線で描かれるのを防止)
-    try:
-        ensure_default_stroke_material(obj)
-    except Exception:  # noqa: BLE001
-        _logger.exception(
-            "ensure_page_gpencil: default stroke material setup failed for %s",
-            page_id,
-        )
-    return obj
+    # 新仕様: 全ページ共通の master GP を返す
+    return ensure_master_gpencil(scene, layer_name=layer_name)
 
 
 def _relink_object_to_collection_only(scene, obj, target_coll) -> None:

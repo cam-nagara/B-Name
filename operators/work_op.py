@@ -19,16 +19,34 @@ _logger = log.get_logger(__name__)
 
 
 def _apply_phase1_defaults(work) -> None:
-    """新規作品のワンショット既定値セット (計画書 4.6 準拠)."""
-    # DisplayItem のうち workName / episode はデフォルト ON
-    work.work_info.display_work_name.enabled = True
-    work.work_info.display_work_name.position = "bottom-left"
-    work.work_info.display_episode.enabled = True
-    work.work_info.display_episode.position = "bottom-left"
-    work.work_info.display_subtitle.enabled = False
-    work.work_info.display_subtitle.position = "bottom-center"
-    work.work_info.display_author.enabled = False
-    work.work_info.display_author.position = "bottom-right"
+    """新規作品のワンショット既定値セット.
+
+    原稿上の表示の初期値:
+      - 作品名 ON / 左上 (top-left)
+      - 話数 OFF / 上中央 (top-center)
+      - サブタイトル OFF / 右上 (top-right)
+      - 作者名 ON / 右下 (bottom-right) — 値は OS のユーザー名で初期化
+      - ページ番号 ON / 下中央 (bottom-center)
+    """
+    info = work.work_info
+    info.display_work_name.enabled = True
+    info.display_work_name.position = "top-left"
+    info.display_episode.enabled = False
+    info.display_episode.position = "top-center"
+    info.display_subtitle.enabled = False
+    info.display_subtitle.position = "top-right"
+    info.display_author.enabled = True
+    info.display_author.position = "bottom-right"
+    info.display_page_number.enabled = True
+    info.display_page_number.position = "bottom-center"
+    info.page_number_start = 1
+    # 作者名が未入力なら OS のユーザー名で初期化 (上書きはしない)
+    if not info.author:
+        try:
+            import getpass
+            info.author = getpass.getuser()
+        except Exception:  # noqa: BLE001
+            pass
     # 既定プリセット適用 (見つからなくても既定値は PropertyGroup に入っている)
     presets.load_default_preset(work.paper)
 
@@ -142,14 +160,14 @@ class BNAME_OT_work_new(Operator, ExportHelper):
 
         # --- 作成直後の UX 整備 ---
         # 0) 旧バージョンで白く書き換えられた可能性のあるビューポート背景を
-        #    テーマ既定 (灰色) に戻す。用紙領域は overlay の PRE_VIEW で
-        #    不透明白塗りされる。
+        #    テーマ既定 (灰色) に戻す + Solid+Flat 照明に切替 (B-Name の標準表示)
         try:
             from ..ui import overlay as _overlay
 
             _overlay.reset_viewport_background_to_theme(context)
+            _overlay.apply_bname_shading_mode(context)
         except Exception:  # noqa: BLE001
-            _logger.exception("work_new: reset_viewport_background_to_theme failed")
+            _logger.exception("work_new: shading/background setup failed")
 
         # 1) ビューポートを全ページフィット (overview モードを維持したままキャンバス可視化)
         try:
@@ -225,13 +243,14 @@ class BNAME_OT_work_open(Operator, ImportHelper):
             blend_io.open_work_blend(work_dir)
             # load_post ハンドラが JSON 再同期と mode/stem の再設定を担う
 
-        # 旧バージョンで白く書き換えられたビューポート背景をテーマ既定に戻す
+        # 背景をテーマ既定に戻す + Solid+Flat 照明に切替
         try:
             from ..ui import overlay as _overlay
 
             _overlay.reset_viewport_background_to_theme(context)
+            _overlay.apply_bname_shading_mode(context)
         except Exception:  # noqa: BLE001
-            _logger.exception("work_open: reset_viewport_background_to_theme failed")
+            _logger.exception("work_open: shading/background setup failed")
 
         self.report({"INFO"}, f"作品を開きました: {work_dir.name}")
         return {"FINISHED"}

@@ -163,15 +163,18 @@ class KeymapState:
                             f" region_type={km.region_type}"
                             f" SPACE={space_kmis} C={c_kmis}"
                         )
-                # GP Paint/Draw モード系を全部ターゲットに含める
+                # GP Paint/Draw/Edit モード系を全部ターゲットに含める
+                # (L=投げ縄 / Ctrl+X / Ctrl+V を Edit モードでも先取り)
                 for km in default_kc.keymaps:
                     if "rease Pencil" in km.name and (
-                        "Paint" in km.name or "Draw" in km.name
+                        "Paint" in km.name
+                        or "Draw" in km.name
+                        or "Edit" in km.name
                     ):
                         gp_keymap_targets.append(
                             (km.name, km.space_type, km.region_type)
                         )
-            print(f"[B-Name][KEYMAP] GP Paint/Draw targets: {gp_keymap_targets}")
+            print(f"[B-Name][KEYMAP] GP Paint/Draw/Edit targets: {gp_keymap_targets}")
             for name, st, rt in gp_keymap_targets:
                 try:
                     km_gp = kc.keymaps.new(name=name, space_type=st, region_type=rt)
@@ -189,10 +192,13 @@ class KeymapState:
         return km
 
     def _populate_gp_paint_overrides(self, km, km_name: str) -> None:
-        """Grease Pencil Paint モードキーマップに Space と C を登録.
+        """Grease Pencil Paint / Edit モードキーマップに先取り登録.
 
         - Space → bname.view_navigate (ブラシ Asset Shelf の先取り)
-        - C    → bname.toggle_asset_shelf (元の機能を C 側に移設)
+        - C     → bname.toggle_asset_shelf (元の機能を C 側に移設)
+        - L     → bname.toggle_lasso_tool (投げ縄 ⇔ Box トグル)
+        - Ctrl+X → bname.gp_cut_to_new_layer (Paste で新レイヤー化フラグを立てる)
+        - Ctrl+V → bname.gp_paste_to_new_layer (フラグありなら新レイヤーへ paste)
         """
         try:
             from ..preferences import get_preferences
@@ -202,18 +208,23 @@ class KeymapState:
                 nav_key = "SPACE"
         except Exception:  # noqa: BLE001
             nav_key = "SPACE"
-        try:
-            kmi = km.keymap_items.new("bname.view_navigate", nav_key, "PRESS")
-            self.bname_items.append(kmi)
-            print(f"[B-Name][KEYMAP] + bname.view_navigate ({km_name}) {nav_key}")
-        except Exception as exc:  # noqa: BLE001
-            print(f"[B-Name][KEYMAP] {km_name} navigate override failed: {exc!r}")
-        try:
-            kmi = km.keymap_items.new("bname.toggle_asset_shelf", "C", "PRESS")
-            self.bname_items.append(kmi)
-            print(f"[B-Name][KEYMAP] + bname.toggle_asset_shelf ({km_name}) C")
-        except Exception as exc:  # noqa: BLE001
-            print(f"[B-Name][KEYMAP] {km_name} C override failed: {exc!r}")
+
+        def _add(idname, key, **mods):
+            try:
+                kmi = km.keymap_items.new(idname, key, "PRESS", **mods)
+                self.bname_items.append(kmi)
+                print(
+                    f"[B-Name][KEYMAP] + {idname} ({km_name}) {key}"
+                    f" shift={kmi.shift} ctrl={kmi.ctrl} alt={kmi.alt}"
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"[B-Name][KEYMAP] {km_name} {key} override failed: {exc!r}")
+
+        _add("bname.view_navigate", nav_key)
+        _add("bname.toggle_asset_shelf", "C")
+        _add("bname.toggle_lasso_tool", "L")
+        _add("bname.gp_cut_to_new_layer", "X", ctrl=True)
+        _add("bname.gp_paste_to_new_layer", "V", ctrl=True)
 
     def _populate_window_overrides(self, km) -> None:
         """Window キーマップに 修飾+ナビゲートキー を先取り登録.

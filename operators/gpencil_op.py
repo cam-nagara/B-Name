@@ -299,32 +299,8 @@ def _update_follow_from_event(context, event) -> None:
         return
     _follow_state["last_page_id"] = page.id
     work.active_page_index = page_idx
-
-    # GP が未生成なら生成
-    gp_obj = gp_utils.get_page_gpencil(page.id)
-    if gp_obj is None:
-        try:
-            gp_obj = gp_utils.ensure_page_gpencil(scene, page.id)
-        except Exception:  # noqa: BLE001
-            return
-    vl = context.view_layer
-    if vl is None:
-        return
-    # 描画/編集モード中は mode_set が暗黙解除を伴うため active 切替はしない
-    # (ユーザーが GP 編集中に勝手に別 GP へフォーカスが飛ぶのを防止)。
-    active_obj = vl.objects.active
-    if active_obj is not None and active_obj.mode in {
-        _GP_PAINT_MODE,
-        "EDIT",
-        "SCULPT_GREASE_PENCIL",
-    }:
-        # モード維持のまま active 切替 + 旧 GP をオブジェクトモードに戻さない
-        # と Blender が壊れるため、モード中は切替しない
-        return
-    try:
-        vl.objects.active = gp_obj
-    except Exception:  # noqa: BLE001
-        pass
+    # 新仕様 (master GP) ではページ単位 GP の active 切替は不要。
+    # active_page_index の更新だけで「現在のページ」UI は追従する。
 
 
 class BNAME_OT_gpencil_follow_modal(Operator):

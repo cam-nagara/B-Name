@@ -75,7 +75,8 @@ def paper_to_dict(paper) -> dict[str, Any]:
         "paperColor": color_to_hex(paper.paper_color),
         "paperColorAlpha": round(paper.paper_color[3], 3),
         "colorProfile": paper.color_profile,
-        "isSpreadLayout": bool(paper.is_spread_layout),
+        "startSide": paper.start_side,
+        "readDirection": paper.read_direction,
         "presetName": paper.preset_name,
     }
 
@@ -103,7 +104,8 @@ def paper_from_dict(paper, data: dict[str, Any]) -> None:
     alpha = float(data.get("paperColorAlpha", 1.0))
     paper.paper_color = hex_to_rgba(hex_code, alpha)
     paper.color_profile = data.get("colorProfile", "sRGB IEC61966-2.1")
-    paper.is_spread_layout = bool(data.get("isSpreadLayout", False))
+    paper.start_side = data.get("startSide", "right")
+    paper.read_direction = data.get("readDirection", "left")
     paper.preset_name = data.get("presetName", "集英社マンガ誌汎用")
 
 
@@ -119,11 +121,20 @@ def display_item_to_dict(item) -> dict[str, Any]:
     }
 
 
+_DISPLAY_POSITION_MIGRATE = {
+    # middle 段は廃止 (仕上がり枠外への配置でアンカーが不自然なため)
+    "middle-left": "bottom-left",
+    "middle-center": "bottom-center",
+    "middle-right": "bottom-right",
+}
+
+
 def display_item_from_dict(item, data: dict[str, Any]) -> None:
     data = data or {}
     item.enabled = bool(data.get("enabled", False))
-    item.position = data.get("position", "bottom-left")
-    item.font_size_pt = float(data.get("fontSizePt", 9.0))
+    pos = data.get("position", "bottom-left")
+    item.position = _DISPLAY_POSITION_MIGRATE.get(pos, pos)
+    item.font_size_pt = float(data.get("fontSizePt", 7.0))
     item.color = hex_to_rgba(data.get("color", "#000000"))
 
 
@@ -138,7 +149,9 @@ def work_info_to_dict(info) -> dict[str, Any]:
             "episode": display_item_to_dict(info.display_episode),
             "subtitle": display_item_to_dict(info.display_subtitle),
             "author": display_item_to_dict(info.display_author),
+            "pageNumber": display_item_to_dict(info.display_page_number),
         },
+        "pageNumberStart": int(info.page_number_start),
     }
 
 
@@ -153,6 +166,8 @@ def work_info_from_dict(info, data: dict[str, Any]) -> None:
     display_item_from_dict(info.display_episode, disp.get("episode", {}))
     display_item_from_dict(info.display_subtitle, disp.get("subtitle", {}))
     display_item_from_dict(info.display_author, disp.get("author", {}))
+    display_item_from_dict(info.display_page_number, disp.get("pageNumber", {}))
+    info.page_number_start = int(data.get("pageNumberStart", 1))
 
 
 def nombre_to_dict(n) -> dict[str, Any]:
@@ -197,20 +212,20 @@ def nombre_from_dict(n, data: dict[str, Any]) -> None:
 
 
 def safe_area_to_dict(sa) -> dict[str, Any]:
+    # opacity / blend_mode は仕様変更で常に 1.0 / multiply 固定 (PG から削除)
     return {
         "enabled": bool(sa.enabled),
         "color": color_to_hex(sa.color),
-        "opacity": round(sa.opacity, 3),
-        "blendMode": sa.blend_mode,
     }
 
 
 def safe_area_from_dict(sa, data: dict[str, Any]) -> None:
     data = data or {}
     sa.enabled = bool(data.get("enabled", True))
-    sa.color = hex_to_rgba(data.get("color", "#808080"))
-    sa.opacity = float(data.get("opacity", 0.3))
-    sa.blend_mode = data.get("blendMode", "multiply")
+    # color は size=3 の RGB のみ (旧データの alpha は無視)
+    rgba = hex_to_rgba(data.get("color", "#B3B3B3"))
+    sa.color = (float(rgba[0]), float(rgba[1]), float(rgba[2]))
+    # 旧 opacity / blendMode フィールドが残っていても無視 (互換読込)
 
 
 # ---------- PanelGap ----------

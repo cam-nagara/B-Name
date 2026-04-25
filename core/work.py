@@ -31,17 +31,19 @@ _logger = log.get_logger(__name__)
 class BNamePanelGap(bpy.types.PropertyGroup):
     """コマ間隔ルール (作品共通、計画書 3.2.5.4).
 
-    既定値: 上下 7.3mm / 左右 2.1mm。
+    既定値: 上下 7.3mm / 左右 2.1mm。値は mm 単位。
+    Blender のシーン単位に依存しないよう unit は明示せず、UI 表示でも
+    名前に "(mm)" を含めて単位を明示する。
     """
 
     vertical_mm: FloatProperty(  # type: ignore[valid-type]
-        name="上下スキマ",
+        name="上下スキマ (mm)",
         default=7.3,
         min=0.0,
         soft_max=50.0,
     )
     horizontal_mm: FloatProperty(  # type: ignore[valid-type]
-        name="左右スキマ",
+        name="左右スキマ (mm)",
         default=2.1,
         min=0.0,
         soft_max=50.0,

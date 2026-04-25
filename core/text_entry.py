@@ -88,6 +88,9 @@ class BNameTextEntry(bpy.types.PropertyGroup):
 
     font: StringProperty(name="フォント", default="")  # type: ignore[valid-type]
     font_size_pt: FloatProperty(name="サイズ (pt)", default=9.0, min=1.0, soft_max=72.0)  # type: ignore[valid-type]
+    # Meldex の fontBold / fontItalic 相当
+    font_bold: BoolProperty(name="太字", default=False)  # type: ignore[valid-type]
+    font_italic: BoolProperty(name="斜体", default=False)  # type: ignore[valid-type]
     color: FloatVectorProperty(subtype="COLOR", size=4, default=(0.0, 0.0, 0.0, 1.0), min=0.0, max=1.0)  # type: ignore[valid-type]
     writing_mode: EnumProperty(items=_WRITING_MODE_ITEMS, default="vertical")  # type: ignore[valid-type]
     line_height: FloatProperty(name="行間", default=1.4, min=0.5, soft_max=3.0)  # type: ignore[valid-type]

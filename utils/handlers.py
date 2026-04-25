@@ -109,22 +109,15 @@ def _reload_all_pages_panels(work, work_dir: Path) -> None:
 
 
 def _reconcile_gpencil_collections(context, work) -> None:
-    """GP オブジェクト / ページ Collection × pages の整合をとる.
+    """master GP / 紙メッシュ × pages の整合をとる (新仕様).
 
-    - 各ページについて常に ``ensure_page_gpencil`` を呼ぶ. ensure は
-      idempotent で、不足している Collection / Object / Layer / Frame のみ
-      を補完する。既存データは破壊しない。
-    - これにより:
-        - 旧バージョンの .blend で生成されたレイヤー無しフレーム無し GP にも
-          load 時にデフォルトレイヤー + 現在フレームの空フレームが補充される
-        - GP/Collection が完全に欠落しているページには新規生成される
-    - GP/Collection はあるが pages.json に無い page_ID のものは放置
-      (ユーザーのワーク中データを勝手に消さない)
-    - 全ページ Collection の grid offset を apply して配置を補正
+    - 作品全体で **唯一の** master GP オブジェクトを ensure (旧 page GP は残置)
+    - 各ページの紙メッシュ (page_NNNN_paper) を ensure
+    - 全ページ Collection の grid offset を apply (紙メッシュの位置補正)
 
-    Phase 2 以降、work.blend を開いた直後の整合確認用。
+    旧バージョンの page_NNNN_sketch GP オブジェクトはここでは触らない
+    (ユーザーのデータを残置)。新規描画は master GP に行う。
     """
-    # gpencil / page_grid は遅延 import (utils 内循環を避ける)
     from . import gpencil as gp_utils
     from . import page_grid
 
@@ -133,15 +126,28 @@ def _reconcile_gpencil_collections(context, work) -> None:
         scene = bpy.context.scene
     if scene is None or work is None:
         return
+
+    # 紙メッシュは各ページ単位で必要
     for page_entry in work.pages:
         if not page_entry.id:
             continue
         try:
-            gp_utils.ensure_page_gpencil(scene, page_entry.id)
+            gp_utils.ensure_page_paper(
+                scene, page_entry.id,
+                float(work.paper.canvas_width_mm),
+                float(work.paper.canvas_height_mm),
+            )
         except Exception:  # noqa: BLE001
             _logger.exception(
-                "load_post: ensure_page_gpencil failed for %s", page_entry.id
+                "load_post: ensure_page_paper failed for %s", page_entry.id
             )
+
+    # master GP は作品で 1 つだけ
+    try:
+        gp_utils.ensure_master_gpencil(scene)
+    except Exception:  # noqa: BLE001
+        _logger.exception("load_post: ensure_master_gpencil failed")
+
     try:
         page_grid.apply_page_collection_transforms(context, work)
     except Exception:  # noqa: BLE001
@@ -190,9 +196,10 @@ def _bname_on_load_post(filepath_arg) -> None:  # signature: (str,) in Blender h
                     from ..ui import overlay as _overlay
 
                     _overlay.reset_viewport_background_to_theme(bpy.context)
+                    _overlay.apply_bname_shading_mode(bpy.context)
                 except Exception:  # noqa: BLE001
                     _logger.exception(
-                        "load_post: reset_viewport_background_to_theme failed"
+                        "load_post: shading/background reset failed"
                     )
         except ValueError:
             pass

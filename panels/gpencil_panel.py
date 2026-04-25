@@ -1,9 +1,10 @@
-"""Grease Pencil パネル — ページ単位 GP (Phase 2) の管理 UI.
+"""Grease Pencil パネル — master GP (作品全ページ共通) のレイヤー管理 UI.
 
-- アクティブページの GP を確保するボタン
-- カーソル追従 (follow_cursor) トグル
-- アクティブ GP のレイヤー一覧・モード切替・ブラシ選択
-- 全ページ GP の一覧 (各行で選択 → view_layer.objects.active を切替)
+新仕様:
+- 作品全体で 1 つの master GP オブジェクト (bname_master_sketch)
+- 各レイヤーは複数ページに横断的に存在 (CSP のレイヤーパネル感覚)
+- 「ページ GP 一覧」は廃止 (master GP 1 つだけなので不要)
+- レイヤー一覧で各レイヤーの不透明度をスライダー調整可能
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from __future__ import annotations
 import bpy
 from bpy.types import Panel
 
-from ..core.work import get_active_page, get_work
+from ..core.work import get_work
 from ..utils import gpencil as gp_utils
 
 B_NAME_CATEGORY = "B-Name"
@@ -21,11 +22,9 @@ _GP_EDIT_MODE = "EDIT"
 _GP_OBJECT_MODE = "OBJECT"
 
 
-def _active_gp_object(context):
-    obj = context.active_object
-    if obj is not None and obj.type == _GP_OBJECT_TYPE:
-        return obj
-    return None
+def _master_gp_object():
+    """master GP オブジェクト (なければ None)."""
+    return gp_utils.get_master_gpencil()
 
 
 def _get_prefs():
@@ -37,44 +36,8 @@ def _get_prefs():
         return None
 
 
-class BNAME_OT_gpencil_select_page(bpy.types.Operator):
-    """指定ページの GP オブジェクトを view_layer.active に切替 + active_page_index 更新."""
-
-    bl_idname = "bname.gpencil_select_page"
-    bl_label = "このページの GP を選択"
-    bl_options = {"REGISTER"}
-
-    page_id: bpy.props.StringProperty(default="")  # type: ignore[valid-type]
-
-    def execute(self, context):
-        work = get_work(context)
-        if work is None or not work.loaded:
-            return {"CANCELLED"}
-        for i, pg in enumerate(work.pages):
-            if pg.id == self.page_id:
-                work.active_page_index = i
-                break
-        else:
-            return {"CANCELLED"}
-        # ページ GP が未生成ならここで生成 (ensure)
-        obj = gp_utils.get_page_gpencil(self.page_id)
-        if obj is None:
-            try:
-                obj = gp_utils.ensure_page_gpencil(context.scene, self.page_id)
-            except Exception:  # noqa: BLE001
-                return {"CANCELLED"}
-        vl = context.view_layer
-        if vl is not None:
-            try:
-                vl.objects.active = obj
-                obj.select_set(True)
-            except Exception:  # noqa: BLE001
-                pass
-        return {"FINISHED"}
-
-
 class BNAME_PT_gpencil(Panel):
-    """ネーム作画用 Grease Pencil パネル (Phase 2 ページ単位)."""
+    """master GP のレイヤー / モード / 描画色管理 UI."""
 
     bl_idname = "BNAME_PT_gpencil"
     bl_label = "Grease Pencil"
@@ -87,74 +50,56 @@ class BNAME_PT_gpencil(Panel):
     def draw(self, context):
         layout = self.layout
         work = get_work(context)
-        page = get_active_page(context)
 
-        # --- カーソル追従トグル ---
+        # --- カーソル追従トグル (active_page_index 追従用) ---
         prefs = _get_prefs()
-        box = layout.box()
-        row = box.row(align=True)
-        row.label(text="カーソル追従", icon="RESTRICT_SELECT_OFF")
         if prefs is not None:
+            box = layout.box()
+            row = box.row(align=True)
+            row.label(text="カーソル追従", icon="RESTRICT_SELECT_OFF")
             row.prop(prefs, "gpencil_follow_cursor", text="")
-        row.operator("bname.gpencil_follow_cursor", text="切替")
+            row.operator("bname.gpencil_follow_cursor", text="切替")
 
-        # --- アクティブページ用ボタン ---
         if work is None or not work.loaded:
             layout.label(text="作品を開いてください", icon="INFO")
             return
-        if page is None:
-            layout.label(text="ページを選択してください", icon="INFO")
-            return
 
-        row = layout.row(align=True)
-        row.operator(
-            "bname.gpencil_page_ensure",
-            text=f"{page.id} の GP を用意",
+        # master GP の確保ボタン
+        layout.operator(
+            "bname.gpencil_master_ensure",
+            text="マスター GP を用意",
             icon="OUTLINER_OB_GREASEPENCIL",
         )
 
-        # --- 全ページ GP 一覧 ---
-        if len(work.pages) > 0:
-            list_box = layout.box()
-            list_box.label(text="ページ GP 一覧", icon="FILE_IMAGE")
-            col = list_box.column(align=True)
-            active_obj = _active_gp_object(context)
-            active_name = active_obj.name if active_obj is not None else ""
-            for pg in work.pages:
-                obj_name = gp_utils.page_gp_object_name(pg.id)
-                exists = bpy.data.objects.get(obj_name) is not None
-                row = col.row(align=True)
-                is_active = (obj_name == active_name)
-                select_icon = "RADIOBUT_ON" if is_active else "RADIOBUT_OFF"
-                op = row.operator(
-                    "bname.gpencil_select_page",
-                    text=pg.id + ("" if exists else " (未生成)"),
-                    icon=select_icon,
-                    emboss=False,
-                )
-                op.page_id = pg.id
-
-        # --- アクティブ GP の詳細 ---
-        obj = _active_gp_object(context)
+        obj = _master_gp_object()
         if obj is None:
-            layout.label(text="(GP がアクティブではありません)", icon="INFO")
+            layout.label(text="(マスター GP が未生成です)", icon="INFO")
             return
 
         row = layout.row(align=True)
         row.label(text=obj.name, icon="OUTLINER_OB_GREASEPENCIL")
 
-        # モード切替 (3 ボタン)
+        # モード切替 (3 ボタン) — wrapper 経由で必ず master GP を active 化
         row = layout.row(align=True)
-        op = row.operator("object.mode_set", text="オブジェクト", depress=(obj.mode == _GP_OBJECT_MODE))
+        op = row.operator(
+            "bname.gpencil_master_mode_set",
+            text="オブジェクト", depress=(obj.mode == _GP_OBJECT_MODE),
+        )
         op.mode = _GP_OBJECT_MODE
-        op = row.operator("object.mode_set", text="描画", depress=(obj.mode == _GP_PAINT_MODE))
+        op = row.operator(
+            "bname.gpencil_master_mode_set",
+            text="描画", depress=(obj.mode == _GP_PAINT_MODE),
+        )
         op.mode = _GP_PAINT_MODE
-        op = row.operator("object.mode_set", text="編集", depress=(obj.mode == _GP_EDIT_MODE))
+        op = row.operator(
+            "bname.gpencil_master_mode_set",
+            text="編集", depress=(obj.mode == _GP_EDIT_MODE),
+        )
         op.mode = _GP_EDIT_MODE
 
         gp_data = obj.data
 
-        # レイヤー一覧
+        # --- レイヤー一覧 (各レイヤーで不透明度スライダー) ---
         box = layout.box()
         box.label(text="レイヤー", icon="RENDERLAYERS")
         layers = getattr(gp_data, "layers", None)
@@ -195,12 +140,17 @@ class BNAME_PT_gpencil(Panel):
                         emboss=False,
                         icon="LOCKED" if layer.lock else "UNLOCKED",
                     )
+                # 不透明度スライダー (レイヤー行内)
+                if hasattr(layer, "opacity"):
+                    sub = col.row(align=True)
+                    sub.separator(factor=2.0)
+                    sub.prop(layer, "opacity", text="不透明度", slider=True)
 
         row = box.row(align=True)
         row.operator("bname.gpencil_layer_add", text="追加", icon="ADD")
         row.operator("bname.gpencil_layer_remove", text="削除", icon="REMOVE")
 
-        # 描画色 (アクティブマテリアル直結. 次以降のストロークに反映される)
+        # 描画色 (アクティブマテリアル直結)
         color_box = layout.box()
         color_box.label(text="描画色 (アクティブマテリアル)", icon="COLOR")
         mats = getattr(obj.data, "materials", None)
@@ -223,19 +173,16 @@ class BNAME_PT_gpencil(Panel):
                     color_box.prop(gp_style, "show_fill", text="塗りを描く")
             else:
                 color_box.label(text="(GP マテリアル未対応)", icon="ERROR")
-            # マテリアルスロット一覧 + 追加
             color_box.label(text="マテリアルスロット")
             color_box.template_list(
                 "MATERIAL_UL_matslots", "", obj, "material_slots",
                 obj, "active_material_index", rows=3,
             )
 
-        # アクティブレイヤーのプロパティ
+        # アクティブレイヤーの追加プロパティ
         if active_layer is not None:
             prop_box = layout.box()
             prop_box.label(text=f"アクティブ: {active_layer.name}")
-            if hasattr(active_layer, "opacity"):
-                prop_box.prop(active_layer, "opacity")
             if hasattr(active_layer, "blend_mode"):
                 prop_box.prop(active_layer, "blend_mode")
             if hasattr(active_layer, "tint_color"):
@@ -271,8 +218,72 @@ class BNAME_PT_gpencil(Panel):
                         brush_box.prop(brush, "strength")
 
 
+class BNAME_OT_gpencil_master_ensure(bpy.types.Operator):
+    """master GP オブジェクトを ensure (生成 or 既存取得) して active 化."""
+
+    bl_idname = "bname.gpencil_master_ensure"
+    bl_label = "マスター GP を用意"
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        scene = context.scene
+        if scene is None:
+            return {"CANCELLED"}
+        try:
+            obj = gp_utils.ensure_master_gpencil(scene)
+        except Exception as exc:  # noqa: BLE001
+            self.report({"ERROR"}, f"master GP 生成失敗: {exc}")
+            return {"CANCELLED"}
+        vl = context.view_layer
+        if vl is not None and obj is not None:
+            try:
+                vl.objects.active = obj
+                obj.select_set(True)
+            except Exception:  # noqa: BLE001
+                pass
+        return {"FINISHED"}
+
+
+class BNAME_OT_gpencil_master_mode_set(bpy.types.Operator):
+    """master GP を必ず active 化してからモード切替する wrapper.
+
+    UI のモード切替ボタンは ``bpy.ops.object.mode_set`` を直接呼ぶと、
+    view_layer.objects.active が master GP でない場合に意図しない
+    オブジェクトのモードが切り替わる。この wrapper で必ず master GP を
+    active 化してから mode_set を呼ぶ。
+    """
+
+    bl_idname = "bname.gpencil_master_mode_set"
+    bl_label = "マスター GP モード切替"
+    bl_options = {"REGISTER", "INTERNAL"}
+
+    mode: bpy.props.StringProperty(default="OBJECT")  # type: ignore[valid-type]
+
+    def execute(self, context):
+        obj = gp_utils.get_master_gpencil()
+        if obj is None:
+            try:
+                obj = gp_utils.ensure_master_gpencil(context.scene)
+            except Exception:  # noqa: BLE001
+                return {"CANCELLED"}
+        vl = context.view_layer
+        if vl is not None:
+            try:
+                vl.objects.active = obj
+                obj.select_set(True)
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            bpy.ops.object.mode_set(mode=self.mode)
+        except Exception as exc:  # noqa: BLE001
+            self.report({"WARNING"}, f"モード切替失敗: {exc}")
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
 _CLASSES = (
-    BNAME_OT_gpencil_select_page,
+    BNAME_OT_gpencil_master_ensure,
+    BNAME_OT_gpencil_master_mode_set,
     BNAME_PT_gpencil,
 )
 

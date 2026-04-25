@@ -119,10 +119,10 @@ class BNamePreferences(bpy.types.AddonPreferences):
     )
 
     gpencil_follow_cursor: BoolProperty(  # type: ignore[valid-type]
-        name="カーソル追従で active GP 切替",
+        name="カーソル追従でアクティブページ切替",
         description=(
-            "overview モード中、マウス位置のページ GP を自動で active に切替える "
-            "(Blender 標準のドロー/消しゴムを overview 全ページに適用するため)"
+            "overview モード中、マウス位置のページを自動で active_page_index に "
+            "設定する (master GP 統一後は GP 切替ではなくページ index 追従のみ)"
         ),
         default=True,
         update=lambda self, _ctx: _on_gpencil_follow_changed(self),

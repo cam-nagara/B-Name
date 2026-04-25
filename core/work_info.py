@@ -21,14 +21,12 @@ from ..utils import log
 
 _logger = log.get_logger(__name__)
 
-# 原稿上の 9 通り配置 (上下 × 左中右)
+# 原稿上の 6 通り配置 (上下 × 左中右、middle 段は仕上がり枠外への配置で
+# 自然なアンカーが取りづらく実用性が低いため除外)
 _POSITION_ITEMS = (
     ("top-left", "左上", ""),
     ("top-center", "上中央", ""),
     ("top-right", "右上", ""),
-    ("middle-left", "左中央", ""),
-    ("middle-center", "中央", ""),
-    ("middle-right", "右中央", ""),
     ("bottom-left", "左下", ""),
     ("bottom-center", "下中央", ""),
     ("bottom-right", "右下", ""),
@@ -49,7 +47,7 @@ class BNameDisplayItem(bpy.types.PropertyGroup):
     )
     font_size_pt: FloatProperty(  # type: ignore[valid-type]
         name="フォントサイズ (pt)",
-        default=9.0,
+        default=7.0,
         min=1.0,
         soft_max=72.0,
     )
@@ -89,6 +87,15 @@ class BNameWorkInfo(bpy.types.PropertyGroup):
     display_episode: PointerProperty(type=BNameDisplayItem)  # type: ignore[valid-type]
     display_subtitle: PointerProperty(type=BNameDisplayItem)  # type: ignore[valid-type]
     display_author: PointerProperty(type=BNameDisplayItem)  # type: ignore[valid-type]
+    # 「原稿上の表示」のページ番号項目 (旧ノンブルの UI 後継)
+    display_page_number: PointerProperty(type=BNameDisplayItem)  # type: ignore[valid-type]
+    page_number_start: IntProperty(  # type: ignore[valid-type]
+        name="開始番号",
+        description="ページ番号表示の開始値 (active_page_index=0 のページに割り当てる番号)",
+        default=1,
+        min=0,
+        soft_max=9999,
+    )
 
 
 class BNameNombre(bpy.types.PropertyGroup):

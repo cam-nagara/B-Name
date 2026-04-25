@@ -91,24 +91,50 @@ def finish_rect(paper) -> Rect:
     return Rect((cw - fw) / 2.0, (ch - fh) / 2.0, fw, fh)
 
 
-def inner_frame_rect(paper) -> Rect:
-    """基本枠 (内枠) の矩形."""
+def bleed_rect(paper) -> Rect:
+    """裁ち落とし枠の矩形 (= 仕上がり枠 + 裁ち落とし幅).
+
+    印刷時の塗り足し領域 (仕上がり枠の外側に bleed_mm 広げた矩形)。
+    断裁ズレで地色が見えないよう、絵柄をこの枠まで描き伸ばす目安。
+    """
+    return finish_rect(paper).inset(-paper.bleed_mm)
+
+
+def inner_frame_rect(paper, is_left_half: bool = False) -> Rect:
+    """基本枠 (内枠) の矩形.
+
+    ``is_left_half`` が True (= 見開きの左半分のページ、ノドが右側) の場合、
+    横オフセットを符号反転する (オフセットは「ノド方向への変位」として扱う)。
+    既定は False (= 右半分のページ、ノドが左側、日本マンガ既定)。
+    """
     cw, ch = paper.canvas_width_mm, paper.canvas_height_mm
     iw, ih = paper.inner_frame_width_mm, paper.inner_frame_height_mm
-    ox, oy = paper.inner_frame_offset_x_mm, paper.inner_frame_offset_y_mm
+    ox = paper.inner_frame_offset_x_mm
+    oy = paper.inner_frame_offset_y_mm
+    if is_left_half:
+        ox = -ox
     return Rect((cw - iw) / 2.0 + ox, (ch - ih) / 2.0 + oy, iw, ih)
 
 
-def safe_rect(paper) -> Rect:
+def safe_rect(paper, is_left_half: bool = False) -> Rect:
     """セーフライン (天/地/ノド/小口) の内側矩形.
 
-    ノド/小口は左右どちらかを示すが、見開きでなければ対称に扱う。
-    Phase 1 段階では単一ページ前提で、ノド=左、小口=右として実装。
+    ノドは「綴じ側」、小口は「綴じと反対側」を意味する.
+    - is_left_half=False (右半分のページ): ノドは左、小口は右 (= デフォルト)
+    - is_left_half=True  (左半分のページ): ノドは右、小口は左 (左右反転)
     """
     canvas = canvas_rect(paper)
+    if is_left_half:
+        # 左半分: ノドは右、小口は左
+        left_inset = paper.safe_fore_edge_mm
+        right_inset = paper.safe_gutter_mm
+    else:
+        # 右半分: ノドは左、小口は右 (既定)
+        left_inset = paper.safe_gutter_mm
+        right_inset = paper.safe_fore_edge_mm
     return canvas.inset_each(
         top=paper.safe_top_mm,
         bottom=paper.safe_bottom_mm,
-        left=paper.safe_gutter_mm,
-        right=paper.safe_fore_edge_mm,
+        left=left_inset,
+        right=right_inset,
     )

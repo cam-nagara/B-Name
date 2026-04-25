@@ -171,8 +171,21 @@ class BNAME_OT_view_fit_page(Operator):
             return {"CANCELLED"}
         area, region, _rv3d = info
         p = work.paper
+        # アクティブページの grid 上の実位置にフィットする (master GP / 見開きペア
+        # 配置で active page の world 座標は (0,0) とは限らないため)。
+        from ..utils.page_grid import page_grid_offset_mm as _pg_offset
+
+        cols = max(2, int(getattr(scene, "bname_overview_cols", 4)))
+        gap = float(getattr(scene, "bname_overview_gap_mm", 30.0))
+        start_side = getattr(p, "start_side", "right")
+        read_direction = getattr(p, "read_direction", "left")
+        idx = max(0, work.active_page_index) if len(work.pages) > 0 else 0
+        ox, oy = _pg_offset(
+            idx, cols, gap, p.canvas_width_mm, p.canvas_height_mm,
+            start_side, read_direction,
+        )
         ok = _fit_view_to_rect_mm(
-            context, area, region, 0.0, 0.0, p.canvas_width_mm, p.canvas_height_mm
+            context, area, region, ox, oy, p.canvas_width_mm, p.canvas_height_mm
         )
         if not ok:
             self.report({"ERROR"}, "フィットに失敗しました")
@@ -264,6 +277,30 @@ def _on_overview_layout_changed(_self, context) -> None:
         pass
 
 
+def _on_overview_cols_changed(self, context) -> None:
+    """列数を強制的に偶数化 (見開みかいペアが分断されないよう).
+
+    step=2 の IntProperty は UI クリックでは 2 刻みになるが、ユーザーが
+    直接数値入力した場合に奇数 (3, 5, 7...) を許してしまうため、ここで
+    端数を切り上げて偶数に丸める。
+    """
+    try:
+        cols = int(getattr(context.scene, "bname_overview_cols", 4))
+        if cols < 2:
+            target = 2
+        elif cols % 2 != 0:
+            target = cols + 1  # 奇数 → 次の偶数に切り上げ
+        else:
+            target = cols
+        if target != cols:
+            # 再帰 update を避けるため値が違うときだけ書き戻す
+            context.scene.bname_overview_cols = target
+            return  # 書き戻しの update で _on_overview_layout_changed が呼ばれる
+    except Exception:  # noqa: BLE001
+        pass
+    _on_overview_layout_changed(self, context)
+
+
 def register() -> None:
     # Scene プロパティ登録 (overview 用)
     bpy.types.Scene.bname_overview_mode = BoolProperty(
@@ -273,11 +310,12 @@ def register() -> None:
     )
     bpy.types.Scene.bname_overview_cols = IntProperty(
         name="一覧の列数",
-        description="全ページ一覧時の横方向ページ数",
+        description="全ページ一覧時の横方向ページ数 (見開みかいペアが分断されないよう偶数刻み)",
         default=4,
-        min=1,
+        min=2,
         soft_max=12,
-        update=_on_overview_layout_changed,
+        step=2,
+        update=_on_overview_cols_changed,
     )
     bpy.types.Scene.bname_overview_gap_mm = FloatProperty(
         name="一覧のページ間隔 (mm)",

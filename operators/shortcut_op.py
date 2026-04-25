@@ -182,6 +182,183 @@ class BNAME_OT_page_prev(Operator):
         return {"FINISHED"}
 
 
+class BNAME_OT_toggle_lasso_tool(Operator):
+    """L キー: 選択ツールを Lasso ⇔ Box でトグル.
+
+    B-Name 作品が開かれている時のみ動作。それ以外は PASS_THROUGH で
+    Blender 標準 (Select Linked) に譲る。
+    """
+
+    bl_idname = "bname.toggle_lasso_tool"
+    bl_label = "投げ縄ツール切替"
+    bl_options = {"REGISTER"}
+
+    def invoke(self, context, event):
+        work = get_work(context)
+        if work is None or not work.loaded:
+            return {"PASS_THROUGH"}
+        try:
+            wm_tools = bpy.context.workspace.tools
+            current_tool = None
+            for t in wm_tools:
+                # アクティブツールの id (mode/space に依存)
+                if t.space_type == "VIEW_3D":
+                    current_tool = t.idname
+                    break
+            new_tool = (
+                "builtin.select_box"
+                if current_tool == "builtin.select_lasso"
+                else "builtin.select_lasso"
+            )
+            bpy.ops.wm.tool_set_by_id(name=new_tool)
+        except Exception as exc:  # noqa: BLE001
+            _logger.exception("toggle_lasso_tool failed")
+            self.report({"WARNING"}, f"ツール切替失敗: {exc}")
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
+# ---------- Cut → 別レイヤー化 (Ctrl+X / Ctrl+V 上書き) ----------
+
+
+# Cut → Paste 別レイヤー化のフラグ (module スコープ).
+# scene custom property に置くと .blend に永続化され、Cut した状態で
+# 保存→別ファイルを開いた最初の Paste で意図せず新レイヤーが作られる
+# 不具合があるため、プロセス内変数として保持する。
+_PASTE_TO_NEW_LAYER_FLAG = False
+
+
+def _try_call_op(op_callable, *args, **kwargs) -> bool:
+    """bpy.ops 呼び出しを try する (失敗時 False)."""
+    try:
+        result = op_callable(*args, **kwargs)
+        return "FINISHED" in result
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _gp_cut_to_clipboard(context) -> bool:
+    """選択 GP ストロークをクリップボードへコピー + 削除.
+
+    GP v3 / legacy で operator 名が異なるため複数候補を順に試す。
+    """
+    # クリップボードへコピー
+    copied = False
+    for op in (
+        getattr(bpy.ops.grease_pencil, "copy", None),
+        getattr(bpy.ops.gpencil, "copy", None),
+    ):
+        if op is None:
+            continue
+        if _try_call_op(op):
+            copied = True
+            break
+    if not copied:
+        return False
+    # 選択削除
+    for op in (
+        getattr(bpy.ops.grease_pencil, "delete", None),
+        getattr(bpy.ops.gpencil, "delete", None),
+    ):
+        if op is None:
+            continue
+        if _try_call_op(op):
+            return True
+    return True  # 削除に失敗してもコピーは成功
+
+
+def _gp_paste_clipboard(context) -> bool:
+    """クリップボードから GP ストロークを貼付."""
+    for op in (
+        getattr(bpy.ops.grease_pencil, "paste", None),
+        getattr(bpy.ops.gpencil, "paste", None),
+    ):
+        if op is None:
+            continue
+        if _try_call_op(op):
+            return True
+    return False
+
+
+class BNAME_OT_gp_cut_to_new_layer(Operator):
+    """Ctrl+X 上書き: 選択 GP ストロークを切り取り、次の Paste で新レイヤー化フラグを立てる.
+
+    B-Name 作品が開かれていない、または GP 編集モードでない場合は
+    PASS_THROUGH で標準 Cut に譲る。
+    """
+
+    bl_idname = "bname.gp_cut_to_new_layer"
+    bl_label = "切り取り (新レイヤー予約)"
+    bl_options = {"REGISTER"}
+
+    def invoke(self, context, event):
+        work = get_work(context)
+        if work is None or not work.loaded:
+            return {"PASS_THROUGH"}
+        obj = context.view_layer.objects.active if context.view_layer else None
+        if obj is None or obj.type != "GREASEPENCIL":
+            return {"PASS_THROUGH"}
+        if obj.mode not in {"EDIT", "PAINT_GREASE_PENCIL", "SCULPT_GREASE_PENCIL"}:
+            return {"PASS_THROUGH"}
+        ok = _gp_cut_to_clipboard(context)
+        if not ok:
+            self.report({"WARNING"}, "Cut 失敗 (選択ストロークがありませんか?)")
+            return {"CANCELLED"}
+        # 次の Paste で新レイヤー化するフラグ (module 変数: 永続化しない)
+        global _PASTE_TO_NEW_LAYER_FLAG
+        _PASTE_TO_NEW_LAYER_FLAG = True
+        return {"FINISHED"}
+
+
+class BNAME_OT_gp_paste_to_new_layer(Operator):
+    """Ctrl+V 上書き: フラグが立っていれば新規レイヤーを作成し、そこに paste.
+
+    フラグが無い場合は通常 paste (現在レイヤーへ)。
+    """
+
+    bl_idname = "bname.gp_paste_to_new_layer"
+    bl_label = "貼付 (新レイヤー)"
+    bl_options = {"REGISTER"}
+
+    def invoke(self, context, event):
+        work = get_work(context)
+        if work is None or not work.loaded:
+            return {"PASS_THROUGH"}
+        obj = context.view_layer.objects.active if context.view_layer else None
+        if obj is None or obj.type != "GREASEPENCIL":
+            return {"PASS_THROUGH"}
+        scene = context.scene
+        global _PASTE_TO_NEW_LAYER_FLAG
+        if _PASTE_TO_NEW_LAYER_FLAG:
+            # 新規レイヤーを作成して active に
+            try:
+                gp_data = obj.data
+                layers = getattr(gp_data, "layers", None)
+                if layers is not None:
+                    new_layer = layers.new(name="Pasted")
+                    try:
+                        layers.active = new_layer
+                    except Exception:  # noqa: BLE001
+                        pass
+                    # 新レイヤーに現在フレームの空フレームを補充
+                    try:
+                        from ..utils import gpencil as gp_utils
+                        gp_utils.ensure_active_frame(
+                            new_layer,
+                            frame_number=scene.frame_current if scene else 1,
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+            except Exception:  # noqa: BLE001
+                _logger.exception("paste_to_new_layer: layer create failed")
+            _PASTE_TO_NEW_LAYER_FLAG = False
+        ok = _gp_paste_clipboard(context)
+        if not ok:
+            self.report({"WARNING"}, "Paste 失敗 (クリップボード空?)")
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
 class BNAME_OT_toggle_asset_shelf(Operator):
     """3D View のアセットシェルフ表示をトグル.
 
@@ -234,6 +411,9 @@ _CLASSES = (
     BNAME_OT_page_next,
     BNAME_OT_page_prev,
     BNAME_OT_toggle_asset_shelf,
+    BNAME_OT_toggle_lasso_tool,
+    BNAME_OT_gp_cut_to_new_layer,
+    BNAME_OT_gp_paste_to_new_layer,
 )
 
 

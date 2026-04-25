@@ -47,6 +47,19 @@ class BNAME_PT_work(Panel):
         _draw_display_item(box, "話数", info.display_episode)
         _draw_display_item(box, "サブタイトル", info.display_subtitle)
         _draw_display_item(box, "作者名", info.display_author)
+        # ページ番号 (旧ノンブル UI の後継)
+        _draw_display_item(box, "ページ番号", info.display_page_number)
+        sub = box.row(align=True)
+        sub.enabled = info.display_page_number.enabled
+        sub.prop(info, "page_number_start")
+
+        # コマ間隔 (作品共通、旧「コマ間隔」セクション)
+        box = layout.box()
+        box.label(text="コマ間隔")
+        g = work.panel_gap
+        row = box.row(align=True)
+        row.prop(g, "vertical_mm")
+        row.prop(g, "horizontal_mm")
 
 
 def _draw_display_item(layout, label: str, item) -> None:
@@ -55,56 +68,11 @@ def _draw_display_item(layout, label: str, item) -> None:
     sub = row.row(align=True)
     sub.enabled = item.enabled
     sub.prop(item, "position", text="")
-
-
-class BNAME_PT_nombre(Panel):
-    bl_idname = "BNAME_PT_nombre"
-    bl_label = "ノンブル"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = B_NAME_CATEGORY
-    bl_order = 1
-    bl_options = {"DEFAULT_CLOSED"}
-
-    @classmethod
-    def poll(cls, context):
-        w = get_work(context)
-        return bool(w and w.loaded)
-
-    def draw_header(self, context):
-        work = get_work(context)
-        if work is not None:
-            self.layout.prop(work.nombre, "enabled", text="")
-
-    def draw(self, context):
-        layout = self.layout
-        work = get_work(context)
-        if work is None:
-            return
-        n = work.nombre
-        layout.active = n.enabled
-        layout.prop(n, "format")
-        layout.prop(n, "font")
-        row = layout.row(align=True)
-        row.prop(n, "font_size_pt")
-        row.prop(n, "position", text="")
-        row = layout.row(align=True)
-        row.prop(n, "gap_vertical_mm")
-        row.prop(n, "gap_horizontal_mm")
-        layout.prop(n, "color")
-        layout.prop(n, "start_number")
-        layout.prop(n, "hidden_nombre")
-        box = layout.box()
-        box.prop(n, "border_enabled", text="フチをつける")
-        sub = box.column()
-        sub.active = n.border_enabled
-        sub.prop(n, "border_width_mm")
-        sub.prop(n, "border_color")
+    sub.prop(item, "font_size_pt", text="")
 
 
 _CLASSES = (
     BNAME_PT_work,
-    BNAME_PT_nombre,
 )
 
 

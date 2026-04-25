@@ -98,6 +98,11 @@ class BNAME_PT_balloons(Panel):
         row.prop(entry, "width_mm")
         row.prop(entry, "height_mm")
         box.prop(entry, "rotation_deg")
+        # Meldex flipH/flipV/opacity 相当
+        row = box.row(align=True)
+        row.prop(entry, "flip_h", toggle=True)
+        row.prop(entry, "flip_v", toggle=True)
+        box.prop(entry, "opacity", slider=True)
         box.prop(entry, "rounded_corner_enabled")
         sub = box.row()
         sub.enabled = entry.rounded_corner_enabled
@@ -212,6 +217,10 @@ class BNAME_PT_texts(Panel):
         box.label(text="組版", icon="FONT_DATA")
         box.prop(entry, "writing_mode")
         box.prop(entry, "font_size_pt")
+        # Meldex fontBold/fontItalic 相当
+        row = box.row(align=True)
+        row.prop(entry, "font_bold", toggle=True)
+        row.prop(entry, "font_italic", toggle=True)
         box.prop(entry, "color")
         row = box.row(align=True)
         row.prop(entry, "line_height")

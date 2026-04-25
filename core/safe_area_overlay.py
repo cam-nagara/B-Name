@@ -1,62 +1,45 @@
 """セーフライン外側オーバーレイの PropertyGroup.
 
-描画 (draw_handler_add + gpu) は Phase 1-E で ui/overlay.py に実装。
+描画 (draw_handler_add + gpu) は ui/overlay.py に実装。
 ここではデータモデルと既定値のみ保持する。
 
-仕様 (計画書 3.2.6):
-- 既定色 #808080, 不透明度 30%, ブレンドモード 乗算
-- 表示専用 — 書き出しには含めない (3.8.4 参照)
+仕様:
+- 既定色 = 黒 30% グレー (RGB 0.7, 0.7, 0.7)、常に乗算合成・不透明度 100%
+- 表示専用 — 書き出しには含めない
 - 作品共通既定 (work.json)、ページ単位でオーバーライド可
+
+opacity / blend_mode フィールドは UI から削除済 (常に乗算 alpha=1.0 で固定描画)。
 """
 
 from __future__ import annotations
 
 import bpy
-from bpy.props import BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty
+from bpy.props import BoolProperty, FloatVectorProperty
 
 from ..utils import log
 
 _logger = log.get_logger(__name__)
 
-_BLEND_MODE_ITEMS = (
-    ("multiply", "乗算", "乗算ブレンド (既定)"),
-    ("normal", "通常", "通常ブレンド"),
-    ("overlay", "オーバーレイ", "オーバーレイブレンド"),
-)
-
-# 既定色 #808080 を linear RGB ではなく sRGB 風の中間グレーで指定。
-# Blender の FloatVectorProperty(subtype=COLOR) はリニア空間で扱うが、
-# UI 上は 0.5 前後が中間グレーに見えるため 0.5 を既定とする。
-_DEFAULT_COLOR = (0.5, 0.5, 0.5, 1.0)
+# 黒 30 % のグレー = 紙の白に乗算するとビューポート上で 70% の明度になる.
+# RGB 0.7 を 3 成分で指定 (alpha チャネルは持たない)。
+_DEFAULT_COLOR = (0.7, 0.7, 0.7)
 
 
 class BNameSafeAreaOverlay(bpy.types.PropertyGroup):
-    """セーフライン外側を塗りつぶして視認性を確保するビューポート専用オーバーレイ."""
+    """セーフライン外側を乗算で暗くするビューポート専用オーバーレイ."""
 
     enabled: BoolProperty(  # type: ignore[valid-type]
-        name="セーフライン外側オーバーレイ",
-        description="本文として使えない範囲をマスクして表示 (書き出しには含まれない)",
+        name="セーフライン",
+        description="セーフライン外を乗算で暗く表示 (書き出しには含まれない)",
         default=True,
     )
     color: FloatVectorProperty(  # type: ignore[valid-type]
         name="塗りつぶし色",
         subtype="COLOR",
-        size=4,
+        size=3,
         default=_DEFAULT_COLOR,
         min=0.0,
         max=1.0,
-    )
-    opacity: FloatProperty(  # type: ignore[valid-type]
-        name="不透明度",
-        default=0.30,
-        min=0.0,
-        max=1.0,
-        subtype="FACTOR",
-    )
-    blend_mode: EnumProperty(  # type: ignore[valid-type]
-        name="ブレンドモード",
-        items=_BLEND_MODE_ITEMS,
-        default="multiply",
     )
 
 

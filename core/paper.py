@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import bpy
 from bpy.props import (
-    BoolProperty,
     EnumProperty,
     FloatProperty,
     FloatVectorProperty,
@@ -33,6 +32,17 @@ _UNIT_ITEMS = (
     ("inch", "inch", "インチ"),
 )
 
+_START_SIDE_ITEMS = (
+    ("right", "右から", "1 ページ目は右ページ単独 (日本のマンガ・右綴じ)"),
+    ("left", "左から", "1 ページ目は左ページ単独 (西洋本・左綴じ)"),
+)
+
+_READ_DIRECTION_ITEMS = (
+    ("left", "左方向", "ページが左方向に進む (日本のマンガ既定)"),
+    ("right", "右方向", "ページが右方向に進む (西洋本)"),
+    ("down", "下方向", "ページが下方向に進む (縦スクロール)"),
+)
+
 
 class BNamePaperSettings(bpy.types.PropertyGroup):
     """用紙寸法・解像度・基本枠・セーフライン設定."""
@@ -42,14 +52,14 @@ class BNamePaperSettings(bpy.types.PropertyGroup):
     # シーン単位に依存する ``unit="LENGTH"`` は使わない (FloatProperty の
     # 既定 ``unit="NONE"`` にする)。
     canvas_width_mm: FloatProperty(  # type: ignore[valid-type]
-        name="キャンバス幅",
+        name="幅",
         description="原稿用紙の幅 (裁ち落とし込み、mm)",
         default=257.00,
         min=1.0,
         soft_max=1000.0,
     )
     canvas_height_mm: FloatProperty(  # type: ignore[valid-type]
-        name="キャンバス高さ",
+        name="高さ",
         description="原稿用紙の高さ (裁ち落とし込み、mm)",
         default=364.00,
         min=1.0,
@@ -71,14 +81,14 @@ class BNamePaperSettings(bpy.types.PropertyGroup):
 
     # --- 仕上がり (製本) ---
     finish_width_mm: FloatProperty(  # type: ignore[valid-type]
-        name="仕上がり幅",
+        name="幅",
         description="製本後の仕上がり幅 (mm)",
         default=221.81,
         min=1.0,
         soft_max=1000.0,
     )
     finish_height_mm: FloatProperty(  # type: ignore[valid-type]
-        name="仕上がり高さ",
+        name="高さ",
         description="製本後の仕上がり高さ (mm)",
         default=328.78,
         min=1.0,
@@ -94,27 +104,27 @@ class BNamePaperSettings(bpy.types.PropertyGroup):
 
     # --- 基本枠 (内枠) ---
     inner_frame_width_mm: FloatProperty(  # type: ignore[valid-type]
-        name="基本枠 幅",
+        name="幅",
         description="本文領域の幅 (mm)",
         default=180.00,
         min=1.0,
         soft_max=500.0,
     )
     inner_frame_height_mm: FloatProperty(  # type: ignore[valid-type]
-        name="基本枠 高さ",
+        name="高さ",
         description="本文領域の高さ (mm)",
         default=270.00,
         min=1.0,
         soft_max=500.0,
     )
     inner_frame_offset_x_mm: FloatProperty(  # type: ignore[valid-type]
-        name="基本枠 横オフセット",
+        name="横オフセット",
         default=0.00,
         soft_min=-100.0,
         soft_max=100.0,
     )
     inner_frame_offset_y_mm: FloatProperty(  # type: ignore[valid-type]
-        name="基本枠 縦オフセット",
+        name="縦オフセット",
         default=0.00,
         soft_min=-100.0,
         soft_max=100.0,
@@ -122,26 +132,26 @@ class BNamePaperSettings(bpy.types.PropertyGroup):
 
     # --- セーフライン (天/地/ノド/小口) ---
     safe_top_mm: FloatProperty(  # type: ignore[valid-type]
-        name="セーフライン 天",
+        name="天",
         default=17.49,
         min=0.0,
         soft_max=100.0,
     )
     safe_bottom_mm: FloatProperty(  # type: ignore[valid-type]
-        name="セーフライン 地",
+        name="地",
         default=17.49,
         min=0.0,
         soft_max=100.0,
     )
     safe_gutter_mm: FloatProperty(  # type: ignore[valid-type]
-        name="セーフライン ノド",
+        name="ノド",
         description="綴じ側のセーフライン (mm)",
         default=20.90,
         min=0.0,
         soft_max=100.0,
     )
     safe_fore_edge_mm: FloatProperty(  # type: ignore[valid-type]
-        name="セーフライン 小口",
+        name="小口",
         description="綴じと反対側のセーフライン (mm)",
         default=17.23,
         min=0.0,
@@ -183,10 +193,18 @@ class BNamePaperSettings(bpy.types.PropertyGroup):
         default="sRGB IEC61966-2.1",
     )
 
-    # --- 見開き ---
-    is_spread_layout: BoolProperty(  # type: ignore[valid-type]
-        name="見開き表示",
-        default=False,
+    # --- 綴じ / 読む方向 ---
+    start_side: EnumProperty(  # type: ignore[valid-type]
+        name="開始ページの位置",
+        description="1 ページ目が見開きの左右どちらに来るか",
+        items=_START_SIDE_ITEMS,
+        default="right",
+    )
+    read_direction: EnumProperty(  # type: ignore[valid-type]
+        name="読む方向",
+        description="overview で次の見開きペアが置かれる方向",
+        items=_READ_DIRECTION_ITEMS,
+        default="left",
     )
 
     # --- プリセット参照 ---

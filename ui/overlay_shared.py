@@ -9,23 +9,37 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..utils.geom import Rect, canvas_rect, finish_rect, inner_frame_rect, safe_rect
+from ..utils.geom import (
+    Rect,
+    bleed_rect,
+    canvas_rect,
+    finish_rect,
+    inner_frame_rect,
+    safe_rect,
+)
 
 
 @dataclass(frozen=True)
 class PaperRects:
     canvas: Rect
+    bleed: Rect
     finish: Rect
     inner_frame: Rect
     safe: Rect
 
 
-def compute_paper_rects(paper) -> PaperRects:
+def compute_paper_rects(paper, is_left_half: bool = False) -> PaperRects:
+    """5 種類の矩形 (canvas / bleed / finish / inner_frame / safe) を計算.
+
+    ``is_left_half`` を True にすると inner_frame の横オフセットと
+    safe (ノド/小口) を見開きの左半分のページ用に左右反転して返す。
+    """
     return PaperRects(
         canvas=canvas_rect(paper),
+        bleed=bleed_rect(paper),
         finish=finish_rect(paper),
-        inner_frame=inner_frame_rect(paper),
-        safe=safe_rect(paper),
+        inner_frame=inner_frame_rect(paper, is_left_half=is_left_half),
+        safe=safe_rect(paper, is_left_half=is_left_half),
     )
 
 

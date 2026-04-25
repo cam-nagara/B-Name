@@ -71,77 +71,25 @@ class BNAME_PT_paper(Panel):
         row = box.row(align=True)
         row.prop(p, "safe_gutter_mm")
         row.prop(p, "safe_fore_edge_mm")
-
-        box = layout.box()
-        box.label(text="色・線数")
-        box.prop(p, "color_mode")
-        box.prop(p, "default_line_count")
-        box.prop(p, "paper_color")
-        box.prop(p, "display_alpha", slider=True)
-        box.prop(p, "color_profile")
-        box.prop(p, "is_spread_layout")
-
-
-class BNAME_PT_safe_area_overlay(Panel):
-    bl_idname = "BNAME_PT_safe_area_overlay"
-    bl_label = "セーフライン外オーバーレイ"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = B_NAME_CATEGORY
-    bl_order = 3
-    bl_options = {"DEFAULT_CLOSED"}
-
-    @classmethod
-    def poll(cls, context):
-        w = get_work(context)
-        return bool(w and w.loaded)
-
-    def draw_header(self, context):
-        work = get_work(context)
-        if work is not None:
-            self.layout.prop(work.safe_area_overlay, "enabled", text="")
-
-    def draw(self, context):
-        layout = self.layout
-        work = get_work(context)
-        if work is None:
-            return
+        # セーフライン外塗り (旧「セーフライン外オーバーレイ」パネル) を統合
         sa = work.safe_area_overlay
-        layout.active = sa.enabled
-        layout.prop(sa, "color")
-        layout.prop(sa, "opacity")
-        layout.prop(sa, "blend_mode")
-        layout.label(text="書き出しには含まれません", icon="INFO")
+        row = box.row(align=True)
+        row.prop(sa, "enabled", text="セーフライン外を塗る")
+        sub = box.row(align=True)
+        sub.enabled = sa.enabled
+        sub.prop(sa, "color", text="塗りつぶし色")
 
-
-class BNAME_PT_panel_gap(Panel):
-    bl_idname = "BNAME_PT_panel_gap"
-    bl_label = "コマ間隔 (作品共通)"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = B_NAME_CATEGORY
-    bl_order = 4
-    bl_options = {"DEFAULT_CLOSED"}
-
-    @classmethod
-    def poll(cls, context):
-        w = get_work(context)
-        return bool(w and w.loaded)
-
-    def draw(self, context):
-        layout = self.layout
-        work = get_work(context)
-        if work is None:
-            return
-        g = work.panel_gap
-        layout.prop(g, "vertical_mm")
-        layout.prop(g, "horizontal_mm")
+        # 「色・線数」セクションは UI からは削除 (色情報は書き出し処理が
+        # 内部で参照するためデータ層は維持。書き出しダイアログから個別指定可)
+        # 綴じ / 読む方向
+        box = layout.box()
+        box.label(text="綴じ / 読む方向")
+        box.prop(p, "start_side")
+        box.prop(p, "read_direction")
 
 
 _CLASSES = (
     BNAME_PT_paper,
-    BNAME_PT_safe_area_overlay,
-    BNAME_PT_panel_gap,
 )
 
 

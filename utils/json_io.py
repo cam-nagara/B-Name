@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,11 @@ def write_json(path: str | os.PathLike, data: Any, *, indent: int = 2) -> None:
 
     同ディレクトリ内の一時ファイルに書いてから os.replace で置き換えるため、
     書込み途中の停電・クラッシュでも破損ファイルが残らない。
+
+    Windows で Dropbox / OneDrive / アンチウィルス / Indexer 等が同名ファイルを
+    瞬間的に握っていると ``os.replace`` が EACCES (PermissionError) で失敗する
+    ことがある。これを exponential backoff で短時間リトライして回避する。
+    対象 OSError は (PermissionError, OSError errno=13/32) を含む。
     """
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -45,7 +51,8 @@ def write_json(path: str | os.PathLike, data: Any, *, indent: int = 2) -> None:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             json.dump(data, f, indent=indent, ensure_ascii=False)
             f.write("\n")
-        os.replace(tmp_path, p)  # アトミック置換
+        # アトミック置換 (Dropbox 等のロック競合に備えてリトライ)
+        _replace_with_retry(tmp_path, p)
     except Exception:
         # 失敗時は一時ファイルを掃除
         try:
@@ -53,6 +60,32 @@ def write_json(path: str | os.PathLike, data: Any, *, indent: int = 2) -> None:
         except OSError:
             pass
         raise
+
+
+def _replace_with_retry(src: str, dst: Path,
+                        attempts: int = 6, initial_delay: float = 0.1) -> None:
+    """``os.replace`` を exponential backoff でリトライ.
+
+    Windows + Dropbox 環境で頻発する WinError 5 / WinError 32 (sharing
+    violation) を回避する。各試行間隔は 0.1s → 0.2s → 0.4s ... と倍化、
+    合計待ち時間は約 6.3 秒。最終的に失敗したら例外を再送出する。
+    """
+    delay = initial_delay
+    last_exc: Exception | None = None
+    for i in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except (PermissionError, OSError) as exc:
+            last_exc = exc
+            # 最終試行ならエラーをそのまま投げる
+            if i == attempts - 1:
+                break
+            time.sleep(delay)
+            delay *= 2.0
+    # ここに来たら全試行失敗
+    if last_exc is not None:
+        raise last_exc
 
 
 def read_json_or_default(path: str | os.PathLike, default: Any) -> Any:

@@ -28,6 +28,37 @@ from . import ui
 from . import keymap
 from .utils import log
 
+
+def _reload_all_submodules() -> None:
+    """VSCode の "Blender: Reload Addons" 時に子モジュールも再 import する.
+
+    Blender のアドオン re-enable は `__init__.py` の register/unregister は
+    呼び直すが、子モジュール (utils.gpencil, ui.overlay, operators.* 等) は
+    `sys.modules` キャッシュが残ったまま使われる。これにより「コードを修正
+    したのに反映されない」現象が起きる。register 前にここで importlib.reload
+    で全 B-Name サブモジュールを再ロードすると、ファイル変更が即時反映される。
+
+    PropertyGroup の size 変更や Scene attach の型変更は reload では反映
+    されないため、それらの変更時は Blender 自体の再起動が依然必要。
+    """
+    import importlib
+    import sys
+
+    pkg_prefix = (__package__ or "b_name") + "."
+    targets = sorted(
+        (name for name in list(sys.modules) if name.startswith(pkg_prefix)),
+        key=lambda n: n.count("."),  # 深い順は後で
+        reverse=True,
+    )
+    for name in targets:
+        mod = sys.modules.get(name)
+        if mod is None:
+            continue
+        try:
+            importlib.reload(mod)
+        except Exception:  # noqa: BLE001
+            pass
+
 # utils は下層ライブラリ扱いで計画書 5.3 の 1-8 には含めない。
 # ログハンドラを最初に付け、最後に外すため register/unregister で別扱い。
 _MODULES = (
@@ -43,6 +74,9 @@ _MODULES = (
 
 
 def register() -> None:
+    # VSCode Blender Development 拡張の "Reload Addons" でも子モジュールを
+    # 確実に再 import する (sys.modules キャッシュ対策)
+    _reload_all_submodules()
     utils.register()
     logger = log.get_logger(__name__)
     logger.info("B-Name: register start")
