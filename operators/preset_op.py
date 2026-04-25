@@ -35,6 +35,22 @@ def _preset_enum_items(_self, context):
     return _PRESET_ENUM_CACHE
 
 
+def _on_paper_preset_selector_change(self, context):
+    """WindowManager.bname_paper_preset_selector の変更時に用紙プリセットを即時適用."""
+    name = getattr(self, "bname_paper_preset_selector", "")
+    if not name:
+        return
+    work = get_work(context)
+    if not (work and work.loaded):
+        return
+    work_dir = Path(work.work_dir) if work.work_dir else None
+    preset = presets.load_preset_by_name(name, work_dir)
+    if preset is None:
+        return
+    presets.apply_preset_to_paper(preset, work.paper)
+    _logger.info("paper preset applied via selector: %s", preset.name)
+
+
 class BNAME_OT_paper_preset_apply(Operator):
     """選択した用紙プリセットを現在の作品に適用."""
 
@@ -73,7 +89,7 @@ class BNAME_OT_paper_preset_save_local(Operator):
     """現在の用紙設定を作品ローカルプリセットとして保存."""
 
     bl_idname = "bname.paper_preset_save_local"
-    bl_label = "作品プリセットとして保存"
+    bl_label = "用紙プリセットとして保存"
     bl_options = {"REGISTER"}
 
     preset_name: StringProperty(  # type: ignore[valid-type]
@@ -123,9 +139,19 @@ _CLASSES = (
 def register() -> None:
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
+    bpy.types.WindowManager.bname_paper_preset_selector = EnumProperty(
+        name="プリセット",
+        description="用紙プリセットを選択して即時適用",
+        items=_preset_enum_items,
+        update=_on_paper_preset_selector_change,
+    )
 
 
 def unregister() -> None:
+    try:
+        del bpy.types.WindowManager.bname_paper_preset_selector
+    except AttributeError:
+        pass
     for cls in reversed(_CLASSES):
         try:
             bpy.utils.unregister_class(cls)

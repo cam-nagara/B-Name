@@ -72,6 +72,7 @@ class KeymapState:
 
     def __init__(self) -> None:
         self.saved: List[_SavedItem] = []
+        self.saved_conflicts: List[_SavedItem] = []
         self.bname_keymaps: List[object] = []
         self.bname_items: List[object] = []
         self.enabled: bool = False
@@ -189,6 +190,12 @@ class KeymapState:
             f" items={len(self.bname_items)} kc_name={kc.name!r}"
         )
         _logger.info("bname keymap created (items=%d)", len(self.bname_items))
+        # 他アドオン (Fluent 等) が addon kc に登録した F/G の単独キー kmi を
+        # 無効化して、B-Name のショートカットが優先発火するようにする
+        try:
+            self.disable_conflicting_keys()
+        except Exception:  # noqa: BLE001
+            _logger.exception("disable_conflicting_keys failed")
         return km
 
     def _populate_gp_paint_overrides(self, km, km_name: str) -> None:
@@ -225,14 +232,17 @@ class KeymapState:
         _add("bname.toggle_lasso_tool", "L")
         _add("bname.gp_cut_to_new_layer", "X", ctrl=True)
         _add("bname.gp_paste_to_new_layer", "V", ctrl=True)
+        # F → 枠線カットツール、G → 枠線選択ツール (GP モードでも先取り)
+        _add("bname.panel_knife_cut", "F")
+        _add("bname.panel_edge_move", "G")
 
     def _populate_window_overrides(self, km) -> None:
-        """Window キーマップに 修飾+ナビゲートキー を先取り登録.
+        """Window キーマップに 修飾+ナビゲートキー / 枠線カット F を先取り登録.
 
-        Blender 標準では Shift+Space / Ctrl+Space が Window キーマップ層で
-        screen.screen_full_area などに割当てられており、addon kc の
-        "3D View" よりも評価が早い。Window 層に同じキー組み合わせで
-        bname.view_navigate を登録することで先取りする。
+        Blender のキーマップ評価は Window kc (空間非依存) が area kc より先に
+        走るため、ここに登録すると他のアドオンが area kc に登録した同キーを
+        先取りできる。3D View 以外で押された場合は invoke 側で
+        ``context.area`` をチェックしてキャンセルする。
         """
         # preferences 取得 (失敗時は SPACE 既定)
         try:
@@ -257,6 +267,26 @@ class KeymapState:
                 )
             except Exception as exc:  # noqa: BLE001
                 print(f"[B-Name][KEYMAP] window override {label}+{nav_key} failed: {exc!r}")
+
+        # F → 枠線カットツール、G → 枠線選択ツール (Window kc に登録して
+        # 他アドオンに先取りさせる)。
+        # 注: exit_panel_mode の Esc は 3D View kc のみに限定し、Window kc には
+        # 登録しない。Window kc に Esc を載せると Outliner / Image Editor 等の
+        # area で MODE_PANEL 中に Esc を押した際、本来期待される area 固有の
+        # cancel 動作 (検索キャンセル等) を奪ってしまうため。
+        for op_id, key in (
+            ("bname.panel_knife_cut", "F"),
+            ("bname.panel_edge_move", "G"),
+        ):
+            try:
+                kmi = km.keymap_items.new(op_id, key, "PRESS")
+                self.bname_items.append(kmi)
+                print(
+                    f"[B-Name][KEYMAP] + {op_id} (Window) {key}"
+                    f" active={kmi.active}"
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"[B-Name][KEYMAP] window override {key} failed: {exc!r}")
 
     def _populate_keymap_items(self, km) -> None:
         """B-Name 専用のキーマップエントリを追加.
@@ -309,6 +339,15 @@ class KeymapState:
         # 統合ナビゲートモーダル (キー単独、修飾は modal 内で動的判定)
         _add("bname.view_navigate", _key("key_navigate", "SPACE"))
 
+        # F → 枠線カットツール (CSP 互換)
+        _add("bname.panel_knife_cut", "F")
+        # G → 枠線選択ツール
+        _add("bname.panel_edge_move", "G")
+        # Esc → コマ編集モードを抜けて全ページ一覧 (work.blend) に戻る
+        # poll が MODE_PANEL を要求するため、紙面編集モード中は Blender 既定の
+        # Esc 動作が走り (kmi が match しても poll で skip される)、干渉しない。
+        _add("bname.exit_panel_mode", "ESC")
+
         # Ctrl + ホイール → 1 ステップズーム (固定)
         kmi = _add("bname.view_zoom_step", "WHEELUPMOUSE", ctrl=True)
         if kmi is not None:
@@ -360,6 +399,91 @@ class KeymapState:
             except (ReferenceError, AttributeError):
                 pass
         return changed
+
+    # ---------- 衝突キー無効化 (他アドオン対策) ----------
+
+    # B-Name が単独修飾なしで予約するキー (他アドオンに奪われる対象)
+    _BNAME_RESERVED_SINGLE_KEYS: tuple[str, ...] = ("F", "G")
+
+    def disable_conflicting_keys(self) -> int:
+        """他アドオンが addon kc に登録した F / G の単独キー kmi を無効化.
+
+        Fluent 等の addon が同じキーを別 keymap (例: "Mesh", "Object Mode") に
+        登録している場合、Blender はその kmi を B-Name の "3D View" / "Window"
+        kmi より先に評価し、B-Name のショートカットが発火しない。
+        ここで addon kc 全体を走査し、B-Name 以外で type ∈ {F, G} かつ修飾なしの
+        active な kmi を無効化する。退避情報は ``self.saved_conflicts`` に保存し、
+        unregister 時に元の active 状態へ復元する。
+
+        default kc には触れない (default kc 書換は EXCEPTION_ACCESS_VIOLATION の
+        過去事例があるため)。
+        """
+        wm = bpy.context.window_manager
+        if wm is None:
+            return 0
+        kc_addon = wm.keyconfigs.addon
+        if kc_addon is None:
+            return 0
+        bname_idnames = {
+            "bname.panel_knife_cut",
+            "bname.panel_edge_move",
+            "bname.exit_panel_mode",
+        }
+        target_keys = set(self._BNAME_RESERVED_SINGLE_KEYS)
+        disabled = 0
+        # iterator 内で modify すると C ref が破綻するため、まず list 化
+        keymaps = list(kc_addon.keymaps)
+        for km in keymaps:
+            try:
+                kmis = list(km.keymap_items)
+            except Exception:  # noqa: BLE001
+                continue
+            for kmi in kmis:
+                try:
+                    if kmi.idname in bname_idnames:
+                        continue
+                    if kmi.type not in target_keys:
+                        continue
+                    if kmi.shift or kmi.ctrl or kmi.alt or getattr(kmi, "oskey", False):
+                        continue
+                    if kmi.value != "PRESS":
+                        continue
+                    if not kmi.active:
+                        continue
+                    # 退避してから無効化 (独立リスト saved_conflicts を使用、
+                    # restore_defaults による saved クリアの影響を受けない)
+                    self.saved_conflicts.append(_SavedItem(
+                        keymap_name=km.name,
+                        idname=kmi.idname,
+                        key_type=kmi.type,
+                        shift=bool(kmi.shift),
+                        ctrl=bool(kmi.ctrl),
+                        alt=bool(kmi.alt),
+                        oskey=bool(getattr(kmi, "oskey", False)),
+                        prev_active=True,
+                        item_ref=kmi,
+                    ))
+                    kmi.active = False
+                    disabled += 1
+                    print(
+                        f"[B-Name][KEYMAP] disabled conflict: "
+                        f"km={km.name!r} idname={kmi.idname!r} key={kmi.type}"
+                    )
+                except (ReferenceError, AttributeError):
+                    continue
+        if disabled > 0:
+            _logger.info("disabled %d conflicting addon kc kmis (F/G)", disabled)
+        return disabled
+
+    def restore_conflicting_keys(self) -> None:
+        """無効化した kmi を元の active 状態に復元."""
+        for s in list(self.saved_conflicts):
+            try:
+                if s.item_ref is not None:
+                    s.item_ref.active = bool(s.prev_active)
+            except (ReferenceError, AttributeError):
+                pass
+        self.saved_conflicts.clear()
 
     def remove_bname_keymaps(self) -> None:
         """B-Name が追加した keymap_items だけを削除し、標準キーマップは残す.
@@ -610,6 +734,11 @@ def unregister() -> None:
         return
     _unregister_watcher()
     try:
+        # 衝突キー (F/G) の無効化を元に戻す
+        _state.restore_conflicting_keys()
+    except Exception:  # noqa: BLE001
+        _logger.exception("restore_conflicting_keys failed")
+    try:
         _state.restore_defaults()
     finally:
         _state.remove_bname_keymaps()
@@ -628,12 +757,18 @@ def rebuild_keymap_from_prefs() -> None:
         return
     print("[B-Name][KEYMAP] rebuild_keymap_from_prefs() triggered")
     try:
+        # 衝突キーの退避情報を一旦復元してリフレッシュ
+        state.restore_conflicting_keys()
+    except Exception:  # noqa: BLE001
+        _logger.exception("rebuild: restore_conflicting_keys failed")
+    try:
         # 既存のアイテムを掃除 (既存 keymap オブジェクト自体は標準 "3D View" /
         # "Window" を参照しているため remove しない)
         state.remove_bname_keymaps()
     except Exception:  # noqa: BLE001
         _logger.exception("rebuild: remove_bname_keymaps failed")
     try:
+        # create_bname_keymap が内部で disable_conflicting_keys を再実行する
         state.create_bname_keymap()
         from ..preferences import get_preferences
         prefs = get_preferences()

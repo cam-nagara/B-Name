@@ -121,7 +121,18 @@ def _draw_rect_outline(
     rect: Rect,
     color: tuple[float, float, float, float],
     line_width: float = 1.0,
+    width_mm: float | None = None,
 ) -> None:
+    """矩形の枠線を描画.
+
+    ``width_mm`` を指定すると mm 単位の太さで 4 本の塗り帯を描画する
+    (= ズームに連動して画面上の太さが変わる、紙に追従する線)。
+    既定 (None) は ``line_width`` (px 単位) で従来の LINE_STRIP 描画
+    (画面上一定の太さ、紙に追従しない)。
+    """
+    if width_mm is not None and width_mm > 0.0:
+        _draw_rect_outline_mm(rect, color, width_mm)
+        return
     shader = gpu.shader.from_builtin("UNIFORM_COLOR")
     verts = [
         (mm_to_m(rect.x), mm_to_m(rect.y), 0.0),
@@ -138,6 +149,72 @@ def _draw_rect_outline(
         batch.draw(shader)
     finally:
         gpu.state.line_width_set(1.0)
+
+
+def _draw_rect_outline_mm(
+    rect: Rect,
+    color: tuple[float, float, float, float],
+    width_mm: float,
+) -> None:
+    """mm 単位の太さで矩形枠を 4 本の塗り帯として描画 (ズーム連動)."""
+    w = max(0.001, float(width_mm))
+    half = w * 0.5
+    # 4 本の帯 (上下左右、コーナーで矩形を共有して overlap)
+    top = Rect(rect.x - half, rect.y2 - half, rect.width + w, w)
+    bottom = Rect(rect.x - half, rect.y - half, rect.width + w, w)
+    left = Rect(rect.x - half, rect.y - half, w, rect.height + w)
+    right = Rect(rect.x2 - half, rect.y - half, w, rect.height + w)
+    for r in (top, bottom, left, right):
+        if r.width > 0 and r.height > 0:
+            _draw_rect_fill(r, color)
+
+
+def _draw_segments_mm(
+    segs: list[tuple[tuple[float, float], tuple[float, float]]],
+    color: tuple[float, float, float, float],
+    width_mm: float,
+) -> None:
+    """mm 単位の太さで線分群を塗りポリゴンとして描画 (ズーム連動).
+
+    各線分は太さ ``width_mm`` の細長い矩形 (端は square cap、両端で
+    width_mm/2 ずつ伸びる) として描画する。
+    """
+    if not segs:
+        return
+    import math as _math
+    w = max(0.001, float(width_mm))
+    half = w * 0.5
+    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    verts: list[tuple[float, float, float]] = []
+    indices: list[tuple[int, int, int]] = []
+    for (x1, y1), (x2, y2) in segs:
+        dx = x2 - x1
+        dy = y2 - y1
+        length = _math.hypot(dx, dy)
+        if length <= 0.0:
+            continue
+        # 単位ベクトルと法線
+        ux, uy = dx / length, dy / length
+        nx, ny = -uy, ux
+        # square cap で両端を half だけ延長
+        ex1, ey1 = x1 - ux * half, y1 - uy * half
+        ex2, ey2 = x2 + ux * half, y2 + uy * half
+        # 4 頂点
+        p0 = (ex1 + nx * half, ey1 + ny * half)
+        p1 = (ex2 + nx * half, ey2 + ny * half)
+        p2 = (ex2 - nx * half, ey2 - ny * half)
+        p3 = (ex1 - nx * half, ey1 - ny * half)
+        base = len(verts)
+        for px, py in (p0, p1, p2, p3):
+            verts.append((mm_to_m(px), mm_to_m(py), 0.0))
+        indices.append((base, base + 1, base + 2))
+        indices.append((base, base + 2, base + 3))
+    if not verts:
+        return
+    batch = batch_for_shader(shader, "TRIS", {"pos": verts}, indices=indices)
+    shader.bind()
+    shader.uniform_float("color", color)
+    batch.draw(shader)
 
 
 def _draw_line_segments(
@@ -170,7 +247,7 @@ def _draw_trim_marks(
     corner_arm_mm: float = 10.0,
     center_size_mm: float = 10.0,
     center_gap_mm: float = 5.0,
-    line_width: float = 1.0,
+    line_width_mm: float = 0.40,
 ) -> None:
     """トンボ (コーナー + センタートンボ) を CLIP STUDIO PAINT と同じ仕様で描画.
 
@@ -234,7 +311,7 @@ def _draw_trim_marks(
     segs.append(((cx_right, cy_mid - half), (cx_right, cy_mid + half)))
     segs.append(((cx_right - half, cy_mid), (cx_right + half, cy_mid)))
 
-    _draw_line_segments(segs, color, line_width=line_width)
+    _draw_segments_mm(segs, color, width_mm=line_width_mm)
 
 
 def _draw_frame_with_hole(outer: Rect, inner: Rect, color: tuple[float, float, float, float]) -> None:
@@ -419,10 +496,10 @@ def _draw_balloons(page, ox_mm: float = 0.0, oy_mm: float = 0.0) -> None:
         for tail in getattr(entry, "tails", []):
             _draw_balloon_tail(rect, tail, fill, line, line_width)
 
-        # アクティブハイライト
+        # アクティブハイライト (ズーム連動)
         if i == active_idx:
             highlight = rect.inset(-1.0)
-            _draw_rect_outline(highlight, (1.0, 0.6, 0.0, 0.9), line_width=2.0)
+            _draw_rect_outline(highlight, (1.0, 0.6, 0.0, 0.9), width_mm=0.50)
 
 
 # ---------- フキダシ本体 / しっぽの幾何 ----------
@@ -749,12 +826,12 @@ def _draw_texts(page, ox_mm: float = 0.0, oy_mm: float = 0.0, context=None) -> N
         )
         # 白い下敷き (本文を読みやすくするため半透明白)
         _draw_rect_fill(rect, (1.0, 1.0, 1.0, 0.55))
-        # ガイド枠線
+        # ガイド枠線 (ズーム連動)
         color = (0.2, 0.7, 1.0, 1.0) if entry.parent_balloon_id else (0.95, 0.85, 0.1, 1.0)
-        _draw_rect_outline(rect, color, line_width=1.5)
+        _draw_rect_outline(rect, color, width_mm=0.30)
         if i == active_idx:
             highlight = rect.inset(-1.0)
-            _draw_rect_outline(highlight, (1.0, 0.6, 0.0, 1.0), line_width=2.0)
+            _draw_rect_outline(highlight, (1.0, 0.6, 0.0, 1.0), width_mm=0.50)
         # 本文 blf 描画は POST_PIXEL handler (_draw_texts_pixel) で実行
 
 
@@ -827,34 +904,67 @@ def _draw_panels(page, ox_mm: float = 0.0, oy_mm: float = 0.0) -> None:
     """ページ内のコマ枠・白フチを Z 順に従って描画.
 
     Z順序昇順 (背面→手前) で描画することで重なり時も正しく表示される。
-    自動くり抜きは Phase 2 段階では未実装 (塗りつぶし描画ではなく枠線の
-    みのため Z 重なりでも視覚的には問題なし)。本格的なクリッピングは
-    Phase 2.5 で実装。
+    rect / polygon の両形状をサポート (枠線カット後は polygon になる)。
+    自動くり抜きは Phase 2 段階では未実装。
     """
     sorted_panels = sorted(page.panels, key=lambda p: p.z_order)
     for entry in sorted_panels:
-        rect = _panel_rect(entry)
-        if rect is None:
+        # ポリゴン頂点リスト (mm) を取得 — rect なら 4 隅、polygon なら vertices
+        if entry.shape_type == "rect":
+            poly = [
+                (entry.rect_x_mm, entry.rect_y_mm),
+                (entry.rect_x_mm + entry.rect_width_mm, entry.rect_y_mm),
+                (entry.rect_x_mm + entry.rect_width_mm,
+                 entry.rect_y_mm + entry.rect_height_mm),
+                (entry.rect_x_mm, entry.rect_y_mm + entry.rect_height_mm),
+            ]
+        elif entry.shape_type == "polygon" and len(entry.vertices) >= 3:
+            poly = [(v.x_mm, v.y_mm) for v in entry.vertices]
+        else:
             continue
+        # ページオフセットを加算
         if ox_mm != 0.0 or oy_mm != 0.0:
-            rect = Rect(rect.x + ox_mm, rect.y + oy_mm, rect.width, rect.height)
-        # 白フチ (枠線の外側)
+            poly = [(x + ox_mm, y + oy_mm) for x, y in poly]
+        # 白フチ (枠線の外側) — 矩形のみ簡易対応 (polygon は外接矩形で近似)
         wm = entry.white_margin
         if wm.enabled and wm.width_mm > 0.0:
-            outer = rect.inset(-wm.width_mm)
+            xs = [p[0] for p in poly]
+            ys = [p[1] for p in poly]
+            outer = Rect(
+                min(xs) - wm.width_mm, min(ys) - wm.width_mm,
+                (max(xs) - min(xs)) + 2 * wm.width_mm,
+                (max(ys) - min(ys)) + 2 * wm.width_mm,
+            )
             color = (
-                float(wm.color[0]),
-                float(wm.color[1]),
-                float(wm.color[2]),
-                float(wm.color[3]),
+                float(wm.color[0]), float(wm.color[1]),
+                float(wm.color[2]), float(wm.color[3]),
             )
             _draw_rect_fill(outer, color)
-        # 枠線
+        # 枠線 (mm 単位の太さ = ズーム連動、紙に追従)
+        # 辺ごとに描画 (edge_styles に個別 override があればそれを優先)
         b = entry.border
         if b.visible:
-            color = (float(b.color[0]), float(b.color[1]), float(b.color[2]), float(b.color[3]))
-            line_width = max(1.0, b.width_mm * 2.0)  # mm→画面線幅の暫定換算
-            _draw_rect_outline(rect, color, line_width=line_width)
+            base_color = (
+                float(b.color[0]), float(b.color[1]),
+                float(b.color[2]), float(b.color[3]),
+            )
+            base_width = max(0.1, float(b.width_mm))
+            # edge_styles を index 辞書化
+            override_map = {int(s.edge_index): s for s in entry.edge_styles}
+            n = len(poly)
+            for i in range(n):
+                seg = (poly[i], poly[(i + 1) % n])
+                style = override_map.get(i)
+                if style is not None:
+                    color = (
+                        float(style.color[0]), float(style.color[1]),
+                        float(style.color[2]), float(style.color[3]),
+                    )
+                    w = max(0.1, float(style.width_mm))
+                else:
+                    color = base_color
+                    w = base_width
+                _draw_segments_mm([seg], color, width_mm=w)
 
 
 def _translate_rect(r: Rect, ox_mm: float, oy_mm: float) -> Rect:
@@ -930,14 +1040,16 @@ def _draw_page_overlay(
         color = (r, g, b, alpha)
         _draw_frame_with_hole(canvas_r, safe_r, color)
 
-    # 枠線群
-    _draw_rect_outline(canvas_r, (0.4, 0.4, 0.4, 0.8), line_width=1.0)
-    # 裁ち落とし枠 (= 仕上がり枠 + 裁ち落とし幅) を破線風の細線で描画
+    # 枠線群 (mm 単位の太さ = ズーム連動、紙に追従)
+    # B4 257×364mm の全紙ビューでは 1mm ≈ 数 px なので、視認用に 0.3-0.6mm
+    # の太さで描画する (印刷用「実線太さ」より太いがビューポート視認性優先)
+    _draw_rect_outline(canvas_r, (0.4, 0.4, 0.4, 0.8), width_mm=0.30)
+    # 裁ち落とし枠 (= 仕上がり枠 + 裁ち落とし幅)
     if paper.bleed_mm > 0.0:
-        _draw_rect_outline(bleed_r, (0.6, 0.4, 0.4, 0.7), line_width=1.0)
-    _draw_rect_outline(finish_r, (0.8, 0.2, 0.2, 0.9), line_width=1.5)
-    _draw_rect_outline(inner_r, (0.2, 0.6, 0.9, 0.9), line_width=1.0)
-    _draw_rect_outline(safe_r, (0.2, 0.8, 0.4, 0.6), line_width=1.0)
+        _draw_rect_outline(bleed_r, (0.6, 0.4, 0.4, 0.7), width_mm=0.30)
+    _draw_rect_outline(finish_r, (0.8, 0.2, 0.2, 0.9), width_mm=0.50)
+    _draw_rect_outline(inner_r, (0.2, 0.6, 0.9, 0.9), width_mm=0.35)
+    _draw_rect_outline(safe_r, (0.2, 0.8, 0.4, 0.6), width_mm=0.30)
     # トンボ (四隅 + 各辺中央センタートンボ) を仕上がり枠 / 裁ち落とし枠基準で描画
     if paper.bleed_mm > 0.0:
         _draw_trim_marks(finish_r, bleed_r)
@@ -1072,9 +1184,18 @@ def _draw_text_at_position(context, anchor_rect, item, text: str) -> None:
             and -200 < coord.y < region.height + 200):
         return
 
-    # フォントサイズ (pt) → px の概算 (ビューポート視認性優先で約 2.5x)
+    # フォントサイズ (Q 数 = 0.25mm 単位) → 画面 px。ズームに連動するよう
+    # 現在のビューポートで「1 mm が画面で何 px か」を実測してかける。
+    from ..utils.geom import q_to_mm
+    o0 = location_3d_to_region_2d(region, rv3d, Vector((0.0, 0.0, 0.0)))
+    o1 = location_3d_to_region_2d(region, rv3d, Vector((mm_to_m(1.0), 0.0, 0.0)))
+    if o0 is not None and o1 is not None:
+        px_per_mm = abs(float(o1.x) - float(o0.x))
+    else:
+        px_per_mm = 3.78  # 96dpi 相当の概算 fallback
+    size_mm = q_to_mm(float(item.font_size_q))
+    size_px = max(6, int(size_mm * max(px_per_mm, 0.1)))
     font_id = _get_jp_font_id()
-    size_px = max(8, int(float(item.font_size_pt) * 2.5))
     try:
         blf.size(font_id, size_px)
     except Exception:  # noqa: BLE001
@@ -1166,11 +1287,11 @@ def _draw_callback() -> None:
                     ox_mm=ox, oy_mm=oy, draw_image_layers=False,
                     is_left_half=left_half,
                 )
-                # アクティブページにハイライト枠
+                # アクティブページにハイライト枠 (ズーム連動)
                 if i == active_idx:
                     canvas_r = _translate_rect(rects.canvas, ox, oy)
                     highlight = canvas_r.inset(-5.0)
-                    _draw_rect_outline(highlight, (1.0, 0.85, 0.0, 0.9), line_width=3.0)
+                    _draw_rect_outline(highlight, (1.0, 0.85, 0.0, 0.9), width_mm=1.00)
         else:
             from ..utils.page_grid import (
                 is_left_half_page as _is_left_half,

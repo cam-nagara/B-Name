@@ -90,6 +90,12 @@ class BNAME_OT_enter_panel_mode(Operator):
         )
 
     def invoke(self, context, event):
+        # Blender が Object モード以外 (例: GP 描画モード PAINT_GREASE_PENCIL,
+        # Edit モード等) のときはダブルクリックを譲る (描画ストロークなどに干渉しない)。
+        cur_mode = getattr(context, "mode", "")
+        if cur_mode != "OBJECT":
+            print(f"[B-Name][OP] enter_panel_mode: skip (context.mode={cur_mode!r})")
+            return {"PASS_THROUGH"}
         print(f"[B-Name][OP] enter_panel_mode.invoke event.type={event.type} value={event.value}"
               f" poll_ok={self.__class__.poll(context)}")
         # ダブルクリックからの起動: マウス直下のコマへ active をフォーカス

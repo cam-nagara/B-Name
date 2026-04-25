@@ -45,11 +45,15 @@ class BNameDisplayItem(bpy.types.PropertyGroup):
         items=_POSITION_ITEMS,
         default="bottom-left",
     )
-    font_size_pt: FloatProperty(  # type: ignore[valid-type]
-        name="フォントサイズ (pt)",
-        default=7.0,
+    # フォントサイズは Q 数 (写植単位、1 Q = 0.25 mm) で保持。
+    # 既定値 10 Q (= 2.5 mm ≈ 7.087 pt) はマンガの作品情報・ノンブルでよく使われる
+    # 標準サイズに近い (写植由来の "10 級" は 2.5mm)。
+    font_size_q: FloatProperty(  # type: ignore[valid-type]
+        name="フォントサイズ (Q)",
+        description="文字サイズを Q 数 (1 Q = 0.25 mm) で指定",
+        default=20.0,
         min=1.0,
-        soft_max=72.0,
+        soft_max=200.0,
     )
     color: FloatVectorProperty(  # type: ignore[valid-type]
         name="色",

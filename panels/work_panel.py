@@ -68,7 +68,7 @@ def _draw_display_item(layout, label: str, item) -> None:
     sub = row.row(align=True)
     sub.enabled = item.enabled
     sub.prop(item, "position", text="")
-    sub.prop(item, "font_size_pt", text="")
+    sub.prop(item, "font_size_q", text="")
 
 
 _CLASSES = (

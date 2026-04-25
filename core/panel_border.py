@@ -12,6 +12,7 @@ from bpy.props import (
     EnumProperty,
     FloatProperty,
     FloatVectorProperty,
+    IntProperty,
     PointerProperty,
     StringProperty,
 )
@@ -49,7 +50,7 @@ class BNameBorderEdgeOverride(bpy.types.PropertyGroup):
     )
     width_mm: FloatProperty(  # type: ignore[valid-type]
         name="線幅 (mm)",
-        default=0.8,
+        default=0.5,
         min=0.0,
         soft_max=10.0,
     )
@@ -77,7 +78,7 @@ class BNamePanelBorder(bpy.types.PropertyGroup):
     )
     width_mm: FloatProperty(  # type: ignore[valid-type]
         name="線幅 (mm)",
-        default=0.8,
+        default=0.5,
         min=0.0,
         soft_max=10.0,
     )
@@ -155,11 +156,42 @@ class BNamePanelWhiteMargin(bpy.types.PropertyGroup):
     edge_left: PointerProperty(type=BNameWhiteMarginEdgeOverride)  # type: ignore[valid-type]
 
 
+class BNamePanelEdgeStyle(bpy.types.PropertyGroup):
+    """edge_index ベースの個別辺スタイル (多角形コマ対応).
+
+    枠線選択ツールで個別の辺をクリック選択した際、その辺だけの色・太さを
+    オーバーライドするために使う。``BNameBorderEdgeOverride`` (上下左右の
+    固定 4 辺) と異なり、polygon のように任意辺数のコマで edge_index を
+    キーに辺を指定する。
+    """
+
+    edge_index: IntProperty(  # type: ignore[valid-type]
+        name="辺 index",
+        default=0,
+        min=0,
+    )
+    width_mm: FloatProperty(  # type: ignore[valid-type]
+        name="線幅 (mm)",
+        default=0.5,
+        min=0.0,
+        soft_max=10.0,
+    )
+    color: FloatVectorProperty(  # type: ignore[valid-type]
+        name="線色",
+        subtype="COLOR",
+        size=4,
+        default=(0.0, 0.0, 0.0, 1.0),
+        min=0.0,
+        max=1.0,
+    )
+
+
 _CLASSES = (
     BNameBorderEdgeOverride,
     BNamePanelBorder,
     BNameWhiteMarginEdgeOverride,
     BNamePanelWhiteMargin,
+    BNamePanelEdgeStyle,
 )
 
 

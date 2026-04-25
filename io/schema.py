@@ -116,7 +116,7 @@ def display_item_to_dict(item) -> dict[str, Any]:
     return {
         "enabled": bool(item.enabled),
         "position": item.position,
-        "fontSizePt": round(item.font_size_pt, 2),
+        "fontSizeQ": round(item.font_size_q, 2),
         "color": color_to_hex(item.color),
     }
 
@@ -134,7 +134,14 @@ def display_item_from_dict(item, data: dict[str, Any]) -> None:
     item.enabled = bool(data.get("enabled", False))
     pos = data.get("position", "bottom-left")
     item.position = _DISPLAY_POSITION_MIGRATE.get(pos, pos)
-    item.font_size_pt = float(data.get("fontSizePt", 7.0))
+    # フォントサイズ: Q 数優先 (新)、旧 fontSizePt があれば pt → Q に変換
+    if "fontSizeQ" in data:
+        item.font_size_q = float(data["fontSizeQ"])
+    elif "fontSizePt" in data:
+        from ..utils.geom import pt_to_q
+        item.font_size_q = float(pt_to_q(float(data["fontSizePt"])))
+    else:
+        item.font_size_q = 20.0
     item.color = hex_to_rgba(data.get("color", "#000000"))
 
 
@@ -440,6 +447,15 @@ def panel_entry_to_dict(entry) -> dict[str, Any]:
         "overlapClipping": bool(entry.overlap_clipping),
         "border": panel_border_to_dict(entry.border),
         "whiteMargin": panel_white_margin_to_dict(entry.white_margin),
+        "edgeStyles": [
+            {
+                "edgeIndex": int(s.edge_index),
+                "widthMm": round(s.width_mm, 3),
+                "color": color_to_hex(s.color),
+                "colorAlpha": round(s.color[3], 3),
+            }
+            for s in entry.edge_styles
+        ],
         "layerRefs": [r.layer_id for r in entry.layer_refs],
         "panelGap": {
             "verticalMm": round(entry.panel_gap_vertical_mm, 3),
@@ -470,6 +486,13 @@ def panel_entry_from_dict(entry, data: dict[str, Any]) -> None:
     entry.overlap_clipping = bool(data.get("overlapClipping", True))
     panel_border_from_dict(entry.border, data.get("border", {}))
     panel_white_margin_from_dict(entry.white_margin, data.get("whiteMargin", {}))
+    entry.edge_styles.clear()
+    for st in data.get("edgeStyles", []) or []:
+        es = entry.edge_styles.add()
+        es.edge_index = int(st.get("edgeIndex", 0))
+        es.width_mm = float(st.get("widthMm", 0.5))
+        alpha = float(st.get("colorAlpha", 1.0))
+        es.color = hex_to_rgba(st.get("color", "#000000"), alpha)
     entry.layer_refs.clear()
     for lid in data.get("layerRefs", []):
         ref = entry.layer_refs.add()

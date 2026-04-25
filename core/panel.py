@@ -21,7 +21,11 @@ from bpy.props import (
 )
 
 from ..utils import log
-from .panel_border import BNamePanelBorder, BNamePanelWhiteMargin
+from .panel_border import (
+    BNamePanelBorder,
+    BNamePanelEdgeStyle,
+    BNamePanelWhiteMargin,
+)
 
 _logger = log.get_logger(__name__)
 
@@ -95,6 +99,8 @@ class BNamePanelEntry(bpy.types.PropertyGroup):
     # --- 枠線・白フチ ---
     border: PointerProperty(type=BNamePanelBorder)  # type: ignore[valid-type]
     white_margin: PointerProperty(type=BNamePanelWhiteMargin)  # type: ignore[valid-type]
+    # 辺ごと (edge_index) の個別オーバーライド (枠線選択ツールで設定)
+    edge_styles: CollectionProperty(type=BNamePanelEdgeStyle)  # type: ignore[valid-type]
 
     # --- 紐づけ ---
     layer_refs: CollectionProperty(type=BNameLayerRef)  # type: ignore[valid-type]

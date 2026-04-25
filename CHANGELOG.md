@@ -3,6 +3,33 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-26 — 枠線編集ツール群 / Q数フォントサイズ / 用紙プリセット改良
+
+### 追加
+- **枠線カットツール** (`bname.panel_knife_cut`、F キー) — CLIP STUDIO PAINT 互換の任意角度カット。Shift で軸ロック (水平/垂直)。ドラッグ範囲で対象コマを判定 (アクティブ非依存)、1 コマだけ対象化、連続カット可能、各カットを独立 undo step として記録、カット線方向に応じてコマ間隔 (上下/左右スキマ) を自動適用
+- **枠線選択ツール** (`bname.panel_edge_move`、G キー) — 辺/頂点をクリック選択 (シングル=辺、ダブル=枠線全体) してドラッグ移動。隣接コマと連動して gap_mm を維持。N パネルから個別辺の color/width を編集可能 (`edge_styles` CollectionProperty)
+- 辺中点に **三角ハンドル** 2 つを表示。クリックでその先の隣接コマ辺/基本枠/裁ち落とし枠まで panel を拡張。隣接コマと既に重なっている時は離れる方向の▲で gap 分のスキマを空け、離れている時は隣接方向の▲で gap=0 でピッタリ重ねる
+- **Q 数フォントサイズ** (写植由来、1 Q = 0.25 mm) — `BNameDisplayItem.font_size_q` (default 20.0) を追加。`utils/geom` に `q_to_mm` / `mm_to_q` / `q_to_pt` / `pt_to_q` を追加
+- **F キー Esc** で `bname.exit_panel_mode` をパネル編集モード中に発火 (3D View kc のみ)
+- 用紙プリセットドロップダウン (`WindowManager.bname_paper_preset_selector`) — 選択で即時適用
+- 衝突キー無効化機構 (`disable_conflicting_keys` / `restore_conflicting_keys`) — Fluent 等の他アドオンが addon kc に登録した F/G の単独キー kmi を起動時に検出して `active=False`、unregister 時に復元
+
+### 変更
+- ダブルクリックでコマ編集モード遷移は **Object モード時のみ** 発火 (GP 描画モード等では PASS_THROUGH)
+- panel border 線幅の既定値: 0.8 → **0.5** mm
+- 全 rect outline 描画を `_draw_rect_outline_mm` / `_draw_segments_mm` でズーム連動 (mm 単位太さ) に変更 — canvas 0.30, bleed 0.30, finish 0.50, inner_frame 0.35, safe 0.30, panel border は `border.width_mm`、トンボ 0.40
+- 用紙プリセット保存ダイアログのタイトル: 「作品プリセットとして保存」→「**用紙プリセットとして保存**」
+- 「見開き表示」(`is_spread_layout`) フラグを削除 — 死んだフラグ
+- 作品情報フォントサイズの内部単位を pt → Q に変更、JSON は旧 `fontSizePt` から自動マイグレート
+- modal 中の Ctrl+Z / Ctrl+Y を検知して `{"FINISHED", "PASS_THROUGH"}` 返却 — PropertyGroup 参照 stale による C レベル crash を回避
+- modal 中の他ショートカット (O / P / G / F / , / .) を割込み検知 → modal 終了して譲る (二重起動防止のため自身のキーは consume)
+
+### 修正
+- 枠線選択ツールの辺ドラッグ + ▲拡張で **隣接辺の角度を維持** — `_line_intersect` で「prev/next 辺の line と新 selected line の交点」に共有頂点を補正することで、斜めの辺が重なり/離れずに追従
+- `_do_extend` のスナップ仕様: bleed=1mm 外側、隣接コマ=ピッタリ or gap_mm 確保 (重なり状態と▲方向で自動切替)、基本枠=ピッタリ
+- panel polygon (cut 後の多角形) の overlay 描画対応 (`_draw_panels` で polygon 分岐)
+- knife_cut で同 panel の対辺を拡張先候補から除外 (細い panel での反転バグ回避)
+
 ## 2026-04-26 — 作品情報配置 / トンボ / ノド・小口バグ修正
 
 ### 追加

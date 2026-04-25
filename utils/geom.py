@@ -13,6 +13,11 @@ MM_PER_M = 1000.0
 INCH_PER_MM = 1.0 / 25.4
 PT_PER_INCH = 72.0
 PT_PER_MM = PT_PER_INCH * INCH_PER_MM  # ≈ 2.8346
+# Q (級数) は写植由来の文字サイズ単位。1 Q = 0.25 mm (= 1/4 mm)。
+# 写植機の歯車刻みが 0.25mm だったことに由来し、現在も DTP やマンガ・出版で
+# 文字サイズの基準として使われる。pt との換算: 1 Q = 0.25 mm × PT_PER_MM ≈ 0.7087 pt
+MM_PER_Q = 0.25
+PT_PER_Q = MM_PER_Q * PT_PER_MM  # ≈ 0.7087
 
 
 @dataclass(frozen=True)
@@ -74,6 +79,22 @@ def pt_to_mm(pt: float) -> float:
 
 def mm_to_pt(mm: float) -> float:
     return mm * PT_PER_MM
+
+
+def q_to_mm(q: float) -> float:
+    return q * MM_PER_Q
+
+
+def mm_to_q(mm: float) -> float:
+    return mm / MM_PER_Q
+
+
+def q_to_pt(q: float) -> float:
+    return q * PT_PER_Q
+
+
+def pt_to_q(pt: float) -> float:
+    return pt / PT_PER_Q
 
 
 # ---------- 用紙座標計算 ----------

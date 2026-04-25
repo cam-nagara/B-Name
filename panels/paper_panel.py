@@ -31,12 +31,12 @@ class BNAME_PT_paper(Panel):
             return
         p = work.paper
 
-        # プリセット操作
+        # プリセット操作 (ドロップダウンから選択 → 即時適用)
         row = layout.row(align=True)
-        row.label(text=f"プリセット: {p.preset_name or '(カスタム)'}")
-        row = layout.row(align=True)
-        row.operator("bname.paper_preset_apply", text="適用", icon="PRESET")
-        row.operator("bname.paper_preset_save_local", text="保存", icon="FILE_TICK")
+        row.label(text="プリセット", icon="PRESET")
+        wm = context.window_manager
+        row.prop(wm, "bname_paper_preset_selector", text="")
+        row.operator("bname.paper_preset_save_local", text="", icon="FILE_TICK")
 
         box = layout.box()
         box.label(text="キャンバス")
