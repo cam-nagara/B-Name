@@ -141,13 +141,15 @@ class BNAME_OT_work_new(Operator, ExportHelper):
             return {"CANCELLED"}
 
         # --- 作成直後の UX 整備 ---
-        # 0) 3D ビューポート solid 背景を用紙色 (白) に変更
+        # 0) 旧バージョンで白く書き換えられた可能性のあるビューポート背景を
+        #    テーマ既定 (灰色) に戻す。用紙領域は overlay の PRE_VIEW で
+        #    不透明白塗りされる。
         try:
             from ..ui import overlay as _overlay
 
-            _overlay.apply_paper_background_color(context)
+            _overlay.reset_viewport_background_to_theme(context)
         except Exception:  # noqa: BLE001
-            _logger.exception("work_new: apply_paper_background_color failed")
+            _logger.exception("work_new: reset_viewport_background_to_theme failed")
 
         # 1) ビューポートを全ページフィット (overview モードを維持したままキャンバス可視化)
         try:
@@ -223,13 +225,13 @@ class BNAME_OT_work_open(Operator, ImportHelper):
             blend_io.open_work_blend(work_dir)
             # load_post ハンドラが JSON 再同期と mode/stem の再設定を担う
 
-        # 3D ビューポート背景を用紙色に
+        # 旧バージョンで白く書き換えられたビューポート背景をテーマ既定に戻す
         try:
             from ..ui import overlay as _overlay
 
-            _overlay.apply_paper_background_color(context)
+            _overlay.reset_viewport_background_to_theme(context)
         except Exception:  # noqa: BLE001
-            _logger.exception("work_open: apply_paper_background_color failed")
+            _logger.exception("work_open: reset_viewport_background_to_theme failed")
 
         self.report({"INFO"}, f"作品を開きました: {work_dir.name}")
         return {"FINISHED"}

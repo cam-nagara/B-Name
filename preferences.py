@@ -59,6 +59,20 @@ def _on_gpencil_follow_changed(prefs) -> None:
         pass
 
 
+def _on_keymap_settings_changed(self, _context) -> None:
+    """preferences のキーマップ設定が変わったら addon kc を再構築する.
+
+    register/unregister 中に呼ばれた場合は keymap モジュールが未初期化の
+    可能性があるので例外を握り潰す。
+    """
+    try:
+        from .keymap import keymap as _kmap
+
+        _kmap.rebuild_keymap_from_prefs()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class BNamePreferences(bpy.types.AddonPreferences):
     bl_idname = ADDON_ID
 
@@ -114,6 +128,79 @@ class BNamePreferences(bpy.types.AddonPreferences):
         update=lambda self, _ctx: _on_gpencil_follow_changed(self),
     )
 
+    # ---------- ショートカットキーのカスタマイズ ----------
+    # 各機能ごとに「キー文字列 + Shift/Ctrl/Alt 修飾」を保持する。
+    # キー文字列は Blender の Event.type 名 (例: "SPACE", "O", "P",
+    # "COMMA", "PERIOD", "LEFTMOUSE", "WHEELUPMOUSE")。
+    # 値が変わると _on_keymap_settings_changed が addon kc を作り直す。
+
+    key_navigate: StringProperty(  # type: ignore[valid-type]
+        name="ナビゲート (パン/回転/ズーム統合)",
+        description="このキー押下中の LMB ドラッグでパン/回転/ズーム",
+        default="SPACE",
+        update=_on_keymap_settings_changed,
+    )
+
+    key_set_mode_object: StringProperty(  # type: ignore[valid-type]
+        name="オブジェクトモード切替",
+        default="O",
+        update=_on_keymap_settings_changed,
+    )
+    mod_set_mode_object_shift: BoolProperty(  # type: ignore[valid-type]
+        name="Shift", default=False, update=_on_keymap_settings_changed
+    )
+    mod_set_mode_object_ctrl: BoolProperty(  # type: ignore[valid-type]
+        name="Ctrl", default=False, update=_on_keymap_settings_changed
+    )
+    mod_set_mode_object_alt: BoolProperty(  # type: ignore[valid-type]
+        name="Alt", default=False, update=_on_keymap_settings_changed
+    )
+
+    key_set_mode_draw: StringProperty(  # type: ignore[valid-type]
+        name="描画モード切替",
+        default="P",
+        update=_on_keymap_settings_changed,
+    )
+    mod_set_mode_draw_shift: BoolProperty(  # type: ignore[valid-type]
+        name="Shift", default=False, update=_on_keymap_settings_changed
+    )
+    mod_set_mode_draw_ctrl: BoolProperty(  # type: ignore[valid-type]
+        name="Ctrl", default=False, update=_on_keymap_settings_changed
+    )
+    mod_set_mode_draw_alt: BoolProperty(  # type: ignore[valid-type]
+        name="Alt", default=False, update=_on_keymap_settings_changed
+    )
+
+    key_page_next: StringProperty(  # type: ignore[valid-type]
+        name="次のページ",
+        default="COMMA",
+        update=_on_keymap_settings_changed,
+    )
+    mod_page_next_shift: BoolProperty(  # type: ignore[valid-type]
+        name="Shift", default=False, update=_on_keymap_settings_changed
+    )
+    mod_page_next_ctrl: BoolProperty(  # type: ignore[valid-type]
+        name="Ctrl", default=False, update=_on_keymap_settings_changed
+    )
+    mod_page_next_alt: BoolProperty(  # type: ignore[valid-type]
+        name="Alt", default=False, update=_on_keymap_settings_changed
+    )
+
+    key_page_prev: StringProperty(  # type: ignore[valid-type]
+        name="前のページ",
+        default="PERIOD",
+        update=_on_keymap_settings_changed,
+    )
+    mod_page_prev_shift: BoolProperty(  # type: ignore[valid-type]
+        name="Shift", default=False, update=_on_keymap_settings_changed
+    )
+    mod_page_prev_ctrl: BoolProperty(  # type: ignore[valid-type]
+        name="Ctrl", default=False, update=_on_keymap_settings_changed
+    )
+    mod_page_prev_alt: BoolProperty(  # type: ignore[valid-type]
+        name="Alt", default=False, update=_on_keymap_settings_changed
+    )
+
     def draw(self, context) -> None:  # noqa: D401, ANN001
         layout = self.layout
 
@@ -132,6 +219,36 @@ class BNamePreferences(bpy.types.AddonPreferences):
         sub.enabled = self.keymap_enabled
         sub.prop(self, "right_click_eyedropper")
         sub.prop(self, "spacebar_preset")
+
+        # ショートカットキー カスタマイズ
+        kbox = layout.box()
+        kbox.label(text="ショートカットキー (変更後は自動反映)")
+        kbox.enabled = self.keymap_enabled
+
+        row = kbox.row(align=True)
+        row.label(text="ナビゲート (パン/回転/ズーム)", icon="ORIENTATION_VIEW")
+        row.prop(self, "key_navigate", text="")
+
+        for label, key_attr, mod_prefix, icon in (
+            ("オブジェクトモード", "key_set_mode_object", "mod_set_mode_object", "OBJECT_DATAMODE"),
+            ("描画モード", "key_set_mode_draw", "mod_set_mode_draw", "GREASEPENCIL"),
+            ("次のページ", "key_page_next", "mod_page_next", "TRIA_RIGHT"),
+            ("前のページ", "key_page_prev", "mod_page_prev", "TRIA_LEFT"),
+        ):
+            row = kbox.row(align=True)
+            row.label(text=label, icon=icon)
+            row.prop(self, f"{mod_prefix}_shift", toggle=True)
+            row.prop(self, f"{mod_prefix}_ctrl", toggle=True)
+            row.prop(self, f"{mod_prefix}_alt", toggle=True)
+            row.prop(self, key_attr, text="")
+
+        kbox.separator()
+        info = kbox.column(align=True)
+        info.scale_y = 0.85
+        info.label(text="キー名は Blender のイベント名 (例: SPACE, O, P, COMMA, PERIOD, A〜Z, F1〜F12)", icon="INFO")
+        info.label(text="ナビゲートのモード切替はキー押下中の Shift=回転 / Ctrl=ズーム (固定)")
+        info.label(text="ズーム中の LMB クリック=25%イン / Alt+LMB クリック=25%アウト (固定)")
+        info.label(text="描画モード中: Space=ナビゲート / C=ブラシシェルフ表示切替 (Blender既定の入れ替え)")
 
         box = layout.box()
         box.label(text="アセットライブラリ登録ガイド")

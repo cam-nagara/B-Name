@@ -63,6 +63,13 @@ def _obj_subpage_offset_mm(obj) -> tuple[float, float]:
         return 0.0, 0.0
 
 
+# Grease Pencil オブジェクトを用紙より手前 (z>0) に配置するためのオフセット (m).
+# 紙塗りは overlay (z=0 平面) に描画されるため、GP がそれより上に乗らないと
+# Solid 描画の Z 順で GP が紙の背面になり「線が消える」現象が発生する。
+# 0.001 m = 1 mm 程度上げれば GP が確実に前に来る。
+GP_Z_LIFT_M = 0.001
+
+
 def apply_page_collection_transforms(context, work) -> int:
     """全ページ Collection の location を grid offset で再計算.
 
@@ -72,6 +79,9 @@ def apply_page_collection_transforms(context, work) -> int:
 
     per-object の subpage offset (見開きの右半分用) があれば grid offset に
     加算する。これにより見開きページで 2 GP (左/右) を正しい位置に並置できる。
+
+    GP オブジェクトは ``GP_Z_LIFT_M`` (+1mm) 持ち上げて配置し、用紙塗り
+    (z=0) より確実に手前に来るようにする。
     """
     scene = context.scene if context else bpy.context.scene
     if scene is None or work is None:
@@ -85,7 +95,9 @@ def apply_page_collection_transforms(context, work) -> int:
         ox_mm, oy_mm = page_grid_offset_mm(i, cols, gap, cw, ch)
         for obj in coll.objects:
             sub_x, sub_y = _obj_subpage_offset_mm(obj)
-            new_offset = (mm_to_m(ox_mm + sub_x), mm_to_m(oy_mm + sub_y), 0.0)
+            # GP は用紙 (z=0) より手前に持ち上げる
+            z = GP_Z_LIFT_M if obj.type == "GREASEPENCIL" else 0.0
+            new_offset = (mm_to_m(ox_mm + sub_x), mm_to_m(oy_mm + sub_y), z)
             try:
                 obj.location = new_offset
             except Exception:  # noqa: BLE001

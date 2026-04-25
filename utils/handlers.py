@@ -181,7 +181,7 @@ def _bname_on_load_post(filepath_arg) -> None:  # signature: (str,) in Blender h
         work.loaded = True
         _sync_active_from_blend_path(scene, work, work_dir, blend_path)
         # work.blend を開いた場合のみ GP×ページ整合を確認・grid 再配置 +
-        # ビューポート背景色を用紙色に設定
+        # 旧バージョンで白く書き換えられた可能性のある solid 背景色をテーマ既定に戻す
         try:
             rel = blend_path.resolve().relative_to(work_dir.resolve())
             if len(rel.parts) == 1 and rel.parts[0] == paths.WORK_BLEND_NAME:
@@ -189,10 +189,10 @@ def _bname_on_load_post(filepath_arg) -> None:  # signature: (str,) in Blender h
                 try:
                     from ..ui import overlay as _overlay
 
-                    _overlay.apply_paper_background_color(bpy.context)
+                    _overlay.reset_viewport_background_to_theme(bpy.context)
                 except Exception:  # noqa: BLE001
                     _logger.exception(
-                        "load_post: apply_paper_background_color failed"
+                        "load_post: reset_viewport_background_to_theme failed"
                     )
         except ValueError:
             pass

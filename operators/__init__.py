@@ -17,6 +17,7 @@ from . import (
     panel_picker,  # noqa: F401 — ヘルパのみ (register 対象外)
     panel_vertex_edit_op,
     preset_op,
+    shortcut_op,
     snap_op,
     spread_op,
     text_op,
@@ -45,6 +46,7 @@ _MODULES = (
     io_op,
     gpencil_op,
     view_op,
+    shortcut_op,
 )
 
 

@@ -90,6 +90,8 @@ class BNAME_OT_enter_panel_mode(Operator):
         )
 
     def invoke(self, context, event):
+        print(f"[B-Name][OP] enter_panel_mode.invoke event.type={event.type} value={event.value}"
+              f" poll_ok={self.__class__.poll(context)}")
         # ダブルクリックからの起動: マウス直下のコマへ active をフォーカス
         hit = _resolve_panel_at_event(context, event)
         if hit is not None:

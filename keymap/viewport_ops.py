@@ -23,6 +23,7 @@ PRESS/RELEASE を何度も行える (複数回のドラッグ操作が可能)。
 from __future__ import annotations
 
 import math
+import time
 
 import bpy
 from bpy.props import EnumProperty
@@ -86,23 +87,425 @@ def _in_region(region, mx_abs: float, my_abs: float) -> bool:
     )
 
 
-# ---------- パン ----------
+# ---------- 統合ナビゲート (パン / 回転 / ズーム) ----------
+
+
+_NAV_MODE_PAN = "PAN"
+_NAV_MODE_ROTATE = "ROTATE"
+_NAV_MODE_ZOOM = "ZOOM"
+
+_NAV_CURSOR = {
+    _NAV_MODE_PAN: "SCROLL_XY",
+    _NAV_MODE_ROTATE: "CROSSHAIR",
+    _NAV_MODE_ZOOM: "ZOOM_IN",
+}
+
+
+def _nav_mode_from_event(event) -> str:
+    """event の修飾キー状態から現在のナビゲートモードを判定.
+
+    優先順: Ctrl > Shift > 何もなし。両方押されている場合は Ctrl 優先 (ズーム)。
+    """
+    if event.ctrl:
+        return _NAV_MODE_ZOOM
+    if event.shift:
+        return _NAV_MODE_ROTATE
+    return _NAV_MODE_PAN
+
+
+class BNAME_OT_view_navigate(Operator):
+    """Space 押下中の統合ナビゲートモーダル.
+
+    Space 単体で起動し、modal 中の修飾キー状態に応じてパン/回転/ズームを
+    動的に切り替える:
+
+    - 修飾なし: パン (LMB ドラッグでビュー位置移動)
+    - Shift 押下中: 回転 (LMB ドラッグでビュー中心軸回転)
+    - Ctrl 押下中: ズーム (LMB 左右ドラッグでズーム; ピボット維持)
+
+    修飾キーは modal 中いつでも動的に切り替え可能。例えばパン (Space 単体) で
+    LMB ドラッグ中に Shift を押下すれば、その瞬間から回転モードに切り替わる。
+    キー組み合わせはキーマップに登録しない (Shift+Space は Blender 標準の
+    ``screen.screen_full_area`` と衝突するため、addon kc ではなく modal 側で
+    検知する方式に統一)。
+
+    ダブルクリック動作 (modal 中):
+    - パンモード時: 表示位置リセット + ページフィット
+    - 回転モード時: 回転リセット (TOP 正投影へ)
+    - ズームモード時: なし
+
+    Space リリースで modal 終了。
+    """
+
+    bl_idname = "bname.view_navigate"
+    bl_label = "B-Name ビューナビゲート"
+    bl_options = {"REGISTER"}
+
+    # ズームの感度 (1px ドラッグあたりの log スケール).
+    # 0.006 だと 1px 動くだけで 0.6% ズームし、マウスの 1px ジッターでも
+    # 目に見える震えになっていた。0.003 + デッドゾーンでブレを抑える。
+    _ZOOM_SENSITIVITY = 0.003
+    # この px 数未満の dx は無視 (ズーム開始位置周辺の手ブレ抑制)
+    _ZOOM_DEADZONE_PX = 3.0
+    # ダブルクリック判定の最大間隔 (秒). modal 中は Blender が
+    # DOUBLE_CLICK イベントを発火しないため自前で検出する。
+    _DOUBLE_CLICK_INTERVAL = 0.3
+    # クリック判定の最大移動距離 (px). PRESS から RELEASE までこれ以下
+    # しか動かなければ「クリック」、それを超えればドラッグ扱い。
+    _CLICK_MAX_TRAVEL_PX = 4.0
+    # ズームモード時のクリックステップ倍率 (25%)
+    _ZOOM_CLICK_STEP = 1.25
+
+    def invoke(self, context, event):
+        print(
+            f"[B-Name][OP] view_navigate.invoke shift={event.shift} ctrl={event.ctrl}"
+        )
+        area, region, rv3d = _find_view3d_window_region(context)
+        if area is None:
+            # 3D View 外で発火した場合 (Window キーマップ層から呼ばれた等) は
+            # 標準ショートカットに譲る。CANCELLED だと Blender はキーマップ評価
+            # を打ち切ってしまうので PASS_THROUGH を返す。
+            print("[B-Name][OP] view_navigate: VIEW_3D not in context -> PASS_THROUGH")
+            return {"PASS_THROUGH"}
+        self._area = area
+        self._region = region
+        self._rv3d = rv3d
+        self._dragging = False
+        self._mode = _nav_mode_from_event(event)
+        # パン用前回マウス位置 (region ローカル)
+        self._prev_mx = 0.0
+        self._prev_my = 0.0
+        # 回転用前回角度
+        self._prev_angle = 0.0
+        # ズーム用ドラッグ起点
+        self._zoom_start_mx = 0.0
+        self._zoom_start_my = 0.0
+        self._zoom_start_distance = float(rv3d.view_distance)
+        self._zoom_start_view_location = rv3d.view_location.copy()
+        self._zoom_start_world_pivot = rv3d.view_location.copy()
+        # 自前ダブルクリック判定用 (modal 中は Blender の DOUBLE_CLICK が
+        # 発火しないため、PRESS の連続性で検出する)
+        self._last_press_time = 0.0
+        # クリック判定 (PRESS→RELEASE 間の移動距離が _CLICK_MAX_TRAVEL_PX
+        # 以下なら「クリック」、それを超えればドラッグ確定)
+        self._press_mx = 0.0
+        self._press_my = 0.0
+        self._press_was_click = True
+
+        try:
+            context.window.cursor_modal_set(_NAV_CURSOR[self._mode])
+        except Exception:  # noqa: BLE001
+            pass
+        context.window_manager.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
+
+    def modal(self, context, event):
+        # Space リリースで終了 (修飾キーリリースでは終了しない — 動的切替のため)
+        if event.type == "SPACE" and event.value == "RELEASE":
+            return self._finish(context)
+
+        # 修飾キー押下/解放: 即時モード切替 (ドラッグ継続中ならドラッグ起点も更新)
+        if event.type in {"LEFT_SHIFT", "RIGHT_SHIFT", "LEFT_CTRL", "RIGHT_CTRL"}:
+            new_mode = _nav_mode_from_event(event)
+            if new_mode != self._mode:
+                self._switch_mode(context, new_mode, event)
+            return {"RUNNING_MODAL"}
+
+        # ダブルクリック (Blender 由来) は modal 中はほぼ発火しないが、
+        # 念のため拾えれば即リセット
+        if event.type == "LEFTMOUSE" and event.value == "DOUBLE_CLICK":
+            print(f"[B-Name][OP] view_navigate: DOUBLE_CLICK(blender) mode={self._mode}")
+            self._dragging = False
+            self._dispatch_reset(context)
+            return {"RUNNING_MODAL"}
+
+        if event.type == "LEFTMOUSE":
+            if event.value == "PRESS":
+                # 自前ダブルクリック検出: 前回 PRESS から短時間内なら reset
+                now = time.monotonic()
+                if (now - self._last_press_time) < self._DOUBLE_CLICK_INTERVAL:
+                    print(f"[B-Name][OP] view_navigate: DOUBLE_CLICK(synth) mode={self._mode}")
+                    self._dragging = False
+                    self._last_press_time = 0.0
+                    self._dispatch_reset(context)
+                    return {"RUNNING_MODAL"}
+                self._last_press_time = now
+                # クリック判定用に PRESS 位置を記録
+                self._press_mx, self._press_my = _to_region_local(
+                    self._region, event.mouse_x, event.mouse_y
+                )
+                self._press_was_click = True
+                self._begin_drag(event)
+                return {"RUNNING_MODAL"}
+            if event.value == "RELEASE":
+                self._dragging = False
+                # ズームモードでクリック (動かさず離した) ならステップズーム
+                if self._mode == _NAV_MODE_ZOOM and self._press_was_click:
+                    # Alt 押下中はズームアウト、それ以外はズームイン
+                    direction = "OUT" if event.alt else "IN"
+                    self._step_zoom_at_press(direction)
+                    self._region.tag_redraw()
+                return {"RUNNING_MODAL"}
+
+        if event.type == "MOUSEMOVE" and self._dragging:
+            mx, my = _to_region_local(self._region, event.mouse_x, event.mouse_y)
+            # クリック判定: PRESS 位置から閾値を超えて動いたらドラッグ確定
+            if self._press_was_click:
+                travel = math.hypot(mx - self._press_mx, my - self._press_my)
+                if travel > self._CLICK_MAX_TRAVEL_PX:
+                    self._press_was_click = False
+            if self._mode == _NAV_MODE_PAN:
+                self._apply_pan(mx, my)
+                self._prev_mx, self._prev_my = mx, my
+            elif self._mode == _NAV_MODE_ROTATE:
+                curr_angle = self._angle_at(mx, my)
+                delta = curr_angle - self._prev_angle
+                if delta > math.pi:
+                    delta -= 2 * math.pi
+                elif delta < -math.pi:
+                    delta += 2 * math.pi
+                self._apply_rotation(delta)
+                self._prev_angle = curr_angle
+            elif self._mode == _NAV_MODE_ZOOM:
+                # 絶対オフセット方式 (ドラッグ起点からの dx で都度再計算)
+                # 累積 delta 方式だとマウスの細かなブレが指数関数で増幅して
+                # 「すごくブレる」状態になっていた。
+                self._apply_zoom_absolute(mx)
+            self._region.tag_redraw()
+            return {"RUNNING_MODAL"}
+
+        return {"RUNNING_MODAL"}
+
+    # ---------- リセット振り分け ----------
+
+    def _dispatch_reset(self, context) -> None:
+        """現在のモードに応じてリセット動作を実行."""
+        if self._mode == _NAV_MODE_PAN:
+            self._reset_view(context)
+        elif self._mode == _NAV_MODE_ROTATE:
+            self._reset_rotation(context)
+        # ZOOM モードはダブルクリックリセット動作なし
+
+    # ---------- モード切替 ----------
+
+    def _switch_mode(self, context, new_mode: str, event) -> None:
+        self._mode = new_mode
+        try:
+            context.window.cursor_modal_set(_NAV_CURSOR[new_mode])
+        except Exception:  # noqa: BLE001
+            pass
+        # ドラッグ継続中なら現在位置を新モードの起点として再記録
+        # (これがないとモード切替の瞬間に「累積差分」が誤計算される)
+        if self._dragging:
+            self._reseed_drag(event)
+
+    def _reseed_drag(self, event) -> None:
+        mx, my = _to_region_local(self._region, event.mouse_x, event.mouse_y)
+        if self._mode == _NAV_MODE_PAN:
+            self._prev_mx, self._prev_my = mx, my
+        elif self._mode == _NAV_MODE_ROTATE:
+            self._prev_angle = self._angle_at(mx, my)
+        elif self._mode == _NAV_MODE_ZOOM:
+            self._zoom_start_mx = mx
+            self._zoom_start_my = my
+            self._zoom_start_distance = float(self._rv3d.view_distance)
+            self._zoom_start_view_location = self._rv3d.view_location.copy()
+            try:
+                self._zoom_start_world_pivot = _region_to_world(
+                    self._region, self._rv3d, mx, my
+                ).copy()
+            except Exception:  # noqa: BLE001
+                self._zoom_start_world_pivot = self._rv3d.view_location.copy()
+
+    def _begin_drag(self, event) -> None:
+        mx, my = _to_region_local(self._region, event.mouse_x, event.mouse_y)
+        if self._mode == _NAV_MODE_PAN:
+            self._prev_mx, self._prev_my = mx, my
+        elif self._mode == _NAV_MODE_ROTATE:
+            self._prev_angle = self._angle_at(mx, my)
+        elif self._mode == _NAV_MODE_ZOOM:
+            self._zoom_start_mx = mx
+            self._zoom_start_my = my
+            self._zoom_start_distance = float(self._rv3d.view_distance)
+            self._zoom_start_view_location = self._rv3d.view_location.copy()
+            try:
+                self._zoom_start_world_pivot = _region_to_world(
+                    self._region, self._rv3d, mx, my
+                ).copy()
+            except Exception:  # noqa: BLE001
+                self._zoom_start_world_pivot = self._rv3d.view_location.copy()
+        self._dragging = True
+
+    # ---------- パン ----------
+
+    def _apply_pan(self, mx: float, my: float) -> None:
+        try:
+            w_prev = _region_to_world(self._region, self._rv3d, self._prev_mx, self._prev_my)
+            w_curr = _region_to_world(self._region, self._rv3d, mx, my)
+            self._rv3d.view_location += (w_prev - w_curr)
+        except Exception:  # noqa: BLE001
+            _logger.exception("view_navigate.pan: apply failed")
+
+    def _reset_view(self, context) -> None:
+        print("[B-Name][OP] view_navigate._reset_view called")
+        rv3d = self._rv3d
+        rv3d.view_location = Vector((0.0, 0.0, 0.0))
+        fit_ok = False
+        try:
+            with bpy.context.temp_override(
+                window=context.window, area=self._area, region=self._region
+            ):
+                result = bpy.ops.bname.view_fit_page("INVOKE_DEFAULT")
+                fit_ok = "FINISHED" in result
+                print(f"[B-Name][OP] view_fit_page result={result}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[B-Name][OP] view_fit_page failed: {exc!r}")
+        if not fit_ok:
+            # フォールバック: 経験的な ortho 距離 (mm スケール換算で約ページ高さ)
+            try:
+                rv3d.view_perspective = "ORTHO"
+                rv3d.view_distance = 0.4
+            except Exception:  # noqa: BLE001
+                pass
+        self._region.tag_redraw()
+
+    # ---------- 回転 ----------
+
+    def _angle_at(self, mx: float, my: float) -> float:
+        cx = self._region.width / 2.0
+        cy = self._region.height / 2.0
+        return math.atan2(my - cy, mx - cx)
+
+    def _apply_rotation(self, delta_angle: float) -> None:
+        if abs(delta_angle) < 1e-9:
+            return
+        try:
+            # マウスの動きと回転方向を一致させるため符号反転.
+            # (旧実装は world Z 軸正方向で回していたため、画面上の動きと
+            # 逆方向に回って見えていた。)
+            rot = Quaternion((0.0, 0.0, 1.0), -delta_angle)
+            self._rv3d.view_rotation = rot @ self._rv3d.view_rotation
+        except Exception:  # noqa: BLE001
+            _logger.exception("view_navigate.rotate: apply failed")
+
+    def _reset_rotation(self, context) -> None:
+        print("[B-Name][OP] view_navigate._reset_rotation called")
+        rv3d = self._rv3d
+        try:
+            with bpy.context.temp_override(
+                window=context.window, area=self._area, region=self._region
+            ):
+                result = bpy.ops.view3d.view_axis(type="TOP")
+                print(f"[B-Name][OP] view_axis TOP result={result}")
+            if rv3d.view_perspective != "ORTHO":
+                rv3d.view_perspective = "ORTHO"
+        except Exception as exc:  # noqa: BLE001
+            print(f"[B-Name][OP] view_axis TOP failed: {exc!r}")
+            _logger.exception("view_navigate.rotate: reset failed")
+        self._region.tag_redraw()
+
+    # ---------- ズーム (絶対オフセット方式) ----------
+
+    def _apply_zoom_absolute(self, mx: float) -> None:
+        """ドラッグ起点からの絶対 dx で view_distance を再計算しブレを防ぐ.
+
+        - デッドゾーン: |dx| が _ZOOM_DEADZONE_PX 未満なら無視 (手ブレ吸収)
+        - rv3d.update(): view_distance/view_location 書換後に view_matrix を
+          強制再計算してから _region_to_world を呼ぶ。これがないと古い行列で
+          new_pivot_world を計算してしまい、ピボット維持の補正がフレーム
+          ごとに小さくずれてブレに見える。
+        """
+        dx = mx - self._zoom_start_mx
+        if abs(dx) < self._ZOOM_DEADZONE_PX:
+            # 起点状態を維持 (差分 0 と等価)
+            try:
+                self._rv3d.view_location = self._zoom_start_view_location.copy()
+                self._rv3d.view_distance = self._zoom_start_distance
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        # デッドゾーン分を差し引いて連続性を保つ
+        signed_dx = dx - math.copysign(self._ZOOM_DEADZONE_PX, dx)
+        factor = math.exp(signed_dx * self._ZOOM_SENSITIVITY)
+        new_distance = self._zoom_start_distance / max(1e-6, factor)
+        new_distance = max(1e-4, min(new_distance, 1e6))
+
+        rv3d = self._rv3d
+        region = self._region
+        try:
+            pivot_world = self._zoom_start_world_pivot
+            rv3d.view_location = self._zoom_start_view_location.copy()
+            rv3d.view_distance = new_distance
+            try:
+                rv3d.update()
+            except Exception:  # noqa: BLE001
+                pass
+            new_pivot_world = _region_to_world(
+                region, rv3d, self._zoom_start_mx, self._zoom_start_my
+            )
+            rv3d.view_location += (pivot_world - new_pivot_world)
+            try:
+                rv3d.update()
+            except Exception:  # noqa: BLE001
+                pass
+        except Exception:  # noqa: BLE001
+            _logger.exception("view_navigate.zoom: apply failed")
+
+    def _step_zoom_at_press(self, direction: str) -> None:
+        """LMB クリック (動かさず離した) でステップズーム.
+
+        - direction "IN":  view_distance を 1/_ZOOM_CLICK_STEP (= 約 -12.5%)
+        - direction "OUT": view_distance を *_ZOOM_CLICK_STEP (= 約 +12.5%)
+
+        ピボットは PRESS 位置 (self._press_mx/my) を維持。
+        """
+        rv3d = self._rv3d
+        region = self._region
+        factor = self._ZOOM_CLICK_STEP if direction == "IN" else 1.0 / self._ZOOM_CLICK_STEP
+        try:
+            pivot_world = _region_to_world(
+                region, rv3d, self._press_mx, self._press_my
+            ).copy()
+            new_distance = max(1e-4, min(rv3d.view_distance / factor, 1e6))
+            rv3d.view_distance = new_distance
+            try:
+                rv3d.update()
+            except Exception:  # noqa: BLE001
+                pass
+            new_pivot_world = _region_to_world(
+                region, rv3d, self._press_mx, self._press_my
+            )
+            rv3d.view_location += (pivot_world - new_pivot_world)
+            try:
+                rv3d.update()
+            except Exception:  # noqa: BLE001
+                pass
+        except Exception:  # noqa: BLE001
+            _logger.exception("view_navigate.step_zoom failed")
+
+    def _finish(self, context):
+        try:
+            context.window.cursor_modal_restore()
+        except Exception:  # noqa: BLE001
+            pass
+        return {"FINISHED"}
+
+
+# ---------- 旧パン (互換のため残置 / 未登録) ----------
 
 
 class BNAME_OT_view_pan(Operator):
-    """Space 押下中、LMB ドラッグでビューをパン.
-
-    - Space + ダブルクリック: 表示位置 = 原点、ページフィット (100% 相当)
-    - Space リリースで modal 終了
-    """
+    """[deprecated] BNAME_OT_view_navigate に統合済み。クラス本体は維持."""
 
     bl_idname = "bname.view_pan"
-    bl_label = "B-Name ビューパン"
+    bl_label = "B-Name ビューパン (旧)"
     bl_options = {"REGISTER"}
 
     def invoke(self, context, event):
+        print(f"[B-Name][OP] view_pan.invoke event.type={event.type} value={event.value}")
         area, region, rv3d = _find_view3d_window_region(context)
         if area is None:
+            print("[B-Name][OP] view_pan.invoke: VIEW_3D area not found -> CANCELLED")
             return {"CANCELLED"}
         self._area = area
         self._region = region
@@ -198,8 +601,11 @@ class BNAME_OT_view_zoom_drag(Operator):
     _SENSITIVITY = 0.006
 
     def invoke(self, context, event):
+        print(f"[B-Name][OP] view_zoom_drag.invoke event.type={event.type} value={event.value}"
+              f" shift={event.shift} ctrl={event.ctrl}")
         area, region, rv3d = _find_view3d_window_region(context)
         if area is None:
+            print("[B-Name][OP] view_zoom_drag: VIEW_3D area not found -> CANCELLED")
             return {"CANCELLED"}
         self._area = area
         self._region = region
@@ -306,6 +712,8 @@ class BNAME_OT_view_rotate(Operator):
     bl_options = {"REGISTER"}
 
     def invoke(self, context, event):
+        print(f"[B-Name][OP] view_rotate.invoke event.type={event.type} value={event.value}"
+              f" shift={event.shift} ctrl={event.ctrl}")
         area, region, rv3d = _find_view3d_window_region(context)
         if area is None:
             return {"CANCELLED"}
@@ -412,8 +820,11 @@ class BNAME_OT_view_zoom_step(Operator):
     )
 
     def invoke(self, context, event):
+        print(f"[B-Name][OP] view_zoom_step.invoke direction={self.direction}"
+              f" event.type={event.type} ctrl={event.ctrl}")
         area, region, rv3d = _find_view3d_window_region(context)
         if area is None or rv3d is None:
+            print("[B-Name][OP] view_zoom_step: VIEW_3D not found -> CANCELLED")
             return {"CANCELLED"}
         # Ctrl+ホイールではマウス位置ピボットでズーム
         mx, my = _to_region_local(region, event.mouse_x, event.mouse_y)
@@ -456,6 +867,8 @@ class BNAME_OT_view_layer_pick(Operator):
     bl_options = {"REGISTER"}
 
     def invoke(self, context, event):
+        print(f"[B-Name][OP] view_layer_pick.invoke event.type={event.type}"
+              f" shift={event.shift} ctrl={event.ctrl}")
         from ..core.work import get_active_page
         from ..utils.geom import m_to_mm
 
@@ -517,6 +930,7 @@ class BNAME_OT_view_eyedropper(Operator):
 
 
 _CLASSES = (
+    BNAME_OT_view_navigate,
     BNAME_OT_view_pan,
     BNAME_OT_view_rotate,
     BNAME_OT_view_zoom_drag,

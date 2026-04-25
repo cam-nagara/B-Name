@@ -426,23 +426,19 @@ def _draw_callback() -> None:
         gpu.state.blend_set("NONE")
 
 
-def apply_paper_background_color(context=None) -> int:
-    """全ウィンドウの全 VIEW_3D の solid shading 背景を paper_color で塗る.
+def reset_viewport_background_to_theme(context=None) -> int:
+    """全ウィンドウの全 VIEW_3D の solid shading 背景をテーマ色 (Blender 既定) に戻す.
 
-    PRE_VIEW で GPU 塗りをすると Blender 5.x で重なり順が不安定なため、
-    確実に「白い用紙の上に GP ストローク」を実現するために Blender 自身の
-    ビューポート solid 背景色を直接書き換える。
-    用紙外の領域もこの色になるが、フレーム枠線で用紙領域は識別できる。
+    旧実装 (apply_paper_background_color) は Blender 自身の solid 背景色を
+    paper_color (白) に書き換えていたため、用紙の外側まで真っ白になり
+    「ビューポート全体が白」状態を招いていた。現行では用紙領域だけを
+    POST_VIEW の最初に不透明塗りし (``_draw_canvas_fill_only``)、
+    ビューポート背景はテーマ既定の灰色に保つ。
+
+    過去に白く書き換えられて .blend に保存されているファイルも、ロード時に
+    この関数を呼べば自動で灰色 (テーマ既定) に戻る。
     """
     ctx = context or bpy.context
-    work = get_work(ctx)
-    if work is None or not work.loaded:
-        return 0
-    color3 = (
-        float(work.paper.paper_color[0]),
-        float(work.paper.paper_color[1]),
-        float(work.paper.paper_color[2]),
-    )
     wm = ctx.window_manager
     if wm is None:
         return 0
@@ -461,11 +457,11 @@ def apply_paper_background_color(context=None) -> int:
             if shading is None:
                 continue
             try:
-                shading.background_type = "VIEWPORT"
-                shading.background_color = color3
-                count += 1
+                if getattr(shading, "background_type", None) != "THEME":
+                    shading.background_type = "THEME"
+                    count += 1
             except Exception:  # noqa: BLE001
-                _logger.exception("apply_paper_background_color: set failed")
+                _logger.exception("reset_viewport_background_to_theme: set failed")
     return count
 
 
@@ -489,4 +485,4 @@ def unregister() -> None:
         except (ValueError, RuntimeError):
             pass
         _handle = None
-    _logger.debug("overlay draw_handlers removed")
+    _logger.debug("overlay draw_handler removed")

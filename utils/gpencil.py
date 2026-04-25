@@ -202,6 +202,95 @@ def ensure_page_collection(scene, page_id: str):
     return coll
 
 
+# ---------- 紙メッシュ (用紙の白い実体) ----------
+
+PAPER_MATERIAL_NAME = "BName_Paper_White"
+
+
+def _ensure_paper_material():
+    """全ページ共有の白マテリアルを取得/生成 (Solid 表示で白く見せる)."""
+    mat = bpy.data.materials.get(PAPER_MATERIAL_NAME)
+    if mat is not None:
+        return mat
+    mat = bpy.data.materials.new(PAPER_MATERIAL_NAME)
+    mat.diffuse_color = (1.0, 1.0, 1.0, 1.0)  # Solid Display=Material 時の表示色
+    mat.use_nodes = False
+    return mat
+
+
+def page_paper_object_name(page_id: str) -> str:
+    return f"page_{page_id}_paper"
+
+
+def page_paper_mesh_name(page_id: str) -> str:
+    return f"page_{page_id}_paper_data"
+
+
+def ensure_page_paper(scene, page_id: str, canvas_width_mm: float, canvas_height_mm: float):
+    """ページ用紙メッシュ (Plane) をページ Collection に生成/更新.
+
+    GPU overlay で紙塗りすると POST_VIEW で必ず GP の上に乗ってしまうため、
+    ジオメトリパスで描画される実メッシュ Plane を z=0 に置き、GP は z>0 に
+    持ち上げることで Z 順を制御する (page_grid.GP_Z_LIFT_M)。
+
+    既存メッシュがあればサイズだけ更新する。
+    """
+    from .geom import mm_to_m
+
+    coll = ensure_page_collection(scene, page_id)
+    mesh_name = page_paper_mesh_name(page_id)
+    obj_name = page_paper_object_name(page_id)
+
+    w = mm_to_m(float(canvas_width_mm))
+    h = mm_to_m(float(canvas_height_mm))
+    verts = [(0.0, 0.0, 0.0), (w, 0.0, 0.0), (w, h, 0.0), (0.0, h, 0.0)]
+    faces = [(0, 1, 2, 3)]
+
+    mesh = bpy.data.meshes.get(mesh_name)
+    if mesh is None:
+        mesh = bpy.data.meshes.new(mesh_name)
+        mesh.from_pydata(verts, [], faces)
+        mesh.update()
+    else:
+        # サイズ更新 (canvas_width/height_mm が変わった場合)
+        try:
+            for i, v in enumerate(verts):
+                mesh.vertices[i].co = v
+            mesh.update()
+        except Exception:  # noqa: BLE001
+            pass
+
+    obj = bpy.data.objects.get(obj_name)
+    if obj is None:
+        obj = bpy.data.objects.new(obj_name, mesh)
+    elif obj.data is not mesh:
+        try:
+            obj.data = mesh
+        except Exception:  # noqa: BLE001
+            pass
+
+    # マテリアル割当 (1 つだけ)
+    mat = _ensure_paper_material()
+    if len(obj.data.materials) == 0:
+        obj.data.materials.append(mat)
+    else:
+        obj.data.materials[0] = mat
+
+    # 編集を防ぐためのフラグ (誤って動かさないように)
+    try:
+        obj.hide_select = True
+        obj.show_in_front = False
+    except Exception:  # noqa: BLE001
+        pass
+
+    _relink_object_to_collection_only(scene, obj, coll)
+    return obj
+
+
+def get_page_paper(page_id: str):
+    return bpy.data.objects.get(page_paper_object_name(page_id))
+
+
 def ensure_page_gpencil(scene, page_id: str, layer_name: str = "ネーム"):
     """ページ GP オブジェクト + 既定レイヤー + 既定フレームを取得/生成して返す.
 
@@ -214,6 +303,18 @@ def ensure_page_gpencil(scene, page_id: str, layer_name: str = "ネーム"):
       「ドローするグリースペンシルフレームがありません」エラーになる)。
     """
     coll = ensure_page_collection(scene, page_id)
+    # 用紙メッシュも併設 (GP より背面の白い実体)
+    try:
+        from ..core.work import get_work
+        work = get_work(bpy.context)
+        if work is not None:
+            ensure_page_paper(
+                scene, page_id,
+                float(work.paper.canvas_width_mm),
+                float(work.paper.canvas_height_mm),
+            )
+    except Exception:  # noqa: BLE001
+        _logger.exception("ensure_page_gpencil: paper mesh setup failed for %s", page_id)
     obj_name = page_gp_object_name(page_id)
     data_name = page_gp_data_name(page_id)
     obj = bpy.data.objects.get(obj_name)
@@ -281,14 +382,19 @@ def _relink_object_to_collection_only(scene, obj, target_coll) -> None:
 
 
 def remove_page_gpencil(page_id: str) -> None:
-    """ページ GP オブジェクト / データ / Collection を完全削除.
+    """ページ GP オブジェクト / データ / Collection / 紙メッシュを完全削除.
 
     データブロックは users=0 になった段階でクリーンアップ。
+    紙メッシュ (page_NNNN_paper) と紙メッシュデータも併せて削除する
+    (残すと .blend サイズが膨らみ、削除済みページのデータが幽霊として残る)。
     """
     obj_name = page_gp_object_name(page_id)
     data_name = page_gp_data_name(page_id)
     coll_name = page_collection_name(page_id)
+    paper_obj_name = page_paper_object_name(page_id)
+    paper_mesh_name = page_paper_mesh_name(page_id)
 
+    # GP オブジェクト
     obj = bpy.data.objects.get(obj_name)
     if obj is not None:
         try:
@@ -296,6 +402,15 @@ def remove_page_gpencil(page_id: str) -> None:
         except Exception:  # noqa: BLE001
             _logger.exception("remove GP object failed: %s", obj_name)
 
+    # 紙オブジェクト (新設)
+    paper_obj = bpy.data.objects.get(paper_obj_name)
+    if paper_obj is not None:
+        try:
+            bpy.data.objects.remove(paper_obj, do_unlink=True)
+        except Exception:  # noqa: BLE001
+            _logger.exception("remove paper object failed: %s", paper_obj_name)
+
+    # GP データブロック
     try:
         blocks = _gp_data_blocks()
     except RuntimeError:
@@ -307,6 +422,14 @@ def remove_page_gpencil(page_id: str) -> None:
                 blocks.remove(gp_data)
             except Exception:  # noqa: BLE001
                 _logger.exception("remove GP data failed: %s", data_name)
+
+    # 紙メッシュデータ (users=0 のときだけ削除して、共有マテリアルは温存)
+    paper_mesh = bpy.data.meshes.get(paper_mesh_name)
+    if paper_mesh is not None and paper_mesh.users == 0:
+        try:
+            bpy.data.meshes.remove(paper_mesh)
+        except Exception:  # noqa: BLE001
+            _logger.exception("remove paper mesh failed: %s", paper_mesh_name)
 
     coll = bpy.data.collections.get(coll_name)
     if coll is not None:
