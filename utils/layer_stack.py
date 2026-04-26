@@ -22,6 +22,9 @@ from .layer_hierarchy import (
 _logger = log.get_logger(__name__)
 
 EFFECT_GP_OBJECT_NAME = "BName_EffectLines"
+_sync_scheduled = False
+_sync_should_apply_order = False
+_draw_stack_signatures: dict[int, tuple[str, ...]] = {}
 
 
 @dataclass(frozen=True)
@@ -357,6 +360,50 @@ def sync_layer_stack(context, *, preserve_active_index: bool = False):
     else:
         _sync_active_stack_index(context)
     return stack
+
+
+def _stack_signature(scene) -> tuple[str, ...]:
+    stack = getattr(scene, "bname_layer_stack", None)
+    if stack is None:
+        return ()
+    return tuple(stack_item_uid(item) for item in stack)
+
+
+def _remember_stack_signature(context) -> None:
+    scene = getattr(context, "scene", None)
+    if scene is None:
+        return
+    try:
+        scene_key = int(scene.as_pointer())
+    except Exception:  # noqa: BLE001
+        scene_key = id(scene)
+    _draw_stack_signatures[scene_key] = _stack_signature(scene)
+
+
+def schedule_layer_stack_draw_maintenance(context) -> None:
+    """Panel.draw 中に Scene を書き換えず、必要な同期だけをタイマー予約する."""
+    scene = getattr(context, "scene", None)
+    if scene is None:
+        return
+    stack = getattr(scene, "bname_layer_stack", None)
+    if stack is None:
+        return
+    try:
+        scene_key = int(scene.as_pointer())
+    except Exception:  # noqa: BLE001
+        scene_key = id(scene)
+    signature = _stack_signature(scene)
+    previous = _draw_stack_signatures.get(scene_key)
+    if previous is None:
+        _draw_stack_signatures[scene_key] = signature
+        if not signature:
+            schedule_layer_stack_sync()
+        return
+    if previous != signature:
+        _draw_stack_signatures[scene_key] = signature
+        schedule_layer_stack_sync(apply_order=True)
+    elif not signature:
+        schedule_layer_stack_sync()
 
 
 def _active_key_from_scene(context) -> tuple[str, str] | None:
@@ -992,3 +1039,43 @@ def tag_view3d_redraw(context) -> None:
     for area in screen.areas:
         if area.type == "VIEW_3D":
             area.tag_redraw()
+
+
+def schedule_layer_stack_sync(
+    *,
+    retries: int = 6,
+    interval: float = 0.1,
+    apply_order: bool = False,
+) -> None:
+    """ファイルロード直後の UI 再構築をまたいでレイヤースタックを同期する."""
+    global _sync_scheduled, _sync_should_apply_order
+
+    _sync_should_apply_order = _sync_should_apply_order or bool(apply_order)
+    if _sync_scheduled:
+        return
+    _sync_scheduled = True
+    state = {"left": max(1, int(retries))}
+
+    def _tick():
+        global _sync_scheduled, _sync_should_apply_order
+
+        try:
+            sync_layer_stack(bpy.context)
+            if _sync_should_apply_order:
+                apply_stack_order(bpy.context)
+                sync_layer_stack(bpy.context)
+            _remember_stack_signature(bpy.context)
+            tag_view3d_redraw(bpy.context)
+        except Exception:  # noqa: BLE001
+            _logger.exception("scheduled layer stack sync failed")
+        state["left"] -= 1
+        if state["left"] > 0:
+            return interval
+        _sync_scheduled = False
+        _sync_should_apply_order = False
+        return None
+
+    try:
+        bpy.app.timers.register(_tick, first_interval=interval)
+    except Exception:  # noqa: BLE001
+        _logger.exception("schedule layer stack sync failed")

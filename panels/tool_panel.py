@@ -60,7 +60,7 @@ class BNAME_PT_tools(Panel):
         row.separator()
         row.operator("bname.panel_knife_cut", text="", icon="SCULPTMODE_HLT")
         row.operator("bname.panel_edge_move", text="", icon="EMPTY_ARROWS")
-        row.operator("bname.layer_move_tool", text="", icon="TRANSFORM_MOVE")
+        row.operator("bname.layer_move_tool", text="", icon="DRIVER_TRANSFORM")
 
 
 _CLASSES = (BNAME_PT_tools,)

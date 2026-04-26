@@ -16,12 +16,14 @@ from bpy.types import Panel, UIList
 from ..core.work import get_active_page, get_work
 from ..utils import gpencil as gp_utils
 from ..utils import layer_stack as layer_stack_utils
+from ..utils import log
 
 B_NAME_CATEGORY = "B-Name"
 _GP_OBJECT_TYPE = "GREASEPENCIL"
 _GP_PAINT_MODE = "PAINT_GREASE_PENCIL"
 _GP_EDIT_MODE = "EDIT"
 _GP_OBJECT_MODE = "OBJECT"
+_logger = log.get_logger(__name__)
 
 
 def _master_gp_object():
@@ -164,7 +166,18 @@ class BNAME_UL_layer_stack(UIList):
 
     bl_idname = "BNAME_UL_layer_stack"
 
-    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+    def draw_item(
+        self,
+        context,
+        layout,
+        data,
+        item,
+        icon,
+        active_data,
+        active_propname,
+        index,
+        flt_flag=0,
+    ):
         if self.layout_type not in {"DEFAULT", "COMPACT"}:
             layout.label(text=item.label, icon=_kind_icon(item.kind))
             return
@@ -462,9 +475,12 @@ def _draw_panel_selected_settings(box, context, entry) -> None:
 
 
 def _draw_selected_stack_settings(box, context) -> None:
-    item = layer_stack_utils.active_stack_item(context)
-    if item is None:
+    scene = context.scene
+    stack = getattr(scene, "bname_layer_stack", None)
+    idx = int(getattr(scene, "bname_active_layer_stack_index", -1))
+    if stack is None or not (0 <= idx < len(stack)):
         return
+    item = stack[idx]
     resolved = layer_stack_utils.resolve_stack_item(context, item)
     if resolved is None or resolved.get("target") is None:
         return
@@ -526,12 +542,16 @@ def _draw_layer_add_buttons(box) -> None:
 
 
 def _draw_layer_stack_box(layout, context) -> None:
-    layer_stack_utils.sync_layer_stack(context)
-    # UIList のD&Dで stack の順序だけが変わった場合も、次の描画で実データ順へ反映する。
-    layer_stack_utils.apply_stack_order(context)
     scene = context.scene
     box = layout.box()
     box.label(text="レイヤー", icon="RENDERLAYERS")
+    try:
+        layer_stack_utils.schedule_layer_stack_draw_maintenance(context)
+    except Exception as exc:  # noqa: BLE001
+        _logger.exception("layer stack panel draw failed")
+        box.label(text="レイヤー一覧を更新できません", icon="ERROR")
+        box.label(text=str(exc)[:80])
+        return
     _draw_selected_stack_settings(box, context)
 
     stack = getattr(scene, "bname_layer_stack", None)

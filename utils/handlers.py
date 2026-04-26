@@ -214,6 +214,13 @@ def _bname_on_load_post(filepath_arg) -> None:  # signature: (str,) in Blender h
             preset_op.sync_paper_preset_selector(bpy.context)
         except Exception:  # noqa: BLE001
             _logger.exception("load_post: preset selector sync failed")
+        try:
+            from . import layer_stack as _layer_stack
+
+            _layer_stack.sync_layer_stack(bpy.context)
+            _layer_stack.schedule_layer_stack_sync()
+        except Exception:  # noqa: BLE001
+            _logger.exception("load_post: layer stack sync failed")
         # work.blend / panel.blend ごとに Scene の整合を補正する。
         try:
             rel = blend_path.resolve().relative_to(work_dir.resolve())

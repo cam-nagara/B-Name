@@ -107,6 +107,17 @@ def _disable_work_viewport_overlays(context, *, schedule: bool = False) -> None:
         _logger.exception("work viewport overlay setup failed")
 
 
+def _schedule_layer_stack_sync(context, *, schedule: bool = True) -> None:
+    try:
+        from ..utils import layer_stack as _layer_stack
+
+        _layer_stack.sync_layer_stack(context)
+        if schedule:
+            _layer_stack.schedule_layer_stack_sync()
+    except Exception:  # noqa: BLE001
+        _logger.exception("work layer stack sync failed")
+
+
 class BNAME_OT_work_new(Operator, ExportHelper):
     """新規作品を作成 (.bname ディレクトリを生成).
 
@@ -186,6 +197,7 @@ class BNAME_OT_work_new(Operator, ExportHelper):
             except Exception:  # noqa: BLE001
                 _logger.exception("work_new: preset selector sync failed")
 
+            _schedule_layer_stack_sync(context, schedule=False)
             _disable_work_viewport_overlays(context)
             blend_io.save_work_blend(work_dir)
         except Exception as exc:  # noqa: BLE001
@@ -282,6 +294,7 @@ class BNAME_OT_work_open(Operator, ImportHelper):
                 preset_op.sync_paper_preset_selector(context)
             except Exception:  # noqa: BLE001
                 _logger.exception("work_open: preset selector sync failed")
+            _schedule_layer_stack_sync(context)
         except FileNotFoundError as exc:
             _logger.exception("work_open: missing file")
             work.loaded = False
