@@ -67,9 +67,9 @@ def anchor_point(rect: Rect, position: str) -> tuple[float, float]:
 # ---------- ノンブル配置 (位置+余白) ----------
 
 
-def nombre_anchor(paper, nombre) -> tuple[float, float]:
+def nombre_anchor(paper, nombre, is_left_half: bool = False) -> tuple[float, float]:
     """ノンブルのアンカー座標 (基本枠基準で position + gap を適用)."""
-    frame = inner_frame_rect(paper)
+    frame = inner_frame_rect(paper, is_left_half=is_left_half)
     ax, ay = anchor_point(frame, nombre.position)
     gx = nombre.gap_horizontal_mm
     gy = nombre.gap_vertical_mm

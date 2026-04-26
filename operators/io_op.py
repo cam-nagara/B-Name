@@ -25,13 +25,19 @@ def _save_image(img, out_path: Path, image_format: str) -> None:
     """Pillow Image を format 別の互換モードで保存."""
     if image_format == "jpeg":
         # JPEG は RGB / L / CMYK のみサポート。RGBA / "1" は RGB に変換
-        if img.mode not in ("RGB", "L", "CMYK"):
+        if img.mode == "RGBA":
+            bg = export_pipeline.Image.new("RGBA", img.size, (255, 255, 255, 255))
+            bg.alpha_composite(img)
+            img = bg.convert("RGB")
+        elif img.mode not in ("RGB", "L", "CMYK"):
             img = img.convert("RGB")
         img.save(str(out_path), quality=95)
     elif image_format == "tiff":
         img.save(str(out_path))
     elif image_format == "psd":
-        export_pipeline.save_as_psd(img, out_path)
+        ok = export_pipeline.save_as_psd(img, out_path)
+        if not ok:
+            raise RuntimeError("PSD 保存に失敗しました")
     else:
         img.save(str(out_path))
 
@@ -103,6 +109,9 @@ class BNAME_OT_export_page(Operator):
         page = get_active_page(context)
         if work is None or page is None:
             return {"CANCELLED"}
+        if self.format == "psd" and not export_pipeline.has_psd_tools():
+            self.report({"ERROR"}, "psd-tools が未同梱のため PSD レイヤー出力できません")
+            return {"CANCELLED"}
         options = ExportOptions(
             color_mode=self.color_mode,
             format=self.format,
@@ -114,9 +123,6 @@ class BNAME_OT_export_page(Operator):
             include_paper_color=self.include_paper_color,
         )
         try:
-            img = export_pipeline.render_page(work, page, options)
-            if img is None:
-                return {"CANCELLED"}
             work_dir = Path(work.work_dir)
             out_dir = paths.exports_dir(work_dir) / datetime.now().strftime("%Y-%m-%d_%H%M%S")
             out_dir.mkdir(parents=True, exist_ok=True)
@@ -124,7 +130,13 @@ class BNAME_OT_export_page(Operator):
             name = _resolve_filename("{workName}_{episode}_{page}", work, page, idx)
             ext = self.format.replace("jpeg", "jpg")
             out = out_dir / f"{name}.{ext}"
-            _save_image(img, out, self.format)
+            if self.format == "psd":
+                export_pipeline.save_page_as_psd(work, page, options, out)
+            else:
+                img = export_pipeline.render_page(work, page, options)
+                if img is None:
+                    return {"CANCELLED"}
+                _save_image(img, out, self.format)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("export_page failed")
             self.report({"ERROR"}, f"書き出し失敗: {exc}")
@@ -163,6 +175,9 @@ class BNAME_OT_export_all_pages(Operator):
         work = get_work(context)
         if work is None or not work.loaded:
             return {"CANCELLED"}
+        if self.format == "psd" and not export_pipeline.has_psd_tools():
+            self.report({"ERROR"}, "psd-tools が未同梱のため PSD レイヤー出力できません")
+            return {"CANCELLED"}
         work_dir = Path(work.work_dir)
         out_dir = paths.exports_dir(work_dir) / datetime.now().strftime("%Y-%m-%d_%H%M%S")
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -175,14 +190,17 @@ class BNAME_OT_export_all_pages(Operator):
         errors: list[str] = []
         for i, page in enumerate(work.pages, start=1):
             try:
-                img = export_pipeline.render_page(work, page, options)
-                if img is None:
-                    errors.append(f"{page.id}: 描画失敗")
-                    continue
                 name = _resolve_filename(self.filename_template, work, page, i)
                 ext = self.format.replace("jpeg", "jpg")
                 out = out_dir / f"{name}.{ext}"
-                _save_image(img, out, self.format)
+                if self.format == "psd":
+                    export_pipeline.save_page_as_psd(work, page, options, out)
+                else:
+                    img = export_pipeline.render_page(work, page, options)
+                    if img is None:
+                        errors.append(f"{page.id}: 描画失敗")
+                        continue
+                    _save_image(img, out, self.format)
                 success += 1
             except Exception as exc:  # noqa: BLE001
                 _logger.exception("export failed for %s", page.id)

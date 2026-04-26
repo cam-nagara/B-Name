@@ -37,7 +37,7 @@ class BNAME_PT_export(Panel):
         if not export_pipeline.has_pypdf():
             layout.label(text="(pypdf 未同梱のため Pillow 簡易 PDF)", icon="INFO")
         if not export_pipeline.has_psd_tools():
-            layout.label(text="(psd-tools 未同梱のため PSD は制限あり)", icon="INFO")
+            layout.label(text="(psd-tools 未同梱のため PSD レイヤー出力は不可)", icon="INFO")
 
 
 _CLASSES = (BNAME_PT_export,)

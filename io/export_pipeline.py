@@ -1,41 +1,39 @@
-"""書き出しパイプライン (計画書 3.8.4).
+"""書き出しパイプライン.
 
-Pillow ベースで原稿画像を合成する。draw_handler によるオーバーレイは
-レンダリング出力に焼き込まれないため、同じレイアウト計算を Pillow で
-再実行して焼き込む。
-
-Phase 6a (MVP): PNG/JPEG/TIFF、カラーモード RGB/モノクロ/グレースケール、
-単一ページ + 複数ページ一括、連番命名、進捗。
-Phase 6b: PDF 結合 (pypdf)。
-Phase 6c: PSD (psd-tools)。
-Phase 6d: CMYK (littleCMS)。
-
-Pillow が同梱されていない環境では export 系の Operator は無効化される。
+Pillow ベースで各要素を個別ラスタ化し、通常画像では合成、PSD では
+レイヤー構造を保持して書き出す。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import math
+import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from ..ui import overlay_shared
 from ..utils import log
-from ..utils.geom import mm_to_px
+from ..utils.geom import Rect, m_to_mm, mm_to_px, q_to_mm
 
 _logger = log.get_logger(__name__)
 
 try:
-    from PIL import Image, ImageDraw, ImageCms  # type: ignore
+    from PIL import Image, ImageChops, ImageCms, ImageDraw, ImageEnhance, ImageFont  # type: ignore
+
     _HAS_PIL = True
 except ImportError:  # pragma: no cover
     Image = None  # type: ignore
-    ImageDraw = None  # type: ignore
+    ImageChops = None  # type: ignore
     ImageCms = None  # type: ignore
+    ImageDraw = None  # type: ignore
+    ImageEnhance = None  # type: ignore
+    ImageFont = None  # type: ignore
     _HAS_PIL = False
 
 try:
     import pypdf  # type: ignore
+
     _HAS_PYPDF = True
 except ImportError:  # pragma: no cover
     pypdf = None  # type: ignore
@@ -43,11 +41,15 @@ except ImportError:  # pragma: no cover
 
 try:
     from psd_tools import PSDImage  # type: ignore
-    from psd_tools.api.layers import PixelLayer  # type: ignore
+    from psd_tools.api.layers import Group, PixelLayer  # type: ignore
+    from psd_tools.constants import BlendMode  # type: ignore
+
     _HAS_PSD = True
 except ImportError:  # pragma: no cover
     PSDImage = None  # type: ignore
+    Group = None  # type: ignore
     PixelLayer = None  # type: ignore
+    BlendMode = None  # type: ignore
     _HAS_PSD = False
 
 
@@ -65,22 +67,69 @@ def has_psd_tools() -> bool:
 
 @dataclass(frozen=True)
 class ExportOptions:
-    """書き出しオプション (3.8.1 / 3.8.2 抜粋)."""
-
     color_mode: str = "rgb"  # "rgb" | "monochrome" | "grayscale" | "cmyk"
-    format: str = "png"       # "png" | "jpeg" | "tiff" | "pdf" | "psd"
-    area: str = "withBleed"   # "finish" | "withBleed" | "innerFrame" | "canvas"
-    dpi_override: int = 0     # 0 で paper.dpi をそのまま使用
+    format: str = "png"  # "png" | "jpeg" | "tiff" | "pdf" | "psd"
+    area: str = "withBleed"  # "finish" | "withBleed" | "innerFrame" | "canvas"
+    dpi_override: int = 0
     include_border: bool = True
     include_white_margin: bool = True
     include_nombre: bool = True
     include_work_info: bool = True
     include_tombo: bool = False
     include_paper_color: bool = True
-    icc_profile_path: str = ""  # Phase 6d: CMYK 変換用 ICC プロファイル
+    icc_profile_path: str = ""
 
 
-# ---------- ユーティリティ ----------
+@dataclass(frozen=True)
+class ExportLayer:
+    name: str
+    image: Any
+    left: int
+    top: int
+    group_path: tuple[str, ...] = ()
+    visible: bool = True
+    opacity: int = 255
+    blend_mode: str = "normal"
+
+    @property
+    def right(self) -> int:
+        return self.left + self.image.width
+
+    @property
+    def bottom(self) -> int:
+        return self.top + self.image.height
+
+
+@dataclass(frozen=True)
+class ExportMask:
+    image: Any
+    left: int
+    top: int
+
+    @property
+    def right(self) -> int:
+        return self.left + self.image.width
+
+    @property
+    def bottom(self) -> int:
+        return self.top + self.image.height
+
+
+@dataclass(frozen=True)
+class _LayerCanvas:
+    image: Any
+    left: int
+    top: int
+    canvas_height_px: int
+    dpi: int
+
+    def point_px(self, x_mm: float, y_mm: float) -> tuple[int, int]:
+        x_px = int(round(mm_to_px(x_mm, self.dpi))) - self.left
+        y_px = self.canvas_height_px - int(round(mm_to_px(y_mm, self.dpi))) - self.top
+        return (x_px, y_px)
+
+    def points_px(self, pts: Sequence[tuple[float, float]]) -> list[tuple[int, int]]:
+        return [self.point_px(x, y) for x, y in pts]
 
 
 def _dpi(paper, options: ExportOptions) -> int:
@@ -94,22 +143,20 @@ def _canvas_size_px(paper, options: ExportOptions) -> tuple[int, int]:
     return (w, h)
 
 
-def _area_rect_px(paper, options: ExportOptions) -> tuple[int, int, int, int]:
-    """書き出し範囲の (left, top, right, bottom) を px で返す (Pillow crop 用)."""
+def _area_rect_px(paper, options: ExportOptions, *, is_left_half: bool = False) -> tuple[int, int, int, int]:
     dpi = _dpi(paper, options)
-    rects = overlay_shared.compute_paper_rects(paper)
+    rects = overlay_shared.compute_paper_rects(paper, is_left_half=is_left_half)
     w_px, h_px = _canvas_size_px(paper, options)
     if options.area == "canvas":
         return (0, 0, w_px, h_px)
     if options.area == "withBleed":
-        r = rects.finish.inset(-paper.bleed_mm)
+        r = rects.bleed
     elif options.area == "finish":
         r = rects.finish
     elif options.area == "innerFrame":
         r = rects.inner_frame
     else:
         return (0, 0, w_px, h_px)
-    # mm → px (Pillow は左上原点)
     left = int(round(mm_to_px(r.x, dpi)))
     top = h_px - int(round(mm_to_px(r.y2, dpi)))
     right = int(round(mm_to_px(r.x2, dpi)))
@@ -117,153 +164,1491 @@ def _area_rect_px(paper, options: ExportOptions) -> tuple[int, int, int, int]:
     return (left, top, right, bottom)
 
 
-# ---------- メインパイプライン ----------
+def _resolve_page_index(work, page) -> int:
+    page_id = str(getattr(page, "id", "") or "")
+    for index, candidate in enumerate(work.pages):
+        if candidate == page:
+            return index
+        if page_id and str(getattr(candidate, "id", "") or "") == page_id:
+            return index
+    return max(0, int(getattr(work, "active_page_index", 0)))
+
+
+def _resolve_page_number(work, page) -> int:
+    try:
+        start = int(work.nombre.start_number)
+    except Exception:  # noqa: BLE001
+        start = 1
+    return start + _resolve_page_index(work, page)
+
+
+def _is_active_page(work, page) -> bool:
+    try:
+        active_index = int(getattr(work, "active_page_index", -1))
+    except Exception:  # noqa: BLE001
+        return False
+    if active_index < 0:
+        return False
+    return _resolve_page_index(work, page) == active_index
+
+
+def _resolve_page_offset_mm(work, page) -> tuple[float, float]:
+    try:
+        import bpy
+
+        from ..utils.page_grid import page_grid_offset_mm
+    except Exception:  # pragma: no cover - bpy unavailable outside Blender
+        return (0.0, 0.0)
+    scene = getattr(bpy.context, "scene", None)
+    if scene is None:
+        return (0.0, 0.0)
+    cols = max(1, int(getattr(scene, "bname_overview_cols", 4)))
+    gap = float(getattr(scene, "bname_overview_gap_mm", 30.0))
+    index = _resolve_page_index(work, page)
+    paper = work.paper
+    return page_grid_offset_mm(
+        index,
+        cols,
+        gap,
+        float(paper.canvas_width_mm),
+        float(paper.canvas_height_mm),
+        getattr(paper, "start_side", "right"),
+        getattr(paper, "read_direction", "left"),
+    )
+
+
+def _is_left_half_page(work, page) -> bool:
+    try:
+        from ..utils.page_grid import is_left_half_page
+    except Exception:  # pragma: no cover - bpy unavailable outside Blender
+        return False
+    index = _resolve_page_index(work, page)
+    return is_left_half_page(
+        index,
+        getattr(work.paper, "start_side", "right"),
+        getattr(work.paper, "read_direction", "left"),
+    )
+
+
+def _empty_rgba(size: tuple[int, int]) -> Any:
+    return Image.new("RGBA", size, (0, 0, 0, 0))
+
+
+def _rgb255(vec: Sequence[float], alpha: float | None = None) -> tuple[int, int, int, int]:
+    a = float(vec[3]) if len(vec) > 3 else 1.0
+    if alpha is not None:
+        a *= alpha
+    return (
+        int(round(max(0.0, min(1.0, float(vec[0]))) * 255)),
+        int(round(max(0.0, min(1.0, float(vec[1]))) * 255)),
+        int(round(max(0.0, min(1.0, float(vec[2]))) * 255)),
+        int(round(max(0.0, min(1.0, a)) * 255)),
+    )
+
+
+def _scale_alpha(img, opacity: int) -> Any:
+    if opacity >= 255:
+        return img
+    out = img.copy()
+    alpha = out.getchannel("A").point(lambda px: int(round(px * (opacity / 255.0))))
+    out.putalpha(alpha)
+    return out
+
+
+def _normalize_opacity(value: Any) -> int:
+    try:
+        f = float(value)
+    except Exception:  # noqa: BLE001
+        return 255
+    if f <= 0.0:
+        return 0
+    if f <= 1.0:
+        return int(round(f * 255))
+    return int(round(max(0.0, min(255.0, f))))
+
+
+def _blend_mode_name(value: Any) -> str:
+    text = str(value or "normal").strip().lower()
+    if "." in text:
+        text = text.split(".")[-1]
+    mapping = {
+        "regular": "normal",
+        "normal": "normal",
+        "multiply": "multiply",
+        "screen": "screen",
+        "overlay": "overlay",
+        "hardlight": "overlay",
+        "softlight": "overlay",
+        "add": "add",
+        "linear_dodge": "add",
+    }
+    return mapping.get(text, "normal")
+
+
+def _abspath_maybe(path_str: str) -> str:
+    if not path_str:
+        return ""
+    try:
+        import bpy
+
+        return bpy.path.abspath(path_str)
+    except Exception:  # noqa: BLE001
+        return path_str
+
+
+def _font_candidates() -> list[str]:
+    if os.name == "nt":
+        return [
+            r"C:\Windows\Fonts\YuGothM.ttc",
+            r"C:\Windows\Fonts\YuGothR.ttc",
+            r"C:\Windows\Fonts\meiryo.ttc",
+            r"C:\Windows\Fonts\msgothic.ttc",
+        ]
+    return [
+        "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+        "/System/Library/Fonts/PingFang.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/fonts-japanese-gothic.ttf",
+    ]
+
+
+def _resolve_font_path(preferred: str = "") -> str:
+    preferred = _abspath_maybe(preferred).strip()
+    if preferred and Path(preferred).is_file():
+        return preferred
+    for candidate in _font_candidates():
+        if Path(candidate).is_file():
+            return candidate
+    return preferred
+
+
+def _load_font(font_path: str, size_px: int):
+    if not font_path:
+        return ImageFont.load_default()
+    try:
+        return ImageFont.truetype(font_path, max(1, int(size_px)))
+    except (OSError, IOError):
+        return ImageFont.load_default()
+
+
+def _text_bbox(text: str, font, stroke_width_px: int = 0) -> tuple[int, int]:
+    probe = ImageDraw.Draw(Image.new("RGBA", (4, 4), (0, 0, 0, 0)))
+    try:
+        box = probe.textbbox((0, 0), text, font=font, stroke_width=stroke_width_px)
+        return (max(1, int(math.ceil(box[2] - box[0]))), max(1, int(math.ceil(box[3] - box[1]))))
+    except Exception:  # noqa: BLE001
+        try:
+            return probe.textsize(text, font=font)  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            return (max(1, len(text) * max(1, font.size // 2)), max(1, getattr(font, "size", 14)))
+
+
+def _canvas_for_bbox(
+    bbox_mm: tuple[float, float, float, float],
+    canvas_height_px: int,
+    dpi: int,
+    *,
+    pad_mm: float = 0.0,
+) -> _LayerCanvas | None:
+    left_mm = float(bbox_mm[0]) - pad_mm
+    bottom_mm = float(bbox_mm[1]) - pad_mm
+    right_mm = float(bbox_mm[2]) + pad_mm
+    top_mm = float(bbox_mm[3]) + pad_mm
+    if right_mm <= left_mm or top_mm <= bottom_mm:
+        return None
+    left_px = int(math.floor(mm_to_px(left_mm, dpi)))
+    right_px = int(math.ceil(mm_to_px(right_mm, dpi)))
+    top_px = canvas_height_px - int(math.ceil(mm_to_px(top_mm, dpi)))
+    bottom_px = canvas_height_px - int(math.floor(mm_to_px(bottom_mm, dpi)))
+    width_px = max(1, right_px - left_px)
+    height_px = max(1, bottom_px - top_px)
+    return _LayerCanvas(_empty_rgba((width_px, height_px)), left_px, top_px, canvas_height_px, dpi)
+
+
+def _points_bbox(pts: Sequence[tuple[float, float]]) -> tuple[float, float, float, float] | None:
+    if not pts:
+        return None
+    xs = [float(p[0]) for p in pts]
+    ys = [float(p[1]) for p in pts]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _intersects_mm(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> bool:
+    return not (a[2] <= b[0] or a[0] >= b[2] or a[3] <= b[1] or a[1] >= b[3])
+
+
+def _panel_polygon_mm(entry) -> list[tuple[float, float]]:
+    if entry.shape_type == "rect":
+        return [
+            (float(entry.rect_x_mm), float(entry.rect_y_mm)),
+            (float(entry.rect_x_mm + entry.rect_width_mm), float(entry.rect_y_mm)),
+            (float(entry.rect_x_mm + entry.rect_width_mm), float(entry.rect_y_mm + entry.rect_height_mm)),
+            (float(entry.rect_x_mm), float(entry.rect_y_mm + entry.rect_height_mm)),
+        ]
+    if entry.shape_type == "polygon" and len(entry.vertices) >= 3:
+        return [(float(v.x_mm), float(v.y_mm)) for v in entry.vertices]
+    return []
+
+
+def _panel_group_name(entry) -> str:
+    return str(getattr(entry, "panel_stem", "") or getattr(entry, "id", "") or "panel")
+
+
+def _panel_root_group_path(entry) -> tuple[str, ...]:
+    return ("panels", _panel_group_name(entry))
+
+
+def _panel_content_group_path(entry) -> tuple[str, ...]:
+    return (*_panel_root_group_path(entry), "content")
+
+
+def _panel_preview_source(work_dir: Path, page_id: str, entry) -> Path | None:
+    from ..utils import paths as paths_mod
+
+    panel_index = None
+    stem = getattr(entry, "panel_stem", "")
+    if isinstance(stem, str) and stem.startswith("panel_"):
+        try:
+            panel_index = int(stem.split("_", 1)[1])
+        except (ValueError, IndexError):
+            panel_index = None
+    if panel_index is None:
+        try:
+            panel_index = int(entry.id)
+        except Exception:  # noqa: BLE001
+            panel_index = None
+    if panel_index is None:
+        return None
+    preview = paths_mod.panel_preview_path(work_dir, page_id, panel_index)
+    if preview.is_file():
+        return preview
+    thumb = paths_mod.panel_thumb_path(work_dir, page_id, panel_index)
+    if thumb.is_file():
+        return thumb
+    return None
+
+
+def _safe_load_image(path: Path) -> Any | None:
+    try:
+        with Image.open(str(path)) as opened:
+            return opened.convert("RGBA")
+    except (OSError, ValueError) as exc:
+        _logger.warning("failed to open image %s: %s", path, exc)
+        return None
+
+
+def _line_segments_for_style(
+    p0: tuple[int, int],
+    p1: tuple[int, int],
+    dash: float,
+    gap: float,
+) -> list[tuple[tuple[int, int], tuple[int, int]]]:
+    x0, y0 = p0
+    x1, y1 = p1
+    dx = float(x1 - x0)
+    dy = float(y1 - y0)
+    length = math.hypot(dx, dy)
+    if length <= 0.0:
+        return []
+    ux = dx / length
+    uy = dy / length
+    pos = 0.0
+    out: list[tuple[tuple[int, int], tuple[int, int]]] = []
+    while pos < length:
+        end = min(length, pos + dash)
+        sx = int(round(x0 + ux * pos))
+        sy = int(round(y0 + uy * pos))
+        ex = int(round(x0 + ux * end))
+        ey = int(round(y0 + uy * end))
+        out.append(((sx, sy), (ex, ey)))
+        pos += dash + gap
+    return out
+
+
+def _draw_styled_segment(
+    draw,
+    p0: tuple[int, int],
+    p1: tuple[int, int],
+    color: tuple[int, int, int, int],
+    width_px: int,
+    style: str = "solid",
+) -> None:
+    width_px = max(1, int(width_px))
+    if style == "solid":
+        draw.line((p0, p1), fill=color, width=width_px)
+        return
+    if style == "dashed":
+        dash = max(width_px * 4.0, 8.0)
+        gap = max(width_px * 2.5, 5.0)
+        for seg in _line_segments_for_style(p0, p1, dash, gap):
+            draw.line(seg, fill=color, width=width_px)
+        return
+    if style == "dotted":
+        x0, y0 = p0
+        x1, y1 = p1
+        dx = float(x1 - x0)
+        dy = float(y1 - y0)
+        length = math.hypot(dx, dy)
+        if length <= 0.0:
+            return
+        ux = dx / length
+        uy = dy / length
+        spacing = max(width_px * 2.2, 6.0)
+        radius = max(1.0, width_px * 0.55)
+        pos = 0.0
+        while pos <= length:
+            cx = x0 + ux * pos
+            cy = y0 + uy * pos
+            draw.ellipse(
+                (cx - radius, cy - radius, cx + radius, cy + radius),
+                fill=color,
+                outline=color,
+            )
+            pos += spacing
+        return
+    if style == "double":
+        dx = float(p1[0] - p0[0])
+        dy = float(p1[1] - p0[1])
+        length = math.hypot(dx, dy)
+        if length <= 0.0:
+            return
+        nx = -dy / length
+        ny = dx / length
+        offset = max(2.0, width_px * 1.2)
+        inner_width = max(1, int(round(width_px * 0.55)))
+        for sign in (-0.5, 0.5):
+            ox = nx * offset * sign
+            oy = ny * offset * sign
+            q0 = (int(round(p0[0] + ox)), int(round(p0[1] + oy)))
+            q1 = (int(round(p1[0] + ox)), int(round(p1[1] + oy)))
+            draw.line((q0, q1), fill=color, width=inner_width)
+        return
+    draw.line((p0, p1), fill=color, width=width_px)
+
+
+def _draw_styled_loop(
+    draw,
+    pts: Sequence[tuple[int, int]],
+    color: tuple[int, int, int, int],
+    width_px: int,
+    style: str = "solid",
+) -> None:
+    if len(pts) < 2:
+        return
+    for i in range(len(pts)):
+        _draw_styled_segment(draw, pts[i], pts[(i + 1) % len(pts)], color, width_px, style)
+
+
+def _draw_panel_border_layer(entry, canvas_height_px: int, dpi: int) -> ExportLayer | None:
+    poly_mm = _panel_polygon_mm(entry)
+    bbox = _points_bbox(poly_mm)
+    if bbox is None:
+        return None
+    border = entry.border
+    canvas = _canvas_for_bbox(bbox, canvas_height_px, dpi, pad_mm=max(float(border.width_mm) * 3.0, 1.0))
+    if canvas is None:
+        return None
+    draw = ImageDraw.Draw(canvas.image)
+    poly_px = canvas.points_px(poly_mm)
+    base_color = _rgb255(border.color)
+    base_width = max(1, int(round(mm_to_px(float(border.width_mm), dpi))))
+    override_map = {int(style.edge_index): style for style in entry.edge_styles}
+    edge_overrides = []
+    if entry.shape_type == "rect":
+        edge_overrides = [border.edge_bottom, border.edge_right, border.edge_top, border.edge_left]
+    for i in range(len(poly_px)):
+        style_name = getattr(border, "style", "solid")
+        color = base_color
+        width = base_width
+        if i in override_map:
+            ov = override_map[i]
+            color = _rgb255(ov.color)
+            width = max(1, int(round(mm_to_px(float(ov.width_mm), dpi))))
+        elif i < len(edge_overrides):
+            ov = edge_overrides[i]
+            if getattr(ov, "use_override", False):
+                if not getattr(ov, "visible", True):
+                    continue
+                style_name = getattr(ov, "style", style_name)
+                color = _rgb255(ov.color)
+                width = max(1, int(round(mm_to_px(float(ov.width_mm), dpi))))
+        _draw_styled_segment(
+            draw,
+            poly_px[i],
+            poly_px[(i + 1) % len(poly_px)],
+            color,
+            width,
+            style_name,
+        )
+    return ExportLayer("border", canvas.image, canvas.left, canvas.top)
+
+
+def _draw_panel_white_margin_layer(entry, canvas_height_px: int, dpi: int) -> ExportLayer | None:
+    poly_mm = _panel_polygon_mm(entry)
+    bbox = _points_bbox(poly_mm)
+    if bbox is None:
+        return None
+    wm = entry.white_margin
+    if entry.shape_type != "rect":
+        canvas = _canvas_for_bbox(
+            (bbox[0] - wm.width_mm, bbox[1] - wm.width_mm, bbox[2] + wm.width_mm, bbox[3] + wm.width_mm),
+            canvas_height_px,
+            dpi,
+        )
+        if canvas is None:
+            return None
+        color = _rgb255(wm.color)
+        ImageDraw.Draw(canvas.image).rectangle((0, 0, canvas.image.width, canvas.image.height), fill=color)
+        return ExportLayer("white_margin", canvas.image, canvas.left, canvas.top)
+
+    rect = Rect(float(entry.rect_x_mm), float(entry.rect_y_mm), float(entry.rect_width_mm), float(entry.rect_height_mm))
+    widths = [float(wm.width_mm)] * 4
+    enabled = [bool(wm.enabled)] * 4
+    edge_overrides = [wm.edge_bottom, wm.edge_right, wm.edge_top, wm.edge_left]
+    for idx, edge in enumerate(edge_overrides):
+        if getattr(edge, "use_override", False):
+            widths[idx] = float(edge.width_mm)
+            enabled[idx] = bool(getattr(edge, "enabled", False))
+    left_w = widths[3] if enabled[3] else 0.0
+    bottom_w = widths[0] if enabled[0] else 0.0
+    right_w = widths[1] if enabled[1] else 0.0
+    top_w = widths[2] if enabled[2] else 0.0
+    bbox_wm = (rect.x - left_w, rect.y - bottom_w, rect.x2 + right_w, rect.y2 + top_w)
+    canvas = _canvas_for_bbox(bbox_wm, canvas_height_px, dpi)
+    if canvas is None:
+        return None
+    draw = ImageDraw.Draw(canvas.image)
+    color = _rgb255(wm.color)
+    x0, y0 = canvas.point_px(rect.x, rect.y)
+    x1, y1 = canvas.point_px(rect.x2, rect.y2)
+    left_px = min(x0, x1)
+    right_px = max(x0, x1)
+    top_px = min(y0, y1)
+    bottom_px = max(y0, y1)
+    top_w_px = max(0, int(round(mm_to_px(top_w, dpi))))
+    bottom_w_px = max(0, int(round(mm_to_px(bottom_w, dpi))))
+    left_w_px = max(0, int(round(mm_to_px(left_w, dpi))))
+    right_w_px = max(0, int(round(mm_to_px(right_w, dpi))))
+    if top_w_px > 0:
+        draw.rectangle((left_px - left_w_px, top_px - top_w_px, right_px + right_w_px, top_px), fill=color)
+    if bottom_w_px > 0:
+        draw.rectangle((left_px - left_w_px, bottom_px, right_px + right_w_px, bottom_px + bottom_w_px), fill=color)
+    if left_w_px > 0:
+        draw.rectangle((left_px - left_w_px, top_px, left_px, bottom_px), fill=color)
+    if right_w_px > 0:
+        draw.rectangle((right_px, top_px, right_px + right_w_px, bottom_px), fill=color)
+    return ExportLayer("white_margin", canvas.image, canvas.left, canvas.top)
+
+
+def _render_panel_preview_layer(work, page, entry, canvas_size: tuple[int, int], dpi: int) -> ExportLayer | None:
+    poly_mm = _panel_polygon_mm(entry)
+    bbox = _points_bbox(poly_mm)
+    if bbox is None or not work.work_dir:
+        return None
+    source_path = _panel_preview_source(Path(work.work_dir), page.id, entry)
+    if source_path is None:
+        return None
+    source = _safe_load_image(source_path)
+    if source is None:
+        return None
+    canvas = _canvas_for_bbox(bbox, canvas_size[1], dpi)
+    if canvas is None:
+        return None
+    source = source.resize(canvas.image.size, Image.LANCZOS)
+    if entry.shape_type == "polygon" and len(poly_mm) >= 3:
+        mask = Image.new("L", canvas.image.size, 0)
+        ImageDraw.Draw(mask).polygon(canvas.points_px(poly_mm), fill=255)
+        canvas.image.paste(source, (0, 0), mask)
+    else:
+        canvas.image.paste(source, (0, 0), source)
+    return ExportLayer("render", canvas.image, canvas.left, canvas.top)
+
+
+def _render_panel_mask(entry, canvas_height_px: int, dpi: int) -> ExportMask | None:
+    poly_mm = _panel_polygon_mm(entry)
+    bbox = _points_bbox(poly_mm)
+    if bbox is None or len(poly_mm) < 3:
+        return None
+    canvas = _canvas_for_bbox(bbox, canvas_height_px, dpi)
+    if canvas is None:
+        return None
+    mask = Image.new("L", canvas.image.size, 0)
+    draw = ImageDraw.Draw(mask)
+    draw.polygon(canvas.points_px(poly_mm), fill=255)
+    return ExportMask(mask, canvas.left, canvas.top)
+
+
+def _apply_image_adjustments(img, entry) -> Any:
+    out = img.convert("RGBA")
+    if getattr(entry, "flip_x", False):
+        out = out.transpose(Image.FLIP_LEFT_RIGHT)
+    if getattr(entry, "flip_y", False):
+        out = out.transpose(Image.FLIP_TOP_BOTTOM)
+    brightness = float(getattr(entry, "brightness", 0.0))
+    if abs(brightness) > 1e-6:
+        out = ImageEnhance.Brightness(out).enhance(max(0.0, 1.0 + brightness))
+    contrast = float(getattr(entry, "contrast", 0.0))
+    if abs(contrast) > 1e-6:
+        out = ImageEnhance.Contrast(out).enhance(max(0.0, 1.0 + contrast))
+    if getattr(entry, "binarize_enabled", False):
+        threshold = int(round(max(0.0, min(1.0, float(entry.binarize_threshold))) * 255))
+        alpha = out.getchannel("A")
+        mono = out.convert("L").point(lambda px: 255 if px >= threshold else 0)
+        out = Image.merge("RGBA", (mono, mono, mono, alpha))
+    tint = getattr(entry, "tint_color", None)
+    if tint is not None:
+        tinted = []
+        for band, factor in zip(out.split(), tint):
+            tinted.append(band.point(lambda px, k=float(factor): int(round(px * max(0.0, min(1.0, k))))))
+        if len(tinted) == 4:
+            out = Image.merge("RGBA", tuple(tinted))
+    opacity = _normalize_opacity(getattr(entry, "opacity", 1.0))
+    if opacity < 255:
+        out = _scale_alpha(out, opacity)
+    rotation = float(getattr(entry, "rotation_deg", 0.0))
+    if abs(rotation) > 1e-6:
+        out = out.rotate(-rotation, expand=True, resample=Image.BICUBIC)
+    return out
+
+
+def _render_image_layer(entry, canvas_size: tuple[int, int], dpi: int) -> ExportLayer | None:
+    path = Path(_abspath_maybe(getattr(entry, "filepath", "")))
+    if not path.is_file():
+        return None
+    source = _safe_load_image(path)
+    if source is None:
+        return None
+    width_px = max(1, int(round(mm_to_px(float(entry.width_mm), dpi))))
+    height_px = max(1, int(round(mm_to_px(float(entry.height_mm), dpi))))
+    source = source.resize((width_px, height_px), Image.LANCZOS)
+    source = _apply_image_adjustments(source, entry)
+    center_x = int(round(mm_to_px(float(entry.x_mm + entry.width_mm * 0.5), dpi)))
+    center_y = canvas_size[1] - int(round(mm_to_px(float(entry.y_mm + entry.height_mm * 0.5), dpi)))
+    left = center_x - source.width // 2
+    top = center_y - source.height // 2
+    return ExportLayer(
+        str(getattr(entry, "title", "") or path.stem),
+        source,
+        left,
+        top,
+        group_path=("image_layers",),
+        visible=bool(getattr(entry, "visible", True)),
+        opacity=255,
+        blend_mode=_blend_mode_name(getattr(entry, "blend_mode", "normal")),
+    )
+
+
+def _outline_rect(rect: Rect) -> list[tuple[float, float]]:
+    return [(rect.x, rect.y), (rect.x2, rect.y), (rect.x2, rect.y2), (rect.x, rect.y2)]
+
+
+def _outline_rounded_rect(rect: Rect, radius_mm: float, segments: int = 8) -> list[tuple[float, float]]:
+    radius = max(0.0, min(float(radius_mm), rect.width * 0.5, rect.height * 0.5))
+    if radius <= 0.0:
+        return _outline_rect(rect)
+    corners = (
+        (rect.x2 - radius, rect.y2 - radius, 0.0),
+        (rect.x + radius, rect.y2 - radius, math.pi * 0.5),
+        (rect.x + radius, rect.y + radius, math.pi),
+        (rect.x2 - radius, rect.y + radius, math.pi * 1.5),
+    )
+    pts: list[tuple[float, float]] = []
+    for cx, cy, start in corners:
+        for step in range(segments + 1):
+            angle = start + (math.pi * 0.5) * (step / segments)
+            pts.append((cx + radius * math.cos(angle), cy + radius * math.sin(angle)))
+    return pts
+
+
+def _outline_ellipse(rect: Rect, segments: int = 64) -> list[tuple[float, float]]:
+    cx = (rect.x + rect.x2) * 0.5
+    cy = (rect.y + rect.y2) * 0.5
+    rx = rect.width * 0.5
+    ry = rect.height * 0.5
+    return [(cx + rx * math.cos(2 * math.pi * i / segments), cy + ry * math.sin(2 * math.pi * i / segments)) for i in range(segments)]
+
+
+def _outline_cloud(rect: Rect, wave_count: int, amplitude_mm: float, segments_per_wave: int = 6) -> list[tuple[float, float]]:
+    cx = (rect.x + rect.x2) * 0.5
+    cy = (rect.y + rect.y2) * 0.5
+    rx = max(1.0, rect.width * 0.5 - amplitude_mm)
+    ry = max(1.0, rect.height * 0.5 - amplitude_mm)
+    total = max(8, int(wave_count) * max(1, int(segments_per_wave)))
+    pts: list[tuple[float, float]] = []
+    for i in range(total):
+        angle = 2 * math.pi * i / total
+        bump = amplitude_mm * (0.5 + 0.5 * math.cos(wave_count * angle))
+        radius_factor = 1.0 + bump / max(1.0, min(rx, ry))
+        pts.append((cx + rx * math.cos(angle) * radius_factor, cy + ry * math.sin(angle) * radius_factor))
+    return pts
+
+
+def _outline_spike(rect: Rect, spike_count: int, depth_mm: float, *, smooth: bool) -> list[tuple[float, float]]:
+    cx = (rect.x + rect.x2) * 0.5
+    cy = (rect.y + rect.y2) * 0.5
+    rx = max(1.0, rect.width * 0.5)
+    ry = max(1.0, rect.height * 0.5)
+    total = max(6, int(spike_count) * 2)
+    pts: list[tuple[float, float]] = []
+    for i in range(total):
+        angle = 2 * math.pi * i / total
+        factor = 1.0 if i % 2 == 0 else max(0.05, 1.0 - depth_mm / max(rx, ry))
+        pts.append((cx + rx * math.cos(angle) * factor, cy + ry * math.sin(angle) * factor))
+    if smooth and len(pts) >= 3:
+        smoothed = []
+        for i in range(len(pts)):
+            prev_pt = pts[(i - 1) % len(pts)]
+            cur_pt = pts[i]
+            next_pt = pts[(i + 1) % len(pts)]
+            smoothed.append(((prev_pt[0] + 2 * cur_pt[0] + next_pt[0]) * 0.25, (prev_pt[1] + 2 * cur_pt[1] + next_pt[1]) * 0.25))
+        pts = smoothed
+    return pts
+
+
+def _outline_polygon_pct(rect: Rect, pct_pts: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
+    return [(rect.x + rect.width * (px / 100.0), rect.y + rect.height * ((100.0 - py) / 100.0)) for px, py in pct_pts]
+
+
+def _outline_pill(rect: Rect, segments: int = 16) -> list[tuple[float, float]]:
+    radius = min(rect.width, rect.height) * 0.5
+    if radius <= 0.0:
+        return _outline_rect(rect)
+    cx_left = rect.x + radius
+    cx_right = rect.x2 - radius
+    cy = (rect.y + rect.y2) * 0.5
+    pts: list[tuple[float, float]] = []
+    for step in range(segments + 1):
+        angle = -math.pi * 0.5 + math.pi * (step / segments)
+        pts.append((cx_right + radius * math.cos(angle), cy + radius * math.sin(angle)))
+    for step in range(segments + 1):
+        angle = math.pi * 0.5 + math.pi * (step / segments)
+        pts.append((cx_left + radius * math.cos(angle), cy + radius * math.sin(angle)))
+    return pts
+
+
+def _outline_diamond(rect: Rect) -> list[tuple[float, float]]:
+    cx = (rect.x + rect.x2) * 0.5
+    cy = (rect.y + rect.y2) * 0.5
+    return [(cx, rect.y2), (rect.x2, cy), (cx, rect.y), (rect.x, cy)]
+
+
+def _outline_hexagon(rect: Rect) -> list[tuple[float, float]]:
+    return _outline_polygon_pct(rect, [(25, 0), (75, 0), (100, 50), (75, 100), (25, 100), (0, 50)])
+
+
+def _outline_octagon(rect: Rect) -> list[tuple[float, float]]:
+    return _outline_polygon_pct(rect, [(12, 0), (88, 0), (100, 12), (100, 88), (88, 100), (12, 100), (0, 88), (0, 12)])
+
+
+def _outline_star(rect: Rect) -> list[tuple[float, float]]:
+    return _outline_polygon_pct(rect, [(50, 0), (61, 35), (98, 35), (68, 57), (79, 91), (50, 70), (21, 91), (32, 57), (2, 35), (39, 35)])
+
+
+def _outline_fluffy(rect: Rect) -> list[tuple[float, float]]:
+    return _outline_polygon_pct(
+        rect,
+        [(50, 3), (70, 8), (88, 16), (96, 30), (92, 50), (96, 70), (88, 84), (70, 92), (50, 97), (30, 92), (12, 84), (4, 70), (8, 50), (4, 30), (12, 16), (30, 8)],
+    )
+
+
+def _balloon_outline_mm(entry, rect: Rect) -> list[tuple[float, float]]:
+    shape = getattr(entry, "shape", "rect")
+    sp = entry.shape_params
+    if shape == "rect":
+        if getattr(entry, "rounded_corner_enabled", False) and float(getattr(entry, "rounded_corner_radius_mm", 0.0)) > 0.0:
+            return _outline_rounded_rect(rect, float(entry.rounded_corner_radius_mm))
+        return _outline_rect(rect)
+    if shape == "ellipse":
+        return _outline_ellipse(rect)
+    if shape == "pill":
+        return _outline_pill(rect)
+    if shape == "diamond":
+        return _outline_diamond(rect)
+    if shape == "hexagon":
+        return _outline_hexagon(rect)
+    if shape == "octagon":
+        return _outline_octagon(rect)
+    if shape == "star":
+        return _outline_star(rect)
+    if shape == "fluffy":
+        return _outline_fluffy(rect)
+    if shape == "cloud":
+        return _outline_cloud(rect, int(sp.cloud_wave_count), float(sp.cloud_wave_amplitude_mm))
+    if shape == "spike_straight":
+        return _outline_spike(rect, int(sp.spike_count), float(sp.spike_depth_mm), smooth=False)
+    if shape == "spike_curve":
+        return _outline_spike(rect, int(sp.spike_count), float(sp.spike_depth_mm), smooth=True)
+    return _outline_rect(rect)
+
+
+def _apply_balloon_transforms(
+    pts: Sequence[tuple[float, float]],
+    rect: Rect,
+    flip_h: bool,
+    flip_v: bool,
+    rotation_deg: float,
+) -> list[tuple[float, float]]:
+    if not (flip_h or flip_v or abs(rotation_deg) > 1e-6):
+        return list(pts)
+    cx = (rect.x + rect.x2) * 0.5
+    cy = (rect.y + rect.y2) * 0.5
+    sx = -1.0 if flip_h else 1.0
+    sy = -1.0 if flip_v else 1.0
+    cos_r = math.cos(math.radians(rotation_deg))
+    sin_r = math.sin(math.radians(rotation_deg))
+    out = []
+    for x, y in pts:
+        dx = (x - cx) * sx
+        dy = (y - cy) * sy
+        rx = dx * cos_r - dy * sin_r
+        ry = dx * sin_r + dy * cos_r
+        out.append((cx + rx, cy + ry))
+    return out
+
+
+def _balloon_tail_polygon(rect: Rect, tail) -> list[tuple[float, float]]:
+    cx = (rect.x + rect.x2) * 0.5
+    cy = (rect.y + rect.y2) * 0.5
+    rx = rect.width * 0.5
+    ry = rect.height * 0.5
+    angle = math.radians(float(getattr(tail, "direction_deg", 270.0)))
+    dx = math.cos(angle)
+    dy = math.sin(angle)
+    denom = math.hypot(dx / max(rx, 0.01), dy / max(ry, 0.01))
+    base_x = cx + (dx / denom) if denom > 0.0 else cx
+    base_y = cy + (dy / denom) if denom > 0.0 else cy
+    tip_x = base_x + dx * float(getattr(tail, "length_mm", 0.0))
+    tip_y = base_y + dy * float(getattr(tail, "length_mm", 0.0))
+    nx = -dy
+    ny = dx
+    root_half = float(getattr(tail, "root_width_mm", 0.0)) * 0.5
+    tip_half = float(getattr(tail, "tip_width_mm", 0.0)) * 0.5
+    tail_type = getattr(tail, "type", "straight")
+    if tail_type == "sticky":
+        return [
+            (base_x + nx * root_half, base_y + ny * root_half),
+            (tip_x + nx * tip_half if tip_half > 0.0 else tip_x, tip_y + ny * tip_half if tip_half > 0.0 else tip_y),
+            (tip_x - nx * tip_half if tip_half > 0.0 else tip_x, tip_y - ny * tip_half if tip_half > 0.0 else tip_y),
+            (base_x - nx * root_half, base_y - ny * root_half),
+        ]
+    if tail_type == "curve":
+        bend = float(getattr(tail, "curve_bend", 0.0)) * float(getattr(tail, "length_mm", 0.0)) * 0.4
+        mid_x = (base_x + tip_x) * 0.5 + nx * bend
+        mid_y = (base_y + tip_y) * 0.5 + ny * bend
+        return [
+            (base_x + nx * root_half, base_y + ny * root_half),
+            (mid_x, mid_y),
+            (tip_x, tip_y),
+            (mid_x, mid_y),
+            (base_x - nx * root_half, base_y - ny * root_half),
+        ]
+    return [
+        (base_x + nx * root_half, base_y + ny * root_half),
+        (tip_x, tip_y),
+        (base_x - nx * root_half, base_y - ny * root_half),
+    ]
+
+
+def _render_balloon_layer(entry, canvas_height_px: int, dpi: int) -> ExportLayer | None:
+    if getattr(entry, "shape", "rect") == "none":
+        return None
+    rect = Rect(float(entry.x_mm), float(entry.y_mm), float(entry.width_mm), float(entry.height_mm))
+    outline = _apply_balloon_transforms(
+        _balloon_outline_mm(entry, rect),
+        rect,
+        bool(getattr(entry, "flip_h", False)),
+        bool(getattr(entry, "flip_v", False)),
+        float(getattr(entry, "rotation_deg", 0.0)),
+    )
+    all_pts = list(outline)
+    for tail in entry.tails:
+        all_pts.extend(_balloon_tail_polygon(rect, tail))
+    bbox = _points_bbox(all_pts)
+    if bbox is None:
+        return None
+    pad_mm = max(2.0, float(getattr(entry, "line_width_mm", 0.6)) * 4.0)
+    canvas = _canvas_for_bbox(bbox, canvas_height_px, dpi, pad_mm=pad_mm)
+    if canvas is None:
+        return None
+    fill_color = _rgb255(entry.fill_color, alpha=float(getattr(entry, "opacity", 1.0)))
+    line_color = _rgb255(entry.line_color, alpha=float(getattr(entry, "opacity", 1.0)))
+    line_width_px = max(1, int(round(mm_to_px(float(getattr(entry, "line_width_mm", 0.6)), dpi))))
+    draw = ImageDraw.Draw(canvas.image)
+    outline_px = canvas.points_px(outline)
+    if len(outline_px) >= 3:
+        draw.polygon(outline_px, fill=fill_color)
+    _draw_styled_loop(draw, outline_px, line_color, line_width_px, getattr(entry, "line_style", "solid"))
+    for tail in entry.tails:
+        tail_px = canvas.points_px(_balloon_tail_polygon(rect, tail))
+        if len(tail_px) >= 3:
+            draw.polygon(tail_px, fill=fill_color)
+            _draw_styled_loop(draw, tail_px, line_color, line_width_px, getattr(entry, "line_style", "solid"))
+    return ExportLayer(
+        str(getattr(entry, "id", "") or "balloon"),
+        canvas.image,
+        canvas.left,
+        canvas.top,
+        group_path=("balloons",),
+    )
+
+
+def _render_text_layer(entry, canvas_height_px: int, dpi: int) -> ExportLayer | None:
+    body = (getattr(entry, "body", "") or "").strip()
+    if not body:
+        return None
+    pad_mm = 1.5
+    canvas = _canvas_for_bbox(
+        (
+            float(entry.x_mm),
+            float(entry.y_mm),
+            float(entry.x_mm + entry.width_mm),
+            float(entry.y_mm + entry.height_mm),
+        ),
+        canvas_height_px,
+        dpi,
+        pad_mm=pad_mm,
+    )
+    if canvas is None:
+        return None
+    from ..typography import export_renderer, layout as text_layout
+
+    font_path = _resolve_font_path(str(getattr(entry, "font", "")))
+    result = text_layout.typeset(entry, pad_mm, pad_mm, float(entry.width_mm), float(entry.height_mm))
+    stroke_width_px = 0
+    stroke_color = (255, 255, 255, 255)
+    if getattr(entry, "stroke_enabled", False):
+        stroke_width_px = max(1, int(round(mm_to_px(float(getattr(entry, "stroke_width_mm", 0.2)), dpi))))
+        stroke_color = _rgb255(getattr(entry, "stroke_color", (1.0, 1.0, 1.0, 1.0)))
+    export_renderer.render_to_image(
+        result,
+        canvas.image,
+        font_path=font_path,
+        px_per_mm=mm_to_px(1.0, dpi),
+        color=_rgb255(getattr(entry, "color", (0.0, 0.0, 0.0, 1.0))),
+        stroke_width_px=stroke_width_px,
+        stroke_color=stroke_color,
+    )
+    return ExportLayer(
+        str(getattr(entry, "id", "") or "text"),
+        canvas.image,
+        canvas.left,
+        canvas.top,
+        group_path=("texts",),
+    )
+
+
+def _render_simple_text_layer(
+    text: str,
+    *,
+    left_mm: float,
+    baseline_top_mm: float,
+    font_path: str,
+    font_size_mm: float,
+    color: tuple[int, int, int, int],
+    dpi: int,
+    canvas_height_px: int,
+    group_path: tuple[str, ...],
+    name: str,
+    anchor_x: str = "left",
+    anchor_y: str = "top",
+    stroke_width_mm: float = 0.0,
+    stroke_color: tuple[int, int, int, int] = (255, 255, 255, 255),
+) -> ExportLayer | None:
+    if not text:
+        return None
+    font = _load_font(font_path, max(1, int(round(mm_to_px(font_size_mm, dpi)))))
+    stroke_width_px = max(0, int(round(mm_to_px(stroke_width_mm, dpi))))
+    text_w, text_h = _text_bbox(text, font, stroke_width_px=stroke_width_px)
+    pad_px = max(2, stroke_width_px + 2)
+    image = _empty_rgba((text_w + pad_px * 2, text_h + pad_px * 2))
+    draw = ImageDraw.Draw(image)
+    draw.text((pad_px, pad_px), text, font=font, fill=color, stroke_width=stroke_width_px, stroke_fill=stroke_color)
+    x_px = int(round(mm_to_px(left_mm, dpi)))
+    y_px = canvas_height_px - int(round(mm_to_px(baseline_top_mm, dpi)))
+    if anchor_x == "center":
+        x_px -= image.width // 2
+    elif anchor_x == "right":
+        x_px -= image.width
+    if anchor_y == "middle":
+        y_px -= image.height // 2
+    elif anchor_y == "bottom":
+        y_px -= image.height
+    return ExportLayer(name, image, x_px, y_px, group_path=group_path)
+
+
+def _work_info_layers(work, page, canvas_size: tuple[int, int], dpi: int) -> list[ExportLayer]:
+    info = getattr(work, "work_info", None)
+    if info is None:
+        return []
+    layers: list[ExportLayer] = []
+    rects = overlay_shared.compute_paper_rects(work.paper, is_left_half=_is_left_half_page(work, page))
+    inner = rects.inner_frame
+    page_text = f"ページ{int(getattr(info, 'page_number_start', 1)) + _resolve_page_index(work, page):04d}"
+    items = [
+        (info.display_work_name, info.work_name, "work_name"),
+        (info.display_episode, f"第{info.episode_number}話" if info.episode_number else "", "episode"),
+        (info.display_subtitle, info.subtitle, "subtitle"),
+        (info.display_author, info.author, "author"),
+        (info.display_page_number, page_text, "page_number"),
+    ]
+    pad_mm = 2.0
+    font_path = _resolve_font_path("")
+    for item, text, name in items:
+        if item is None or not getattr(item, "enabled", False) or not text:
+            continue
+        pos = getattr(item, "position", "bottom-left")
+        if pos.endswith("left"):
+            x_mm = inner.x
+            anchor_x = "left"
+        elif pos.endswith("right"):
+            x_mm = inner.x2
+            anchor_x = "right"
+        else:
+            x_mm = inner.x + inner.width * 0.5
+            anchor_x = "center"
+        if pos.startswith("top"):
+            y_mm = inner.y2 + pad_mm
+            anchor_y = "top"
+        else:
+            y_mm = inner.y - pad_mm
+            anchor_y = "bottom"
+        font_size_mm = q_to_mm(float(getattr(item, "font_size_q", 20.0)))
+        layer = _render_simple_text_layer(
+            text,
+            left_mm=x_mm,
+            baseline_top_mm=y_mm,
+            font_path=font_path,
+            font_size_mm=font_size_mm,
+            color=_rgb255(item.color),
+            dpi=dpi,
+            canvas_height_px=canvas_size[1],
+            group_path=("work_info",),
+            name=name,
+            anchor_x=anchor_x,
+            anchor_y=anchor_y,
+        )
+        if layer is not None:
+            layers.append(layer)
+    return layers
+
+
+def _nombre_layer(work, page, canvas_size: tuple[int, int], dpi: int) -> ExportLayer | None:
+    nombre = getattr(work, "nombre", None)
+    if nombre is None or not getattr(nombre, "enabled", False):
+        return None
+    page_number = _resolve_page_number(work, page)
+    text = overlay_shared.format_nombre_text(nombre, page_number)
+    x_mm, y_mm = overlay_shared.nombre_anchor(work.paper, nombre, is_left_half=_is_left_half_page(work, page))
+    font_path = _resolve_font_path(str(getattr(nombre, "font", "")))
+    anchor_x = "center"
+    pos = getattr(nombre, "position", "bottom-center")
+    if pos.endswith("left"):
+        anchor_x = "left"
+    elif pos.endswith("right"):
+        anchor_x = "right"
+    anchor_y = "bottom" if pos.startswith("bottom") else "top"
+    stroke_width_mm = float(getattr(nombre, "border_width_mm", 0.0)) if getattr(nombre, "border_enabled", False) else 0.0
+    stroke_color = _rgb255(getattr(nombre, "border_color", (1.0, 1.0, 1.0, 1.0)))
+    return _render_simple_text_layer(
+        text,
+        left_mm=float(x_mm),
+        baseline_top_mm=float(y_mm),
+        font_path=font_path,
+        font_size_mm=float(getattr(nombre, "font_size_pt", 9.0)) * 25.4 / 72.0,
+        color=_rgb255(nombre.color),
+        dpi=dpi,
+        canvas_height_px=canvas_size[1],
+        group_path=("nombre",),
+        name="nombre",
+        anchor_x=anchor_x,
+        anchor_y=anchor_y,
+        stroke_width_mm=stroke_width_mm,
+        stroke_color=stroke_color,
+    )
+
+
+def _trim_mark_segments(rects) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+    fr = rects.finish
+    br = rects.bleed
+    arm = 10.0
+    gap = 5.0
+    size = 10.0
+    half = size * 0.5
+    cx_mid = (fr.x + fr.x2) * 0.5
+    cy_mid = (fr.y + fr.y2) * 0.5
+    segs = [
+        ((br.x - arm, fr.y), (br.x, fr.y)),
+        ((fr.x, br.y - arm), (fr.x, br.y)),
+        ((br.x - arm, br.y), (br.x, br.y)),
+        ((br.x, br.y - arm), (br.x, br.y)),
+        ((br.x2, fr.y), (br.x2 + arm, fr.y)),
+        ((fr.x2, br.y - arm), (fr.x2, br.y)),
+        ((br.x2, br.y), (br.x2 + arm, br.y)),
+        ((br.x2, br.y - arm), (br.x2, br.y)),
+        ((br.x - arm, fr.y2), (br.x, fr.y2)),
+        ((fr.x, br.y2), (fr.x, br.y2 + arm)),
+        ((br.x - arm, br.y2), (br.x, br.y2)),
+        ((br.x, br.y2), (br.x, br.y2 + arm)),
+        ((br.x2, fr.y2), (br.x2 + arm, fr.y2)),
+        ((fr.x2, br.y2), (fr.x2, br.y2 + arm)),
+        ((br.x2, br.y2), (br.x2 + arm, br.y2)),
+        ((br.x2, br.y2), (br.x2, br.y2 + arm)),
+    ]
+    cy_top = br.y2 + gap + half
+    cy_bottom = br.y - gap - half
+    cx_left = br.x - gap - half
+    cx_right = br.x2 + gap + half
+    segs.extend(
+        [
+            ((cx_mid, cy_top - half), (cx_mid, cy_top + half)),
+            ((cx_mid - half, cy_top), (cx_mid + half, cy_top)),
+            ((cx_mid, cy_bottom - half), (cx_mid, cy_bottom + half)),
+            ((cx_mid - half, cy_bottom), (cx_mid + half, cy_bottom)),
+            ((cx_left, cy_mid - half), (cx_left, cy_mid + half)),
+            ((cx_left - half, cy_mid), (cx_left + half, cy_mid)),
+            ((cx_right, cy_mid - half), (cx_right, cy_mid + half)),
+            ((cx_right - half, cy_mid), (cx_right + half, cy_mid)),
+        ]
+    )
+    return segs
+
+
+def _tombo_layer(work, page, canvas_size: tuple[int, int], dpi: int) -> ExportLayer | None:
+    rects = overlay_shared.compute_paper_rects(work.paper, is_left_half=_is_left_half_page(work, page))
+    segs = _trim_mark_segments(rects)
+    xs = [p[0] for seg in segs for p in seg]
+    ys = [p[1] for seg in segs for p in seg]
+    canvas = _canvas_for_bbox((min(xs), min(ys), max(xs), max(ys)), canvas_size[1], dpi, pad_mm=1.0)
+    if canvas is None:
+        return None
+    draw = ImageDraw.Draw(canvas.image)
+    color = (13, 13, 13, 242)
+    width = max(1, int(round(mm_to_px(0.40, dpi))))
+    for p0, p1 in segs:
+        draw.line((canvas.point_px(*p0), canvas.point_px(*p1)), fill=color, width=width)
+    return ExportLayer("tombo", canvas.image, canvas.left, canvas.top, group_path=("tombo",))
+
+
+def _gp_material_info(obj, stroke) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int], bool]:
+    color = (0, 0, 0, 255)
+    fill = (0, 0, 0, 255)
+    show_fill = False
+    idx = int(getattr(stroke, "material_index", 0))
+    mats = getattr(getattr(obj, "data", None), "materials", None)
+    if mats is None or idx < 0 or idx >= len(mats):
+        return (color, fill, show_fill)
+    mat = mats[idx]
+    style = getattr(mat, "grease_pencil", None)
+    if style is None:
+        return (color, fill, show_fill)
+    if hasattr(style, "color"):
+        color = _rgb255(style.color)
+    if hasattr(style, "fill_color"):
+        fill = _rgb255(style.fill_color)
+    show_fill = bool(getattr(style, "show_fill", False))
+    return (color, fill, show_fill)
+
+
+def _gp_layer_frame(layer):
+    frames = list(getattr(layer, "frames", []))
+    if not frames:
+        return None
+    try:
+        import bpy
+
+        current = int(bpy.context.scene.frame_current)
+    except Exception:  # noqa: BLE001
+        current = None
+    if current is None:
+        return frames[0]
+    exact = [frame for frame in frames if int(getattr(frame, "frame_number", -1)) == current]
+    if exact:
+        return exact[0]
+    earlier = [frame for frame in frames if int(getattr(frame, "frame_number", -1)) <= current]
+    if earlier:
+        earlier.sort(key=lambda frame: int(getattr(frame, "frame_number", 0)), reverse=True)
+        return earlier[0]
+    return frames[0]
+
+
+def _gp_stroke_points_mm(obj, stroke, page_offset_mm: tuple[float, float]) -> tuple[list[tuple[float, float]], float]:
+    obj_loc = getattr(obj, "location", None)
+    obj_x = float(getattr(obj_loc, "x", 0.0))
+    obj_y = float(getattr(obj_loc, "y", 0.0))
+    pts: list[tuple[float, float]] = []
+    radii: list[float] = []
+    for point in getattr(stroke, "points", []):
+        pos = getattr(point, "position", None)
+        if pos is None:
+            continue
+        x_mm = m_to_mm(obj_x + float(pos[0])) - page_offset_mm[0]
+        y_mm = m_to_mm(obj_y + float(pos[1])) - page_offset_mm[1]
+        pts.append((x_mm, y_mm))
+        try:
+            radii.append(m_to_mm(float(getattr(point, "radius", 0.0002))) * 2.0)
+        except Exception:  # noqa: BLE001
+            pass
+    width_mm = max(radii) if radii else 0.4
+    return (pts, max(0.05, width_mm))
+
+
+def _render_gp_object_layers(
+    obj,
+    work,
+    page,
+    canvas_size: tuple[int, int],
+    dpi: int,
+    *,
+    group_root: str,
+    page_offset_mm: tuple[float, float],
+) -> list[ExportLayer]:
+    canvas_bbox = (0.0, 0.0, float(work.paper.canvas_width_mm), float(work.paper.canvas_height_mm))
+    out: list[ExportLayer] = []
+    data = getattr(obj, "data", None)
+    layers = getattr(data, "layers", None)
+    if layers is None:
+        return out
+    for layer in layers:
+        if bool(getattr(layer, "hide", False)):
+            continue
+        frame = _gp_layer_frame(layer)
+        drawing = getattr(frame, "drawing", None) if frame is not None else None
+        strokes = list(getattr(drawing, "strokes", [])) if drawing is not None else []
+        if not strokes:
+            continue
+        stroke_payloads: list[tuple[list[tuple[float, float]], float, tuple[int, int, int, int], tuple[int, int, int, int], bool, bool]] = []
+        bbox_pts: list[tuple[float, float]] = []
+        for stroke in strokes:
+            pts_mm, width_mm = _gp_stroke_points_mm(obj, stroke, page_offset_mm)
+            if len(pts_mm) < 2:
+                continue
+            bbox = _points_bbox(pts_mm)
+            if bbox is None:
+                continue
+            expanded = (bbox[0] - width_mm, bbox[1] - width_mm, bbox[2] + width_mm, bbox[3] + width_mm)
+            if not _intersects_mm(expanded, canvas_bbox):
+                continue
+            stroke_color, fill_color, show_fill = _gp_material_info(obj, stroke)
+            cyclic = bool(getattr(stroke, "cyclic", False))
+            stroke_payloads.append((pts_mm, width_mm, stroke_color, fill_color, show_fill, cyclic))
+            bbox_pts.extend(pts_mm)
+        if not stroke_payloads:
+            continue
+        bbox = _points_bbox(bbox_pts)
+        if bbox is None:
+            continue
+        max_width = max(payload[1] for payload in stroke_payloads)
+        canvas = _canvas_for_bbox(bbox, canvas_size[1], dpi, pad_mm=max_width * 2.0)
+        if canvas is None:
+            continue
+        draw = ImageDraw.Draw(canvas.image)
+        for pts_mm, width_mm, stroke_color, fill_color, show_fill, cyclic in stroke_payloads:
+            pts_px = canvas.points_px(pts_mm)
+            width_px = max(1, int(round(mm_to_px(width_mm, dpi))))
+            if cyclic and show_fill and len(pts_px) >= 3:
+                draw.polygon(pts_px, fill=fill_color)
+            draw.line(pts_px, fill=stroke_color, width=width_px)
+            if cyclic and len(pts_px) >= 3:
+                draw.line([*pts_px, pts_px[0]], fill=stroke_color, width=width_px)
+        out.append(
+            ExportLayer(
+                str(getattr(layer, "name", "layer")),
+                canvas.image,
+                canvas.left,
+                canvas.top,
+                group_path=("gp", group_root),
+                visible=True,
+                opacity=_normalize_opacity(getattr(layer, "opacity", 1.0)),
+                blend_mode=_blend_mode_name(getattr(layer, "blend_mode", "normal")),
+            )
+        )
+    return out
+
+
+def _gp_layers(work, page, canvas_size: tuple[int, int], dpi: int) -> list[ExportLayer]:
+    try:
+        import bpy
+
+        from ..utils import gpencil as gp_utils
+    except Exception:  # pragma: no cover - bpy unavailable outside Blender
+        return []
+    out: list[ExportLayer] = []
+    master = gp_utils.get_master_gpencil()
+    page_offset_mm = _resolve_page_offset_mm(work, page)
+    if master is not None:
+        out.extend(
+            _render_gp_object_layers(
+                master,
+                work,
+                page,
+                canvas_size,
+                dpi,
+                group_root="master",
+                page_offset_mm=page_offset_mm,
+            )
+        )
+    effect_obj = bpy.data.objects.get("BName_EffectLines")
+    # 効果線 GP は現状ページ非依存の単一オブジェクトで保持されており、
+    # そのまま全ページに適用すると同一ストロークが全ページへ重複出力される。
+    # ページ紐付けが実装されるまでは、編集中のアクティブページにのみ出す。
+    if effect_obj is not None and effect_obj is not master and _is_active_page(work, page):
+        out.extend(
+            _render_gp_object_layers(
+                effect_obj,
+                work,
+                page,
+                canvas_size,
+                dpi,
+                group_root="effects",
+                page_offset_mm=(0.0, 0.0),
+            )
+        )
+    return out
+
+
+def build_page_layers(work, page, options: ExportOptions) -> list[ExportLayer]:
+    if not _HAS_PIL:
+        return []
+    paper = work.paper
+    dpi = _dpi(paper, options)
+    canvas_size = _canvas_size_px(paper, options)
+    layers: list[ExportLayer] = []
+    if options.include_paper_color:
+        layers.append(
+            ExportLayer(
+                "paper",
+                Image.new("RGBA", canvas_size, _rgb255(paper.paper_color)),
+                0,
+                0,
+                group_path=("paper",),
+            )
+        )
+    else:
+        layers.append(ExportLayer("paper", _empty_rgba(canvas_size), 0, 0, group_path=("paper",)))
+
+    try:
+        import bpy
+
+        image_layers = getattr(bpy.context.scene, "bname_image_layers", None)
+    except Exception:  # pragma: no cover - bpy unavailable outside Blender
+        image_layers = None
+    if image_layers is not None:
+        for entry in image_layers:
+            if not getattr(entry, "visible", True):
+                continue
+            layer = _render_image_layer(entry, canvas_size, dpi)
+            if layer is not None:
+                layers.append(layer)
+
+    for panel in sorted(page.panels, key=lambda candidate: int(getattr(candidate, "z_order", 0))):
+        panel_group = _panel_root_group_path(panel)
+        content_group = _panel_content_group_path(panel)
+        if options.include_white_margin and getattr(panel.white_margin, "enabled", False):
+            wm_layer = _draw_panel_white_margin_layer(panel, canvas_size[1], dpi)
+            if wm_layer is not None:
+                layers.append(replace(wm_layer, group_path=panel_group))
+        render_layer = _render_panel_preview_layer(work, page, panel, canvas_size, dpi)
+        if render_layer is not None:
+            layers.append(replace(render_layer, group_path=content_group))
+        if options.include_border and getattr(panel.border, "visible", False):
+            border_layer = _draw_panel_border_layer(panel, canvas_size[1], dpi)
+            if border_layer is not None:
+                layers.append(replace(border_layer, group_path=panel_group))
+
+    layers.extend(_gp_layers(work, page, canvas_size, dpi))
+
+    for balloon in getattr(page, "balloons", []):
+        layer = _render_balloon_layer(balloon, canvas_size[1], dpi)
+        if layer is not None:
+            layers.append(layer)
+
+    for text in getattr(page, "texts", []):
+        layer = _render_text_layer(text, canvas_size[1], dpi)
+        if layer is not None:
+            layers.append(layer)
+
+    if options.include_tombo:
+        tombo = _tombo_layer(work, page, canvas_size, dpi)
+        if tombo is not None:
+            layers.append(tombo)
+
+    if options.include_work_info:
+        layers.extend(_work_info_layers(work, page, canvas_size, dpi))
+
+    if options.include_nombre:
+        nombre = _nombre_layer(work, page, canvas_size, dpi)
+        if nombre is not None:
+            layers.append(nombre)
+    return layers
+
+
+def _crop_layers(
+    layers: Sequence[ExportLayer],
+    crop_box: tuple[int, int, int, int],
+) -> tuple[list[ExportLayer], tuple[int, int]]:
+    crop_left, crop_top, crop_right, crop_bottom = crop_box
+    out: list[ExportLayer] = []
+    for layer in layers:
+        inter_left = max(layer.left, crop_left)
+        inter_top = max(layer.top, crop_top)
+        inter_right = min(layer.right, crop_right)
+        inter_bottom = min(layer.bottom, crop_bottom)
+        if inter_right <= inter_left or inter_bottom <= inter_top:
+            continue
+        src_box = (
+            inter_left - layer.left,
+            inter_top - layer.top,
+            inter_right - layer.left,
+            inter_bottom - layer.top,
+        )
+        out.append(
+            replace(
+                layer,
+                image=layer.image.crop(src_box),
+                left=inter_left - crop_left,
+                top=inter_top - crop_top,
+            )
+        )
+    return (out, (crop_right - crop_left, crop_bottom - crop_top))
+
+
+def _panel_group_masks(work, page, options: ExportOptions) -> dict[tuple[str, ...], ExportMask]:
+    dpi = _dpi(work.paper, options)
+    canvas_size = _canvas_size_px(work.paper, options)
+    masks: dict[tuple[str, ...], ExportMask] = {}
+    for panel in sorted(page.panels, key=lambda candidate: int(getattr(candidate, "z_order", 0))):
+        mask = _render_panel_mask(panel, canvas_size[1], dpi)
+        if mask is not None:
+            masks[_panel_content_group_path(panel)] = mask
+    return masks
+
+
+def _crop_group_masks(
+    masks: dict[tuple[str, ...], ExportMask],
+    crop_box: tuple[int, int, int, int],
+) -> dict[tuple[str, ...], ExportMask]:
+    crop_left, crop_top, crop_right, crop_bottom = crop_box
+    out: dict[tuple[str, ...], ExportMask] = {}
+    for path, mask in masks.items():
+        inter_left = max(mask.left, crop_left)
+        inter_top = max(mask.top, crop_top)
+        inter_right = min(mask.right, crop_right)
+        inter_bottom = min(mask.bottom, crop_bottom)
+        if inter_right <= inter_left or inter_bottom <= inter_top:
+            continue
+        src_box = (
+            inter_left - mask.left,
+            inter_top - mask.top,
+            inter_right - mask.left,
+            inter_bottom - mask.top,
+        )
+        out[path] = ExportMask(
+            mask.image.crop(src_box),
+            inter_left - crop_left,
+            inter_top - crop_top,
+        )
+    return out
+
+
+def _convert_flatten_mode(img, options: ExportOptions):
+    if options.color_mode == "monochrome":
+        return img.convert("L").convert("1", dither=Image.FLOYDSTEINBERG)
+    if options.color_mode == "grayscale":
+        return img.convert("L")
+    if options.color_mode == "cmyk":
+        converted = convert_to_cmyk(img, options.icc_profile_path)
+        return converted if converted is not None else img
+    return img.convert("RGBA")
+
+
+def _convert_layer_mode_rgba(layer: ExportLayer, color_mode: str) -> ExportLayer:
+    if color_mode == "rgb":
+        return layer
+    out = layer.image.convert("RGBA")
+    alpha = out.getchannel("A")
+    if color_mode == "grayscale":
+        gray = out.convert("L")
+        out = Image.merge("RGBA", (gray, gray, gray, alpha))
+    elif color_mode == "monochrome":
+        mono = out.convert("L").point(lambda px: 255 if px >= 128 else 0)
+        out = Image.merge("RGBA", (mono, mono, mono, alpha))
+    return replace(layer, image=out)
+
+
+def _blend_rgb(base_rgb, src_rgb, mode: str):
+    mode = (mode or "normal").lower()
+    if mode == "multiply":
+        return ImageChops.multiply(base_rgb, src_rgb)
+    if mode == "screen":
+        return ImageChops.screen(base_rgb, src_rgb)
+    if mode == "overlay" and hasattr(ImageChops, "overlay"):
+        return ImageChops.overlay(base_rgb, src_rgb)
+    if mode in {"add", "linear_dodge"}:
+        return ImageChops.add(base_rgb, src_rgb, scale=1.0)
+    return src_rgb
+
+
+def _composite_layer(canvas, layer: ExportLayer) -> None:
+    if not layer.visible or layer.opacity <= 0:
+        return
+    src = layer.image.convert("RGBA")
+    if layer.opacity < 255:
+        src = _scale_alpha(src, layer.opacity)
+    left = max(0, layer.left)
+    top = max(0, layer.top)
+    right = min(canvas.width, layer.right)
+    bottom = min(canvas.height, layer.bottom)
+    if right <= left or bottom <= top:
+        return
+    src_crop = src.crop((left - layer.left, top - layer.top, right - layer.left, bottom - layer.top))
+    if layer.blend_mode in ("normal", "", None):
+        canvas.alpha_composite(src_crop, dest=(left, top))
+        return
+    base_region = canvas.crop((left, top, right, bottom))
+    base_rgb = base_region.convert("RGB")
+    src_rgb = src_crop.convert("RGB")
+    blended_rgb = _blend_rgb(base_rgb, src_rgb, layer.blend_mode)
+    mask = src_crop.getchannel("A")
+    mixed_rgb = Image.composite(blended_rgb, base_rgb, mask)
+    alpha_region = base_region.copy()
+    alpha_region.alpha_composite(src_crop)
+    composed = Image.merge("RGBA", (*mixed_rgb.split(), alpha_region.getchannel("A")))
+    canvas.paste(composed, (left, top))
+
+
+def _flatten_layers(layers: Sequence[ExportLayer], size: tuple[int, int]) -> Any:
+    canvas = _empty_rgba(size)
+    for layer in layers:
+        _composite_layer(canvas, layer)
+    return canvas
 
 
 def render_page(work, page, options: ExportOptions) -> Any:
-    """単一ページを Pillow Image として合成.
-
-    返り値: PIL.Image.Image (実行時) もしくは None (Pillow 未同梱時)。
-    書き出しパイプライン (計画書 3.8.4) の工程を簡易実装:
-      1. 紙面ベース画像 (用紙色)
-      2. コマ枠画像 (_preview.png / _thumb.png 優先、無ければ白)
-      3. Grease Pencil レイヤー合成 (TODO: Phase 6 後半)
-      4. コマ枠線・白フチ
-      5. ノンブル・作品情報 (TODO: fontTools + Pillow)
-    """
     if not _HAS_PIL:
         _logger.warning("render_page called without Pillow")
         return None
-
-    paper = work.paper
-    dpi = _dpi(paper, options)
-    size = _canvas_size_px(paper, options)
-
-    # 1. ベース画像
-    if options.include_paper_color:
-        fill = tuple(int(round(c * 255)) for c in paper.paper_color[:3]) + (255,)
-    else:
-        fill = (255, 255, 255, 255)
-    img = Image.new("RGBA", size, fill)
-
-    # 2. コマのレンダー結果を貼り込み (Z 順昇順)
-    _paste_panel_renders(img, work, page, paper, dpi)
-
-    # 4. コマ枠線・白フチ
-    if options.include_border or options.include_white_margin:
-        _draw_panel_borders(img, page, paper, dpi, options)
-
-    # 5. ノンブル (TODO: 実フォント使用)
-    if options.include_nombre and work.nombre.enabled:
-        _draw_nombre_placeholder(img, work, dpi)
-
-    # 6. カラーモード変換
-    if options.color_mode == "monochrome":
-        img = img.convert("L").convert("1", dither=Image.FLOYDSTEINBERG)
-    elif options.color_mode == "grayscale":
-        img = img.convert("L")
-    elif options.color_mode == "cmyk":
-        # Phase 6d: ICC プロファイルが指定されていれば ImageCms で高品質変換
-        converted = convert_to_cmyk(img, options.icc_profile_path)
-        if converted is not None:
-            img = converted
-    else:
-        img = img.convert("RGBA")
-
-    # 7. area で crop
+    layers = build_page_layers(work, page, options)
+    crop_box = _area_rect_px(work.paper, options, is_left_half=_is_left_half_page(work, page))
     if options.area != "canvas":
-        crop = _area_rect_px(paper, options)
-        img = img.crop(crop)
-    return img
-
-
-def _paste_panel_renders(img, work, page, paper, dpi: int) -> None:
-    """各コマのレンダー結果 (_preview.png / _thumb.png) を貼り付け."""
-    if page is None:
-        return
-    work_dir = Path(work.work_dir) if work.work_dir else None
-    if work_dir is None:
-        return
-    h_px = img.height
-    for entry in sorted(page.panels, key=lambda p: p.z_order):
-        if entry.shape_type != "rect":
-            continue
-        # preview → thumb の順で試す
-        try:
-            index = int(entry.panel_stem.split("_", 1)[1])
-        except (ValueError, IndexError):
-            continue
-        from ..utils import paths as paths_mod
-
-        preview = paths_mod.panel_preview_path(work_dir, page.id, index)
-        thumb = paths_mod.panel_thumb_path(work_dir, page.id, index)
-        source = preview if preview.is_file() else thumb if thumb.is_file() else None
-        if source is None:
-            continue
-        try:
-            panel_img = Image.open(str(source)).convert("RGBA")
-        except (OSError, ValueError):
-            continue
-        px_w = int(round(mm_to_px(entry.rect_width_mm, dpi)))
-        px_h = int(round(mm_to_px(entry.rect_height_mm, dpi)))
-        if px_w <= 0 or px_h <= 0:
-            continue
-        panel_img = panel_img.resize((px_w, px_h), Image.LANCZOS)
-        left = int(round(mm_to_px(entry.rect_x_mm, dpi)))
-        top = h_px - int(round(mm_to_px(entry.rect_y_mm + entry.rect_height_mm, dpi)))
-        img.alpha_composite(panel_img, dest=(left, top))
-
-
-def _draw_panel_borders(img, page, paper, dpi: int, options: ExportOptions) -> None:
-    draw = ImageDraw.Draw(img)
-    h_px = img.height
-    for entry in sorted(page.panels, key=lambda p: p.z_order):
-        if entry.shape_type != "rect":
-            continue
-        left = int(round(mm_to_px(entry.rect_x_mm, dpi)))
-        bottom_y_mm = entry.rect_y_mm
-        top = h_px - int(round(mm_to_px(bottom_y_mm + entry.rect_height_mm, dpi)))
-        right = int(round(mm_to_px(entry.rect_x_mm + entry.rect_width_mm, dpi)))
-        bottom = h_px - int(round(mm_to_px(bottom_y_mm, dpi)))
-
-        # 白フチ (先に描く、枠線の外側)
-        wm = entry.white_margin
-        if options.include_white_margin and wm.enabled and wm.width_mm > 0:
-            w_px = int(round(mm_to_px(wm.width_mm, dpi)))
-            color = tuple(int(round(c * 255)) for c in wm.color[:3]) + (255,)
-            draw.rectangle(
-                (left - w_px, top - w_px, right + w_px, bottom + w_px),
-                fill=color,
-            )
-
-        # 枠線
-        b = entry.border
-        if options.include_border and b.visible:
-            color = tuple(int(round(c * 255)) for c in b.color[:3]) + (255,)
-            width_px = max(1, int(round(mm_to_px(b.width_mm, dpi))))
-            draw.rectangle((left, top, right, bottom), outline=color, width=width_px)
-
-
-# ---------- Phase 6b/c/d: PDF 結合 / PSD / CMYK ----------
+        layers, size = _crop_layers(layers, crop_box)
+    else:
+        size = _canvas_size_px(work.paper, options)
+    image = _flatten_layers(layers, size)
+    return _convert_flatten_mode(image, options)
 
 
 def merge_pdf(page_image_paths: list[Path], out_path: Path) -> bool:
-    """複数の画像を 1 つの PDF に結合.
-
-    Pillow で各画像を 1 ページ分 PDF 化 → pypdf で結合する簡易実装。
-    pypdf が無い場合は Pillow のみで multi-page PDF を生成。
-    """
     if not _HAS_PIL or not page_image_paths:
         return False
     images = []
-    for p in page_image_paths:
+    for path in page_image_paths:
         try:
-            img = Image.open(str(p))
+            img = Image.open(str(path))
             if img.mode not in ("RGB", "L", "CMYK"):
                 img = img.convert("RGB")
             images.append(img)
         except (OSError, ValueError) as exc:
-            _logger.warning("pdf: failed to open %s: %s", p, exc)
+            _logger.warning("pdf: failed to open %s: %s", path, exc)
     if not images:
         return False
     try:
@@ -275,40 +1660,119 @@ def merge_pdf(page_image_paths: list[Path], out_path: Path) -> bool:
         return False
 
 
-def save_as_psd(img, out_path: Path) -> bool:
-    """Pillow Image を PSD として保存.
+def _psd_blend_mode(mode: str):
+    if BlendMode is None:
+        return None
+    mode = (mode or "normal").lower()
+    mapping = {
+        "normal": BlendMode.NORMAL,
+        "multiply": BlendMode.MULTIPLY,
+        "screen": BlendMode.SCREEN,
+        "overlay": BlendMode.OVERLAY,
+        "add": BlendMode.LINEAR_DODGE,
+        "linear_dodge": BlendMode.LINEAR_DODGE,
+    }
+    return mapping.get(mode, BlendMode.NORMAL)
 
-    psd-tools が同梱されている場合は PixelLayer で単一レイヤーとして書き出す。
-    未同梱なら Pillow の PSD 書き出し (Pillow は読み込み専用なので失敗) を
-    試行してフォールバック。
-    """
+
+def _ensure_psd_group(parent, name: str, cache: dict[tuple[str, ...], Any], path: tuple[str, ...]):
+    if path in cache:
+        return cache[path]
+    if hasattr(parent, "create_group"):
+        group = parent.create_group(name=name)
+    elif Group is not None:
+        group = Group.new(parent, name, True)
+        parent.append(group)
+    else:  # pragma: no cover - psd-tools API unavailable
+        raise RuntimeError("psd-tools group API unavailable")
+    cache[path] = group
+    return group
+
+
+def _save_layers_as_psd(
+    layers: Sequence[ExportLayer],
+    size: tuple[int, int],
+    out_path: Path,
+    group_masks: dict[tuple[str, ...], ExportMask] | None = None,
+) -> bool:
+    if not _HAS_PIL or not _HAS_PSD:
+        return False
+    try:
+        psd = PSDImage.new(mode="RGB", size=size)
+        group_cache: dict[tuple[str, ...], Any] = {(): psd}
+        for layer in layers:
+            parent = psd
+            path_accum: list[str] = []
+            for part in layer.group_path:
+                path_accum.append(part)
+                parent = _ensure_psd_group(parent, part, group_cache, tuple(path_accum))
+            kwargs = {
+                "name": layer.name,
+                "top": int(layer.top),
+                "left": int(layer.left),
+                "opacity": int(max(0, min(255, layer.opacity))),
+            }
+            blend_mode = _psd_blend_mode(layer.blend_mode)
+            if blend_mode is not None:
+                kwargs["blend_mode"] = blend_mode
+            pixel_layer = PixelLayer.frompil(layer.image.convert("RGBA"), parent=parent, **kwargs)
+            pixel_layer.visible = bool(layer.visible)
+        if group_masks:
+            for path, mask in group_masks.items():
+                group = group_cache.get(path)
+                if group is None:
+                    parent = psd
+                    path_accum = []
+                    for part in path:
+                        path_accum.append(part)
+                        parent = _ensure_psd_group(parent, part, group_cache, tuple(path_accum))
+                    group = group_cache.get(path)
+                if group is None or not hasattr(group, "create_mask"):
+                    continue
+                if hasattr(group, "has_mask") and group.has_mask():
+                    continue
+                group.create_mask(mask.image, top=int(mask.top), left=int(mask.left))
+        psd.save(str(out_path))
+        return True
+    except Exception as exc:  # noqa: BLE001
+        _logger.exception("layered psd save failed: %s", exc)
+        return False
+
+
+def save_page_as_psd(work, page, options: ExportOptions, out_path: Path) -> bool:
+    if not _HAS_PIL:
+        raise RuntimeError("Pillow が利用できません")
+    if not _HAS_PSD:
+        raise RuntimeError("psd-tools が未同梱のため PSD レイヤー出力できません")
+    if options.color_mode == "cmyk":
+        raise RuntimeError("PSD レイヤー出力での CMYK は未対応です")
+    layers = build_page_layers(work, page, options)
+    group_masks = _panel_group_masks(work, page, options)
+    layers = [_convert_layer_mode_rgba(layer, options.color_mode) for layer in layers]
+    crop_box = _area_rect_px(work.paper, options, is_left_half=_is_left_half_page(work, page))
+    if options.area != "canvas":
+        layers, size = _crop_layers(layers, crop_box)
+        group_masks = _crop_group_masks(group_masks, crop_box)
+    else:
+        size = _canvas_size_px(work.paper, options)
+    if not layers:
+        layers = [ExportLayer("empty", _empty_rgba(size), 0, 0)]
+    ok = _save_layers_as_psd(layers, size, out_path, group_masks=group_masks)
+    if not ok:
+        raise RuntimeError("PSD 保存に失敗しました")
+    return True
+
+
+def save_as_psd(img, out_path: Path) -> bool:
     if not _HAS_PIL:
         return False
-    if _HAS_PSD:
-        try:
-            if img.mode != "RGBA":
-                img = img.convert("RGBA")
-            psd = PSDImage.new(mode="RGBA", size=img.size)
-            PixelLayer.frompil(img, psd, layer_name="B-Name").insert(psd, 0)
-            psd.save(str(out_path))
-            return True
-        except Exception as exc:  # noqa: BLE001
-            _logger.exception("psd save failed: %s", exc)
-    # Pillow のみのフォールバック (PSD 書き込みは未対応のため失敗する)
-    try:
-        img.save(str(out_path), format="PSD")
-        return True
-    except (OSError, ValueError) as exc:
-        _logger.warning("psd fallback save failed: %s", exc)
+    if not _HAS_PSD:
         return False
+    layer = ExportLayer("B-Name", img.convert("RGBA"), 0, 0)
+    return _save_layers_as_psd([layer], img.size, out_path)
 
 
 def convert_to_cmyk(img, icc_profile_path: str = "") -> "Image.Image | None":
-    """RGB → CMYK 変換 (計画書 Phase 6d).
-
-    ICC プロファイルが指定されていれば ImageCms で高品質変換、
-    それ以外は Pillow 既定の convert("CMYK")。
-    """
     if not _HAS_PIL:
         return None
     if img.mode == "CMYK":
@@ -322,21 +1786,3 @@ def convert_to_cmyk(img, icc_profile_path: str = "") -> "Image.Image | None":
         except Exception as exc:  # noqa: BLE001
             _logger.warning("ImageCms transform failed, fallback: %s", exc)
     return img.convert("CMYK")
-
-
-def _draw_nombre_placeholder(img, work, dpi: int) -> None:
-    """ノンブル描画 (Phase 6a 暫定: Pillow 既定フォント)."""
-    if not _HAS_PIL:
-        return
-    draw = ImageDraw.Draw(img)
-    n = work.nombre
-    text = n.format.replace("{page}", str(n.start_number))
-    # 原稿下端中央、基本枠の 5mm 下
-    from ..utils.geom import inner_frame_rect
-
-    frame = inner_frame_rect(work.paper)
-    h_px = img.height
-    x = int(round(mm_to_px(frame.x + frame.width / 2.0, dpi)))
-    y = h_px - int(round(mm_to_px(frame.y - n.gap_vertical_mm, dpi)))
-    color = tuple(int(round(c * 255)) for c in n.color[:3]) + (255,)
-    draw.text((x, y), text, fill=color)
