@@ -160,6 +160,13 @@ class BNAME_OT_enter_panel_mode(Operator):
             if cur is not None and cur == expected_work:
                 blend_io.save_current_as(expected_work)
 
+            try:
+                from ..utils import panel_camera
+
+                panel_camera.ensure_reference_images(work, page_id, stem)
+            except Exception:  # noqa: BLE001
+                _logger.exception("enter_panel_mode: panel camera references failed")
+
             # 2) panel_NNN.blend を開く。未作成なら現シーンを新規保存して遷移。
             if blend_io.panel_blend_exists(work_dir, page_id, index):
                 ok = blend_io.open_panel_blend(work_dir, page_id, index)
@@ -185,6 +192,17 @@ class BNAME_OT_enter_panel_mode(Operator):
                     except Exception:  # noqa: BLE001
                         _logger.exception("enter_panel_mode: failed to restore work.blend")
                     return {"CANCELLED"}
+                try:
+                    from ..utils import panel_camera
+
+                    panel_camera.ensure_panel_camera_scene(
+                        bpy.context,
+                        page_id=page_id,
+                        panel_stem=stem,
+                        generate_references=True,
+                    )
+                except Exception:  # noqa: BLE001
+                    _logger.exception("enter_panel_mode: initial panel camera setup failed")
                 ok = blend_io.save_panel_blend(work_dir, page_id, index)
                 if not ok:
                     self.report({"ERROR"}, "panel.blend の新規保存に失敗")
@@ -215,6 +233,17 @@ class BNAME_OT_enter_panel_mode(Operator):
         set_mode(MODE_PANEL, ctx)
         ctx.scene.bname_current_panel_stem = stem
         ctx.scene.bname_current_panel_page_id = page_id
+        try:
+            from ..utils import panel_camera
+
+            panel_camera.ensure_panel_camera_scene(
+                ctx,
+                page_id=page_id,
+                panel_stem=stem,
+                generate_references=True,
+            )
+        except Exception:  # noqa: BLE001
+            _logger.exception("enter_panel_mode: final panel camera setup failed")
         self.report({"INFO"}, f"コマ編集モード: {stem}")
         return {"FINISHED"}
 

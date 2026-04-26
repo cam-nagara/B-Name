@@ -5,6 +5,7 @@
 - 仕上がり枠 / 基本枠 / セーフライン枠
 - セーフライン外側オーバーレイ (乗算)
 - ノンブル / 作品情報 (blf)
+- 各ページ上部のページ識別番号 (001 形式、ビューポート用ガイド)
 
 書き出し結果には焼き込まれない (書き出し時は export_renderer が同じ
 overlay_shared ロジックを Pillow で再実装する、Phase 6 で実装)。
@@ -56,6 +57,12 @@ _WORK_INFO_DEBUG_TICK = 0
 # OS のシステムフォントから日本語対応フォントを load しておく。
 # 値が None = 未試行、-1 = ロード失敗 (font_id=0 fallback)、0 以上 = ロード済み。
 _JP_FONT_ID: Optional[int] = None
+
+# 作品情報とは独立した、ビューポート用のページ識別番号。
+_PAGE_HEADER_GAP_MM = 6.0
+_PAGE_HEADER_FONT_SIZE_PX = 34
+_PAGE_HEADER_COLOR = (0.0, 0.0, 0.0, 0.95)
+_PAGE_HEADER_OUTLINE_COLOR = (1.0, 1.0, 1.0, 0.9)
 
 
 def _get_jp_font_id() -> int:
@@ -1299,6 +1306,93 @@ def _draw_text_at_position(context, anchor_rect, item, text: str) -> None:
     blf.draw(font_id, text)
 
 
+def _format_page_header_number(page_index: int) -> str:
+    """ページ順を 001 形式にする。作品情報側の開始番号とは独立。"""
+    return f"{max(0, int(page_index)) + 1:03d}"
+
+
+def _draw_bold_pixel_text(
+    font_id: int,
+    text: str,
+    x_px: float,
+    y_px: float,
+    *,
+    color: tuple[float, float, float, float],
+    outline_color: tuple[float, float, float, float],
+) -> None:
+    """blf に太字指定が無い環境でも、重ね描きで太字風に表示する。"""
+    outline_offsets = (
+        (-2.0, -2.0), (-2.0, 0.0), (-2.0, 2.0),
+        (0.0, -2.0), (0.0, 2.0),
+        (2.0, -2.0), (2.0, 0.0), (2.0, 2.0),
+    )
+    try:
+        blf.color(font_id, *outline_color)
+    except Exception:  # noqa: BLE001
+        pass
+    for dx, dy in outline_offsets:
+        blf.position(font_id, x_px + dx, y_px + dy, 0.0)
+        blf.draw(font_id, text)
+
+    bold_offsets = ((0.0, 0.0), (0.9, 0.0), (0.0, 0.9), (0.9, 0.9))
+    try:
+        blf.color(font_id, *color)
+    except Exception:  # noqa: BLE001
+        pass
+    for dx, dy in bold_offsets:
+        blf.position(font_id, x_px + dx, y_px + dy, 0.0)
+        blf.draw(font_id, text)
+
+
+def _draw_page_header_number_pixel(
+    context,
+    paper,
+    page_index: int,
+    ox_mm: float,
+    oy_mm: float,
+) -> None:
+    """ページキャンバス上端の外側に 001 形式の大きな番号を描画する。"""
+    from bpy_extras.view3d_utils import location_3d_to_region_2d
+    from mathutils import Vector
+
+    region, rv3d = _resolve_active_region(context)
+    if region is None or rv3d is None:
+        return
+    rects = overlay_shared.compute_paper_rects(paper)
+    x_mm = rects.canvas.x + rects.canvas.width * 0.5 + ox_mm
+    y_mm = rects.canvas.y2 + _PAGE_HEADER_GAP_MM + oy_mm
+    coord = location_3d_to_region_2d(
+        region,
+        rv3d,
+        Vector((mm_to_m(x_mm), mm_to_m(y_mm), 0.0)),
+    )
+    if coord is None:
+        return
+    if not (-300 < coord.x < region.width + 300 and -300 < coord.y < region.height + 300):
+        return
+
+    text = _format_page_header_number(page_index)
+    font_id = _get_jp_font_id()
+    try:
+        blf.size(font_id, _PAGE_HEADER_FONT_SIZE_PX)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        tw, th = blf.dimensions(font_id, text)
+    except Exception:  # noqa: BLE001
+        tw, th = 0.0, float(_PAGE_HEADER_FONT_SIZE_PX)
+    sx = float(coord.x) - tw * 0.5
+    sy = float(coord.y) - th * 0.5
+    _draw_bold_pixel_text(
+        font_id,
+        text,
+        sx,
+        sy,
+        color=_PAGE_HEADER_COLOR,
+        outline_color=_PAGE_HEADER_OUTLINE_COLOR,
+    )
+
+
 def _draw_callback() -> None:
     context = bpy.context
     work = get_work(context)
@@ -1525,6 +1619,7 @@ def _draw_callback_pixel() -> None:
             ox, oy = _pg_offset(i, cols, gap, cw, ch, start_side, read_direction)
             left_half = _is_left_half(i, start_side, read_direction)
             inner = bleed_rect(paper)
+            _draw_page_header_number_pixel(context, paper, i, ox, oy)
             _draw_work_info_texts_pixel(context, work, inner, page_index=i,
                                          ox_mm=ox, oy_mm=oy)
             page = work.pages[i] if 0 <= i < len(work.pages) else None
@@ -1545,6 +1640,7 @@ def _draw_callback_pixel() -> None:
         ox, oy = _pg_offset(idx, cols, gap, cw, ch, start_side, read_direction)
         left_half = _is_left_half(idx, start_side, read_direction)
         inner = bleed_rect(paper)
+        _draw_page_header_number_pixel(context, paper, idx, ox, oy)
         _draw_work_info_texts_pixel(context, work, inner, page_index=idx,
                                      ox_mm=ox, oy_mm=oy)
         page = get_active_page(context)

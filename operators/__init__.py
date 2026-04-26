@@ -16,6 +16,7 @@ from . import (
     panel_edit_op,
     panel_knife_cut_op,
     panel_op,
+    panel_camera_op,
     panel_picker,  # noqa: F401 — ヘルパのみ (register 対象外)
     panel_vertex_edit_op,
     preset_op,
@@ -34,6 +35,7 @@ _MODULES = (
     spread_op,
     panel_op,
     panel_edit_op,
+    panel_camera_op,
     panel_vertex_edit_op,
     panel_knife_cut_op,
     panel_edge_move_op,

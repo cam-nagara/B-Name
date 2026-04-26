@@ -46,10 +46,18 @@ def take_area_screenshot(context, out_path: Path) -> bool:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     scene = getattr(context, "scene", None)
     prev_suppress = None
+    bg_state = None
     try:
         if scene is not None:
             prev_suppress = bool(scene.get("_bname_suppress_panel_reference_overlay", False))
             scene["_bname_suppress_panel_reference_overlay"] = True
+            try:
+                from ..utils import panel_camera
+
+                bg_state = panel_camera.capture_managed_background_visibility(context)
+                panel_camera.set_managed_background_visibility(context, False)
+            except Exception:  # noqa: BLE001
+                bg_state = None
             try:
                 bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=1)
             except Exception:  # noqa: BLE001
@@ -61,6 +69,13 @@ def take_area_screenshot(context, out_path: Path) -> bool:
         _logger.warning("screenshot_area failed: %s", exc)
         return False
     finally:
+        if bg_state is not None:
+            try:
+                from ..utils import panel_camera
+
+                panel_camera.restore_background_visibility(bg_state)
+            except Exception:  # noqa: BLE001
+                pass
         if scene is not None and prev_suppress is not None:
             scene["_bname_suppress_panel_reference_overlay"] = prev_suppress
             try:

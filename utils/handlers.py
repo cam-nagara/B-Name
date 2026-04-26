@@ -224,9 +224,15 @@ def _bname_on_load_post(filepath_arg) -> None:  # signature: (str,) in Blender h
                 and rel.parts[3].endswith(".blend")
             ):
                 from . import panel_scene
+                from . import panel_camera
                 from ..ui import overlay as _overlay
 
                 panel_scene.prepare_panel_blend_scene(bpy.context)
+                panel_camera.ensure_panel_camera_scene(
+                    bpy.context,
+                    work=work,
+                    generate_references=True,
+                )
                 _overlay.reset_viewport_background_to_theme(bpy.context)
                 _overlay.apply_bname_shading_mode(bpy.context)
         except ValueError:

@@ -20,11 +20,14 @@ tags = ["Grease Pencil", "Paint", "User Interface"]
 
 # Bundled Python wheels
 # Actual wheel files are placed under ./wheels/ and listed here.
-# Populated from Phase 3 / Phase 6 onward. Keep empty until then.
-wheels = []
+wheels = [
+    "./wheels/pillow-12.2.0-cp311-cp311-win_amd64.whl",
+    "./wheels/pillow-12.2.0-cp312-cp312-win_amd64.whl",
+    "./wheels/pillow-12.2.0-cp313-cp313-win_amd64.whl",
+]
 
 # Platforms (optional, omit to allow all). Populate when wheels become platform-specific.
-# platforms = ["windows-x64", "macos-arm64", "linux-x64"]
+platforms = ["windows-x64"]
 
 # Extensions Platform permissions
 # NOTE: [permissions] はテーブルセクションなので、このセクション以降に

@@ -11,8 +11,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..utils import python_deps
 from ..utils import log
 from .layout import TypesetResult
+
+python_deps.ensure_bundled_wheels_on_path()
 
 _logger = log.get_logger(__name__)
 

@@ -41,6 +41,18 @@ def bootstrap_new_panel_blend(
     if not _set_panel_scene_state(context, work, page_id, panel_stem):
         return False
     prepare_panel_blend_scene(context)
+    try:
+        from . import panel_camera
+
+        panel_camera.ensure_panel_camera_scene(
+            context,
+            work=work,
+            page_id=page_id,
+            panel_stem=panel_stem,
+            generate_references=True,
+        )
+    except Exception:  # noqa: BLE001
+        _logger.exception("bootstrap_new_panel_blend: panel camera setup failed")
     return True
 
 

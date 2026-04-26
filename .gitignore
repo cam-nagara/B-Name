@@ -29,6 +29,7 @@ desktop.ini
 # Extensions build
 *.zip
 !wheels/*.whl
+wheels/_installed/
 
 # Local workspace
 .claude/

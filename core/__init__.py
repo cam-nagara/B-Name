@@ -20,6 +20,7 @@ from . import (
     mode,
     panel,
     panel_border,
+    panel_camera,
     paper,
     page,
     safe_area_overlay,
@@ -36,6 +37,7 @@ _MODULES = (
     safe_area_overlay,
     panel_border,
     panel,
+    panel_camera,
     text_entry,
     balloon,
     # ↓ page は text_entry / balloon を参照するため後に register
