@@ -1,8 +1,8 @@
-"""コマのカメラサムネイル/高品質プレビュー生成 Operator.
+"""コマのソリッドカメラサムネイル/高品質プレビュー生成 Operator.
 
 計画書 3.4.3 / 8.8 参照。コマ編集モード終了時に panel_NNN_thumb.png を
-カメラレンダーのコマ領域切り出しで更新。ユーザー手動で
-panel_NNN_preview.png を高解像度レンダリング。
+カメラ基準のソリッド表示のコマ領域切り出しで更新。ユーザー手動で
+panel_NNN_preview.png を高解像度ソリッド画像として生成。
 """
 
 from __future__ import annotations
@@ -26,11 +26,11 @@ def _is_panel_mode(context) -> bool:
 
 
 def take_area_screenshot(context, out_path: Path) -> bool:
-    """選択コマのカメラレンダーをページ座標で切り出して保存する.
+    """選択コマのソリッドカメラ画像をページ座標で切り出して保存する.
 
-    旧実装は VIEW_3D スクリーンショットだったため、UIや下絵表示状態が
-    そのまま紙面プレビューに混入した。コマファイルの下絵合わせと紙面表示を
-    一致させるため、カメラのページ全体レンダーから対象コマbboxだけを切る。
+    UI込みの VIEW_3D スクリーンショットではなく、カメラからページ全体の
+    OpenGL/Workbench ソリッド画像を出し、対象コマbboxだけを切る。
+    これによりビューポート操作状態に依存せず、紙面座標と一致する。
     """
     return render_panel_camera_crop(context, out_path, resolution_percentage=25)
 
@@ -53,6 +53,7 @@ def render_panel_camera_crop(context, out_path: Path, *, resolution_percentage: 
     prev_res_x = int(scene.render.resolution_x)
     prev_res_y = int(scene.render.resolution_y)
     prev_percent = int(scene.render.resolution_percentage)
+    prev_engine = scene.render.engine
     prev_format = scene.render.image_settings.file_format
     prev_film_transparent = bool(getattr(scene.render, "film_transparent", False))
     prev_use_border = bool(getattr(scene.render, "use_border", False))
@@ -62,6 +63,19 @@ def render_panel_camera_crop(context, out_path: Path, *, resolution_percentage: 
         float(getattr(scene.render, "border_max_x", 1.0)),
         float(getattr(scene.render, "border_min_y", 0.0)),
         float(getattr(scene.render, "border_max_y", 1.0)),
+    )
+    shading = getattr(getattr(scene, "display", None), "shading", None)
+    shading_state = _capture_attr_state(
+        shading,
+        (
+            "type",
+            "light",
+            "color_type",
+            "background_type",
+            "background_color",
+            "show_cavity",
+            "show_shadows",
+        ),
     )
     try:
         from ..utils import panel_camera
@@ -96,8 +110,9 @@ def render_panel_camera_crop(context, out_path: Path, *, resolution_percentage: 
             scene.render.use_border = False
             if hasattr(scene.render, "use_crop_to_border"):
                 scene.render.use_crop_to_border = False
-            with context.temp_override(scene=scene):
-                bpy.ops.render.render(write_still=True)
+            _configure_scene_solid_shading(scene)
+            if not _write_solid_camera_image(context, scene):
+                return False
             source = _resolve_render_output_path(full_path)
             if source is None:
                 return False
@@ -119,6 +134,7 @@ def render_panel_camera_crop(context, out_path: Path, *, resolution_percentage: 
         scene.render.resolution_x = prev_res_x
         scene.render.resolution_y = prev_res_y
         scene.render.resolution_percentage = prev_percent
+        scene.render.engine = prev_engine
         scene.render.image_settings.file_format = prev_format
         scene.render.film_transparent = prev_film_transparent
         scene.render.use_border = prev_use_border
@@ -128,6 +144,70 @@ def render_panel_camera_crop(context, out_path: Path, *, resolution_percentage: 
         scene.render.border_max_x = prev_border[1]
         scene.render.border_min_y = prev_border[2]
         scene.render.border_max_y = prev_border[3]
+        _restore_attr_state(shading, shading_state)
+
+
+def _write_solid_camera_image(context, scene) -> bool:
+    """Write a camera-aligned solid-mode image to scene.render.filepath."""
+    try:
+        with context.temp_override(scene=scene):
+            bpy.ops.render.opengl(write_still=True, view_context=False)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("OpenGL solid preview failed, falling back to Workbench render: %s", exc)
+    try:
+        scene.render.engine = "BLENDER_WORKBENCH"
+        with context.temp_override(scene=scene):
+            bpy.ops.render.render(write_still=True)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("Workbench solid preview failed: %s", exc, exc_info=True)
+        return False
+
+
+def _configure_scene_solid_shading(scene) -> None:
+    shading = getattr(getattr(scene, "display", None), "shading", None)
+    if shading is None:
+        return
+    _set_attr_safe(shading, "type", "SOLID")
+    _set_attr_safe(shading, "light", "STUDIO")
+    _set_attr_safe(shading, "color_type", "MATERIAL")
+    _set_attr_safe(shading, "show_cavity", False)
+    _set_attr_safe(shading, "show_shadows", False)
+    settings = getattr(scene, "bname_panel_camera_settings", None)
+    if settings is not None and bool(getattr(settings, "use_solid_background_color", False)):
+        _set_attr_safe(shading, "background_type", "VIEWPORT")
+        color = getattr(settings, "solid_background_color", (0.05, 0.05, 0.05))
+        _set_attr_safe(shading, "background_color", (float(color[0]), float(color[1]), float(color[2])))
+
+
+def _capture_attr_state(obj, attrs: tuple[str, ...]) -> dict[str, object]:
+    state: dict[str, object] = {}
+    if obj is None:
+        return state
+    for attr in attrs:
+        try:
+            value = getattr(obj, attr)
+            if attr == "background_color":
+                value = tuple(value)
+            state[attr] = value
+        except Exception:  # noqa: BLE001
+            pass
+    return state
+
+
+def _restore_attr_state(obj, state: dict[str, object]) -> None:
+    if obj is None:
+        return
+    for attr, value in state.items():
+        _set_attr_safe(obj, attr, value)
+
+
+def _set_attr_safe(obj, attr: str, value) -> None:
+    try:
+        setattr(obj, attr, value)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _resolve_panel_entry(context, work):
@@ -218,7 +298,7 @@ def _panel_bbox(entry) -> tuple[float, float, float, float] | None:
 
 
 class BNAME_OT_panel_update_thumb(Operator):
-    """選択中コマのカメラサムネを生成."""
+    """選択中コマのソリッドカメラサムネを生成."""
 
     bl_idname = "bname.panel_update_thumb"
     bl_label = "コマサムネイルを更新"
@@ -246,7 +326,7 @@ class BNAME_OT_panel_update_thumb(Operator):
 
 
 class BNAME_OT_panel_generate_preview(Operator):
-    """選択中コマをカメラレンダリングして高品質プレビューを生成."""
+    """選択中コマのソリッドカメラ画像から高品質プレビューを生成."""
 
     bl_idname = "bname.panel_generate_preview"
     bl_label = "高品質プレビュー生成"

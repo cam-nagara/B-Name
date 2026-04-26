@@ -197,6 +197,9 @@ def _bname_on_load_post(filepath_arg) -> None:  # signature: (str,) in Blender h
             _logger.exception("load_post: failed to sync work/pages json")
             return
         _sync_active_from_blend_path(scene, work, work_dir, blend_path)
+        from . import display_settings
+
+        display_settings.apply_standard_color_management(scene)
         try:
             from ..operators import preset_op
 
@@ -228,6 +231,7 @@ def _bname_on_load_post(filepath_arg) -> None:  # signature: (str,) in Blender h
                 from ..ui import overlay as _overlay
 
                 panel_scene.prepare_panel_blend_scene(bpy.context)
+                display_settings.apply_standard_color_management(scene)
                 panel_camera.ensure_panel_camera_scene(
                     bpy.context,
                     work=work,
@@ -235,6 +239,7 @@ def _bname_on_load_post(filepath_arg) -> None:  # signature: (str,) in Blender h
                 )
                 _overlay.reset_viewport_background_to_theme(bpy.context)
                 _overlay.apply_bname_shading_mode(bpy.context)
+                panel_camera.schedule_panel_view_camera()
         except ValueError:
             pass
         _logger.info("B-Name: load_post synced for %s", blend_path)

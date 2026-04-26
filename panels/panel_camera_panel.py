@@ -163,6 +163,12 @@ class BNAME_PT_panel_camera(Panel):
 
         box = layout.box()
         box.prop(settings, "white_background", text="背景を透過")
+        box.prop(settings, "world_background_camera_only", text="ワールド背景色を被写体に影響させない")
+        row = box.row(align=True)
+        row.prop(settings, "use_solid_background_color", text="ソリッド背景色")
+        sub = row.row(align=True)
+        sub.enabled = bool(settings.use_solid_background_color)
+        sub.prop(settings, "solid_background_color", text="")
         box.prop(settings, "subsurf_realtime", text="細分割曲面")
         box.prop(settings, "koma_depth", text="コマを後ろにする")
         box.prop(settings, "hatching_visible", text="ハッチング間隔を表示")

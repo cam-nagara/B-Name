@@ -77,6 +77,7 @@ class ExportOptions:
     include_work_info: bool = True
     include_tombo: bool = False
     include_paper_color: bool = True
+    include_panel_previews: bool = True
     icc_profile_path: str = ""
 
 
@@ -1487,9 +1488,10 @@ def build_page_layers(work, page, options: ExportOptions) -> list[ExportLayer]:
         bg_layer = _draw_panel_background_layer(panel, canvas_size[1], dpi)
         if bg_layer is not None:
             layers.append(replace(bg_layer, group_path=content_group))
-        render_layer = _render_panel_preview_layer(work, page, panel, canvas_size, dpi)
-        if render_layer is not None:
-            layers.append(replace(render_layer, group_path=content_group))
+        if options.include_panel_previews:
+            render_layer = _render_panel_preview_layer(work, page, panel, canvas_size, dpi)
+            if render_layer is not None:
+                layers.append(replace(render_layer, group_path=content_group))
         if options.include_border and getattr(panel.border, "visible", False):
             border_layer = _draw_panel_border_layer(panel, canvas_size[1], dpi)
             if border_layer is not None:

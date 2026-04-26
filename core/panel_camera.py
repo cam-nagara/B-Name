@@ -91,6 +91,19 @@ def _update_koma_depth(self, context) -> None:
     panel_camera.set_koma_background_depth(context, back=bool(self.koma_depth))
 
 
+def _update_world_background_camera_only(self, context) -> None:
+    from ..utils import panel_camera
+
+    panel_camera.sync_world_background_color(context)
+    panel_camera.update_view(context)
+
+
+def _update_solid_background(self, context) -> None:
+    from ..utils import panel_camera
+
+    panel_camera.view_camera_in_viewports(context)
+
+
 def _update_fisheye_mode(self, context) -> None:
     from ..utils import panel_camera
 
@@ -204,6 +217,25 @@ class BNamePanelCameraSettings(bpy.types.PropertyGroup):
         name="コマを後ろにする",
         default=False,
         update=_update_koma_depth,
+    )  # type: ignore[valid-type]
+    world_background_camera_only: BoolProperty(
+        name="ワールド背景色をカメラのみに反映",
+        default=False,
+        update=_update_world_background_camera_only,
+    )  # type: ignore[valid-type]
+    use_solid_background_color: BoolProperty(
+        name="ソリッド背景色を指定",
+        default=False,
+        update=_update_solid_background,
+    )  # type: ignore[valid-type]
+    solid_background_color: FloatVectorProperty(
+        name="ソリッド背景色",
+        subtype="COLOR",
+        size=3,
+        default=(0.05, 0.05, 0.05),
+        min=0.0,
+        max=1.0,
+        update=_update_solid_background,
     )  # type: ignore[valid-type]
     prev_render_engine: StringProperty(name="前回レンダーエンジン", default="")  # type: ignore[valid-type]
 

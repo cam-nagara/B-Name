@@ -46,6 +46,12 @@ def ensure_panel_camera_scene(
 
     camera = ensure_panel_camera(scene)
     scene.camera = camera
+    try:
+        from . import display_settings
+
+        display_settings.apply_standard_color_management(scene)
+    except Exception:  # noqa: BLE001
+        pass
     configure_render_for_current_panel(scene, work, page_id, panel_stem)
     ensure_default_resolution_settings(scene)
     sync_world_background_color(context, work=work, page_id=page_id, panel_stem=panel_stem)
@@ -56,6 +62,7 @@ def ensure_panel_camera_scene(
     configure_camera_backgrounds(scene, camera, refs, page_id, panel_stem)
     update_render_border_from_current_panel(context)
     view_camera_in_viewports(context)
+    schedule_panel_view_camera()
 
 
 def ensure_panel_camera(scene):
@@ -298,6 +305,8 @@ def sync_world_background_color(context, *, panel=None, work=None, page_id: str 
     if scene.world is None:
         scene.world = bpy.data.worlds.new("World")
     world = scene.world
+    settings = getattr(scene, "bname_panel_camera_settings", None)
+    camera_only = bool(getattr(settings, "world_background_camera_only", False))
     rgba = (
         float(color[0]),
         float(color[1]),
@@ -308,24 +317,48 @@ def sync_world_background_color(context, *, panel=None, work=None, page_id: str 
         world.color = rgba[:3]
     except Exception:  # noqa: BLE001
         pass
+    _configure_world_background_nodes(world, rgba, camera_only)
+
+
+def _configure_world_background_nodes(world, rgba, camera_only: bool) -> None:
+    try:
+        world.use_nodes = True
+    except Exception:  # noqa: BLE001
+        return
     node_tree = getattr(world, "node_tree", None)
     if node_tree is None:
         return
-    bg_node = None
-    for node in getattr(node_tree, "nodes", []):
-        if getattr(node, "type", "") == "BACKGROUND":
-            bg_node = node
-            break
-    if bg_node is None:
+    nodes = node_tree.nodes
+    links = node_tree.links
+    try:
+        nodes.clear()
+    except Exception:  # noqa: BLE001
         return
-    try:
-        bg_node.inputs["Color"].default_value = rgba
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        bg_node.inputs["Strength"].default_value = 1.0
-    except Exception:  # noqa: BLE001
-        pass
+    out = nodes.new("ShaderNodeOutputWorld")
+    out.location = (420, 0)
+    if not camera_only:
+        bg = nodes.new("ShaderNodeBackground")
+        bg.location = (160, 0)
+        bg.inputs["Color"].default_value = rgba
+        bg.inputs["Strength"].default_value = 1.0
+        links.new(bg.outputs["Background"], out.inputs["Surface"])
+        return
+    light_path = nodes.new("ShaderNodeLightPath")
+    light_path.location = (-520, 0)
+    bg_neutral = nodes.new("ShaderNodeBackground")
+    bg_neutral.location = (-120, 120)
+    bg_neutral.inputs["Color"].default_value = (0.0, 0.0, 0.0, 1.0)
+    bg_neutral.inputs["Strength"].default_value = 0.0
+    bg_camera = nodes.new("ShaderNodeBackground")
+    bg_camera.location = (-120, -80)
+    bg_camera.inputs["Color"].default_value = rgba
+    bg_camera.inputs["Strength"].default_value = 1.0
+    mix = nodes.new("ShaderNodeMixShader")
+    mix.location = (160, 0)
+    links.new(light_path.outputs["Is Camera Ray"], mix.inputs["Fac"])
+    links.new(bg_neutral.outputs["Background"], mix.inputs[1])
+    links.new(bg_camera.outputs["Background"], mix.inputs[2])
+    links.new(mix.outputs["Shader"], out.inputs["Surface"])
 
 
 def _clear_managed_backgrounds(camera_data) -> None:
@@ -671,18 +704,65 @@ def apply_reduction_mode(context) -> None:
 
 
 def view_camera_in_viewports(context) -> None:
-    screen = getattr(context, "screen", None)
-    if screen is None or get_mode(context) != MODE_PANEL:
+    scene = getattr(context, "scene", None) if context is not None else bpy.context.scene
+    if scene is None or get_mode(context) != MODE_PANEL:
         return
-    for area in screen.areas:
-        if area.type != "VIEW_3D":
+    for space in _iter_view3d_spaces(context):
+        _configure_panel_camera_view(space, scene)
+
+
+def schedule_panel_view_camera(retries: int = 8, interval: float = 0.15) -> None:
+    """Re-apply camera view after Blender has rebuilt UI areas on file load."""
+    state = {"left": max(1, int(retries))}
+
+    def _tick():
+        try:
+            view_camera_in_viewports(bpy.context)
+        except Exception:  # noqa: BLE001
+            pass
+        state["left"] -= 1
+        return interval if state["left"] > 0 else None
+
+    try:
+        bpy.app.timers.register(_tick, first_interval=interval)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _iter_view3d_spaces(context):
+    seen: set[int] = set()
+    screens = []
+    screen = getattr(context, "screen", None) if context is not None else None
+    if screen is not None:
+        screens.append(screen)
+    wm = getattr(bpy.context, "window_manager", None)
+    if wm is not None:
+        for window in getattr(wm, "windows", []):
+            screen = getattr(window, "screen", None)
+            if screen is not None:
+                screens.append(screen)
+    for screen in screens:
+        sid = id(screen)
+        if sid in seen:
             continue
-        for space in area.spaces:
-            if space.type == "VIEW_3D" and getattr(space, "region_3d", None) is not None:
-                _configure_panel_camera_view(space)
+        seen.add(sid)
+        for area in getattr(screen, "areas", []):
+            if area.type != "VIEW_3D":
+                continue
+            for space in area.spaces:
+                if space.type == "VIEW_3D" and getattr(space, "region_3d", None) is not None:
+                    yield space
 
 
-def _configure_panel_camera_view(space) -> None:
+def _configure_panel_camera_view(space, scene=None) -> None:
+    if scene is None:
+        scene = bpy.context.scene
+    camera = getattr(scene, "camera", None) if scene is not None else None
+    if camera is not None:
+        try:
+            space.camera = camera
+        except Exception:  # noqa: BLE001
+            pass
     try:
         space.region_3d.view_perspective = "CAMERA"
     except Exception:  # noqa: BLE001
@@ -702,6 +782,26 @@ def _configure_panel_camera_view(space) -> None:
         shading.light = "STUDIO"
     except Exception:  # noqa: BLE001
         pass
+    _apply_panel_solid_background(space, scene)
+
+
+def _apply_panel_solid_background(space, scene) -> None:
+    shading = getattr(space, "shading", None)
+    settings = getattr(scene, "bname_panel_camera_settings", None) if scene is not None else None
+    if shading is None or settings is None:
+        return
+    if bool(getattr(settings, "use_solid_background_color", False)):
+        try:
+            shading.background_type = "VIEWPORT"
+            color = getattr(settings, "solid_background_color", (0.05, 0.05, 0.05))
+            shading.background_color = (float(color[0]), float(color[1]), float(color[2]))
+        except Exception:  # noqa: BLE001
+            pass
+    else:
+        try:
+            shading.background_type = "THEME"
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _apply_fisheye_layout(scene) -> None:
@@ -794,7 +894,7 @@ def _restore_pencil4_line_widths(_scene) -> None:
 
 
 def _page_ref_path(ref_dir: Path, page_id: str) -> Path:
-    return ref_dir / f"{NAME_REF_PREFIX}_{page_id}.png"
+    return ref_dir / f"{NAME_REF_PREFIX}_pageclean_{page_id}.png"
 
 
 def _koma_ref_path(ref_dir: Path, page_id: str, panel_stem: str) -> Path:
@@ -881,6 +981,7 @@ def _render_page_reference(work, page, out: Path) -> bool:
             dpi_override=DEFAULT_REF_DPI,
             include_tombo=False,
             include_paper_color=True,
+            include_panel_previews=False,
         )
         img = export_pipeline.render_page(work, page, options)
         if img is None:
@@ -899,13 +1000,15 @@ def _render_current_panel_page_mask(work, page, panel, page_ref: Path | None, ma
     if Image is None or ImageDraw is None or page_ref is None:
         return False
     try:
-        page_img = Image.open(str(page_ref)).convert("RGBA")
+        with Image.open(str(page_ref)) as opened:
+            page_img = opened.convert("RGBA")
     except Exception:  # noqa: BLE001
         return False
     mate_img = None
     if mate_page is not None and mate_ref is not None and mate_ref.is_file():
         try:
-            mate_img = Image.open(str(mate_ref)).convert("RGBA")
+            with Image.open(str(mate_ref)) as opened:
+                mate_img = opened.convert("RGBA")
         except Exception:  # noqa: BLE001
             mate_img = None
     canvas, panel_offset_x = _compose_page_reference_pair(work, page, page_img, mate_img)
@@ -916,9 +1019,6 @@ def _render_current_panel_page_mask(work, page, panel, page_ref: Path | None, ma
         alpha = canvas.getchannel("A")
         draw = ImageDraw.Draw(alpha)
         draw.polygon(points, fill=0)
-        outline_width = _panel_outline_width_px(panel, DEFAULT_REF_DPI)
-        if outline_width > 0:
-            draw.line(points + [points[0]], fill=255, width=outline_width, joint="curve")
         canvas.putalpha(alpha)
         out.parent.mkdir(parents=True, exist_ok=True)
         canvas.save(str(out))
@@ -969,16 +1069,6 @@ def _panel_points_mm(panel) -> list[tuple[float, float]]:
             return []
         return [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
     return [(float(v.x_mm), float(v.y_mm)) for v in getattr(panel, "vertices", [])]
-
-
-def _panel_outline_width_px(panel, dpi: int) -> int:
-    border = getattr(panel, "border", None)
-    if border is None or not bool(getattr(border, "visible", True)):
-        return 0
-    width_mm = max(0.0, float(getattr(border, "width_mm", 0.5)))
-    if width_mm <= 0.0:
-        return 0
-    return max(1, int(math.ceil(mm_to_px(width_mm, dpi))) + 2)
 
 
 def _reference_is_stale(work_dir: Path, page, out: Path, *, include_work_blend: bool) -> bool:

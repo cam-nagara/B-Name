@@ -1404,16 +1404,15 @@ def _draw_callback() -> None:
     work = get_work(context)
     if work is None or not work.loaded:
         return
+    mode = get_mode(context)
+    if mode == MODE_PANEL:
+        return
     paper = work.paper
     rects = overlay_shared.compute_paper_rects(paper)
-    mode = get_mode(context)
     scene = context.scene
-    if mode == MODE_PANEL and bool(scene.get("_bname_suppress_panel_reference_overlay", False)):
-        return
 
     gpu.state.blend_set("ALPHA")
     try:
-        # panel モード中も、構図合わせ用にページ群を参照表示する。
         if (
             mode == MODE_PAGE
             and getattr(scene, "bname_overview_mode", False)

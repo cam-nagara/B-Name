@@ -158,6 +158,12 @@ class BNAME_OT_work_new(Operator, ExportHelper):
             context.scene.bname_current_panel_stem = ""
             context.scene.bname_current_panel_page_id = ""
             try:
+                from ..utils import display_settings
+
+                display_settings.apply_standard_color_management(context.scene)
+            except Exception:  # noqa: BLE001
+                _logger.exception("work_new: color management setup failed")
+            try:
                 from . import preset_op
 
                 preset_op.sync_paper_preset_selector(context)
@@ -243,6 +249,12 @@ class BNAME_OT_work_open(Operator, ImportHelper):
             set_mode(MODE_PAGE, context)
             context.scene.bname_current_panel_stem = ""
             context.scene.bname_current_panel_page_id = ""
+            try:
+                from ..utils import display_settings
+
+                display_settings.apply_standard_color_management(context.scene)
+            except Exception:  # noqa: BLE001
+                _logger.exception("work_open: color management setup failed")
             try:
                 from . import preset_op
 
