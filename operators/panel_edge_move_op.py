@@ -25,9 +25,12 @@ from gpu_extras.batch import batch_for_shader
 
 from ..core.work import get_work
 from ..io import page_io, panel_io
+from . import panel_modal_state
 from ..utils import geom, log, page_grid
 
 _logger = log.get_logger(__name__)
+
+_SELECTION_STYLE_SYNCING = False
 
 
 # ---- 定数 ----
@@ -143,6 +146,80 @@ def _line_intersect(
         return fallback
     t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / den
     return (x1 + t * (x2 - x1), y1 + t * (y2 - y1))
+
+
+# drag 中のスナップしきい値 (mm)
+DRAG_SNAP_TOL_MM = 1.5
+
+
+def _snap_drag_line(
+    work, page, panel_idx: int,
+    a_new: tuple[float, float], b_new: tuple[float, float],
+    tx: float, ty: float, nx: float, ny: float,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """drag 中の new line を「隣接コマ辺 / 基本枠 / 裁ち落とし枠 1mm 外側」に snap.
+
+    平行な target line のみ対象。最寄り target との法線方向距離が
+    ``DRAG_SNAP_TOL_MM`` 以下なら、その line に乗るよう法線方向に追加シフトする。
+    元の角度は維持される。
+    """
+    from ..utils.geom import bleed_rect, inner_frame_rect
+    paper = work.paper
+    br = bleed_rect(paper)
+    ifr = inner_frame_rect(paper)
+
+    targets: list[tuple[tuple[float, float], tuple[float, float]]] = []
+    # 裁ち落とし枠の 1mm 外側 (4 辺)
+    targets.extend([
+        ((br.x - 1.0, br.y - 1.0), (br.x2 + 1.0, br.y - 1.0)),
+        ((br.x2 + 1.0, br.y - 1.0), (br.x2 + 1.0, br.y2 + 1.0)),
+        ((br.x2 + 1.0, br.y2 + 1.0), (br.x - 1.0, br.y2 + 1.0)),
+        ((br.x - 1.0, br.y2 + 1.0), (br.x - 1.0, br.y - 1.0)),
+    ])
+    # 基本枠の 4 辺
+    targets.extend([
+        ((ifr.x, ifr.y), (ifr.x2, ifr.y)),
+        ((ifr.x2, ifr.y), (ifr.x2, ifr.y2)),
+        ((ifr.x2, ifr.y2), (ifr.x, ifr.y2)),
+        ((ifr.x, ifr.y2), (ifr.x, ifr.y)),
+    ])
+    # 同ページの他コマの辺
+    for panel_i2, p2 in enumerate(page.panels):
+        if panel_i2 == panel_idx:
+            continue
+        poly2 = _panel_polygon(p2)
+        for ei2 in range(len(poly2)):
+            targets.append(
+                (poly2[ei2], poly2[(ei2 + 1) % len(poly2)])
+            )
+
+    new_mid = ((a_new[0] + b_new[0]) * 0.5, (a_new[1] + b_new[1]) * 0.5)
+    best_dist = DRAG_SNAP_TOL_MM
+    best_offset = 0.0
+    for ta, tb in targets:
+        ux2 = tb[0] - ta[0]
+        uy2 = tb[1] - ta[1]
+        l2 = math.hypot(ux2, uy2)
+        if l2 < 1e-6:
+            continue
+        # 平行性 (target が new と平行)
+        dot = (ux2 / l2) * tx + (uy2 / l2) * ty
+        if abs(abs(dot) - 1.0) > 0.05:
+            continue
+        # 法線方向の符号付き距離 (target ← new)
+        tmid = ((ta[0] + tb[0]) * 0.5, (ta[1] + tb[1]) * 0.5)
+        d = (tmid[0] - new_mid[0]) * nx + (tmid[1] - new_mid[1]) * ny
+        if abs(d) < best_dist:
+            best_dist = abs(d)
+            best_offset = d
+
+    if best_dist >= DRAG_SNAP_TOL_MM:
+        return a_new, b_new
+
+    # snap: 法線方向に best_offset だけ追加シフト
+    sx = best_offset * nx
+    sy = best_offset * ny
+    return (a_new[0] + sx, a_new[1] + sy), (b_new[0] + sx, b_new[1] + sy)
 
 
 # ---------- 隣接 panel との連動 ----------
@@ -261,6 +338,63 @@ def _find_adjacent_edges(
     return adj
 
 
+def _find_overlapping_panel_edges(
+    page, panel_idx: int, edge_idx: int,
+    *,
+    max_distance_mm: float = 0.05,
+    min_overlap_ratio: float = 0.8,
+) -> list[tuple[int, int]]:
+    """対象 edge とほぼ同一直線上で大きく重なる他 panel edge を返す.
+
+    ▲ハンドルの「gap を空ける」特殊ケース専用。
+    「近くに平行な線がある」だけではなく、現在の枠線が実際に隣接コマと
+    同じ継ぎ目を共有している場合にだけ反応させたいので、距離 0 近傍かつ
+    十分な重なり率を要求する。
+    """
+    panel = page.panels[panel_idx]
+    poly = _panel_polygon(panel)
+    if len(poly) < 2:
+        return []
+    a = poly[edge_idx]
+    b = poly[(edge_idx + 1) % len(poly)]
+    edge_len = math.hypot(b[0] - a[0], b[1] - a[1])
+    if edge_len < 1e-6:
+        return []
+    ux = (b[0] - a[0]) / edge_len
+    uy = (b[1] - a[1]) / edge_len
+    nx = -uy
+    ny = ux
+
+    overlaps: list[tuple[int, int]] = []
+    for panel_i2, p2 in enumerate(page.panels):
+        if panel_i2 == panel_idx:
+            continue
+        poly2 = _panel_polygon(p2)
+        for ei2 in range(len(poly2)):
+            a2 = poly2[ei2]
+            b2 = poly2[(ei2 + 1) % len(poly2)]
+            l2 = math.hypot(b2[0] - a2[0], b2[1] - a2[1])
+            if l2 < 1e-6:
+                continue
+            ux2 = (b2[0] - a2[0]) / l2
+            uy2 = (b2[1] - a2[1]) / l2
+            dot = ux * ux2 + uy * uy2
+            if abs(abs(dot) - 1.0) > 0.05:
+                continue
+            d = (a2[0] - a[0]) * nx + (a2[1] - a[1]) * ny
+            if abs(d) > max_distance_mm:
+                continue
+            t1 = ((a2[0] - a[0]) * ux + (a2[1] - a[1]) * uy)
+            t2 = ((b2[0] - a[0]) * ux + (b2[1] - a[1]) * uy)
+            lo = max(0.0, min(t1, t2))
+            hi = min(edge_len, max(t1, t2))
+            overlap = max(0.0, hi - lo)
+            if overlap < edge_len * min_overlap_ratio:
+                continue
+            overlaps.append((panel_i2, ei2))
+    return overlaps
+
+
 # ---------- ピック ----------
 
 
@@ -373,6 +507,12 @@ class BNAME_OT_panel_edge_move(Operator):
         target = _find_view3d(context)
         if target is None:
             return {"PASS_THROUGH"}
+        if panel_modal_state.get_active("edge_move") is not None:
+            panel_modal_state.finish_active(
+                "edge_move", context, keep_selection=True,
+            )
+            return {"FINISHED"}
+        panel_modal_state.finish_active("knife_cut", context, keep_selection=False)
         self._area, self._region, self._rv3d = target
         self._work = get_work(context)
         if self._work is None or not self._work.loaded:
@@ -383,6 +523,7 @@ class BNAME_OT_panel_edge_move(Operator):
         self._dragging = False
         self._drag_start_world: Optional[tuple[float, float]] = None
         self._original_geometry: Optional[dict] = None
+        self._externally_finished = False
         # シングル/ダブルクリック判定用
         self._last_press_time = 0.0
         self._last_press_edge: Optional[tuple[int, int, int]] = None
@@ -391,6 +532,7 @@ class BNAME_OT_panel_edge_move(Operator):
             _draw_callback, (self,), "WINDOW", "POST_PIXEL"
         )
         context.window_manager.modal_handler_add(self)
+        panel_modal_state.set_active("edge_move", self)
         self._update_wm_selection(context)
         self._tag_redraw()
         self.report(
@@ -408,6 +550,8 @@ class BNAME_OT_panel_edge_move(Operator):
             wm.bname_edge_select_page = -1
             wm.bname_edge_select_panel = -1
             wm.bname_edge_select_edge = -1
+            wm.bname_edge_select_vertex = -1
+            _tag_view3d_redraw(context)
             return
         t = sel.get("type")
         wm.bname_edge_select_page = int(sel.get("page", -1))
@@ -415,21 +559,37 @@ class BNAME_OT_panel_edge_move(Operator):
         if t == "edge":
             wm.bname_edge_select_kind = "edge"
             wm.bname_edge_select_edge = int(sel.get("edge", -1))
+            wm.bname_edge_select_vertex = -1
         elif t == "border":
             wm.bname_edge_select_kind = "border"
             wm.bname_edge_select_edge = -1
-        else:  # vertex 等
+            wm.bname_edge_select_vertex = -1
+        elif t == "vertex":
+            wm.bname_edge_select_kind = "vertex"
+            wm.bname_edge_select_edge = -1
+            wm.bname_edge_select_vertex = int(sel.get("vertex", -1))
+        else:
             wm.bname_edge_select_kind = "none"
             wm.bname_edge_select_edge = -1
+            wm.bname_edge_select_vertex = -1
+        _sync_selected_style_props(context)
+        _tag_view3d_redraw(context)
 
     def _to_window(self, ev):
         return ev.mouse_x - self._region.x, ev.mouse_y - self._region.y
 
+    def _region_at_mouse(self, ev):
+        for region in self._area.regions:
+            if (
+                region.x <= ev.mouse_x < region.x + region.width
+                and region.y <= ev.mouse_y < region.y + region.height
+            ):
+                return region
+        return None
+
     def _is_inside_region(self, ev) -> bool:
-        return (
-            self._region.x <= ev.mouse_x < self._region.x + self._region.width
-            and self._region.y <= ev.mouse_y < self._region.y + self._region.height
-        )
+        region = self._region_at_mouse(ev)
+        return region is not None and region.type == "WINDOW" and region == self._region
 
     def _tag_redraw(self) -> None:
         if self._region is not None:
@@ -445,16 +605,35 @@ class BNAME_OT_panel_edge_move(Operator):
             self._draw_handler = None
         self._tag_redraw()
 
+    def finish_from_external(self, context, *, keep_selection: bool) -> None:
+        if getattr(self, "_externally_finished", False):
+            return
+        self._externally_finished = True
+        if not keep_selection:
+            self._selection = None
+        self._cleanup()
+        try:
+            self._update_wm_selection(context)
+        except Exception:  # noqa: BLE001
+            pass
+        panel_modal_state.clear_active("edge_move", self)
+
+    def _push_undo_step(self, message: str) -> None:
+        """modal 中の 1 操作を独立した undo step として記録."""
+        try:
+            bpy.ops.ed.undo_push(message=message)
+        except Exception:  # noqa: BLE001
+            _logger.exception("edge_move: undo_push failed")
+
     def modal(self, context, event):
+        if getattr(self, "_externally_finished", False):
+            panel_modal_state.clear_active("edge_move", self)
+            return {"FINISHED", "PASS_THROUGH"}
         # Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y (undo / redo) はモーダルが保持する
         # PropertyGroup 参照を stale 化させて C レベル crash を起こすため、
         # 検知したら即座に modal を終了して event を本来の undo に譲る。
         if event.value == "PRESS" and event.type in {"Z", "Y"} and event.ctrl:
-            self._cleanup()
-            try:
-                self._update_wm_selection(context)
-            except Exception:  # noqa: BLE001
-                pass
+            self.finish_from_external(context, keep_selection=True)
             return {"FINISHED", "PASS_THROUGH"}
 
         # B-Name の他ツール/モード切替ショートカットで modal を終了して譲る
@@ -464,11 +643,9 @@ class BNAME_OT_panel_edge_move(Operator):
             and not event.ctrl
             and not event.alt
         ):
-            self._cleanup()
-            try:
-                self._update_wm_selection(context)
-            except Exception:  # noqa: BLE001
-                pass
+            if not self._is_inside_region(event):
+                return {"PASS_THROUGH"}
+            self.finish_from_external(context, keep_selection=True)
             return {"FINISHED", "PASS_THROUGH"}
 
         # G (自分自身) を modal 中に押されたら consume (= 二重起動を防ぐ)
@@ -479,9 +656,13 @@ class BNAME_OT_panel_edge_move(Operator):
             and not event.alt
             and not event.shift
         ):
+            if not self._is_inside_region(event):
+                return {"PASS_THROUGH"}
             return {"RUNNING_MODAL"}
 
         if event.type == "MOUSEMOVE":
+            if not self._dragging and not self._is_inside_region(event):
+                return {"PASS_THROUGH"}
             if self._dragging and self._selection is not None:
                 self._apply_drag(event)
                 self._tag_redraw()
@@ -553,22 +734,29 @@ class BNAME_OT_panel_edge_move(Operator):
                 self._tag_redraw()
                 return {"RUNNING_MODAL"}
             if event.value == "RELEASE":
+                if not self._dragging and not self._is_inside_region(event):
+                    return {"PASS_THROUGH"}
                 if self._dragging:
                     self._dragging = False
                     # 形状が実際に変わった (= ドラッグした) 場合のみ保存
                     # 単純クリック (PRESS-RELEASE) では save を走らせない
                     if self._geometry_changed():
                         self._save_changes()
+                        self._push_undo_step("B-Name: 枠線移動")
                     self._tag_redraw()
                 return {"RUNNING_MODAL"}
 
-        if event.type in {"RIGHTMOUSE", "ESC", "RET", "NUMPAD_ENTER"} \
-                and event.value == "PRESS":
-            self._cleanup()
-            try:
-                self._update_wm_selection(context)
-            except Exception:  # noqa: BLE001
-                pass
+        if event.type == "RIGHTMOUSE" and event.value == "PRESS":
+            if not self._is_inside_region(event):
+                return {"PASS_THROUGH"}
+            self.finish_from_external(context, keep_selection=True)
+            self.report({"INFO"}, "枠線選択ツール終了")
+            return {"FINISHED"}
+
+        if event.type in {"ESC", "RET", "NUMPAD_ENTER"} and event.value == "PRESS":
+            if not self._is_inside_region(event):
+                return {"PASS_THROUGH"}
+            self.finish_from_external(context, keep_selection=True)
             self.report({"INFO"}, "枠線選択ツール終了")
             return {"FINISHED"}
         return {"PASS_THROUGH"}
@@ -669,6 +857,16 @@ class BNAME_OT_panel_edge_move(Operator):
             a_new_line = (a[0] + sx, a[1] + sy)
             b_new_line = (b[0] + sx, b[1] + sy)
 
+            # drag 中スナップ: 隣接コマ辺 / 基本枠 / 裁ち落とし枠 1mm 外側に
+            # 1.5mm 以内なら吸着 (角度は維持)
+            tx = ex / L
+            ty = ey / L
+            page_for_snap = self._work.pages[sel["page"]]
+            a_new_line, b_new_line = _snap_drag_line(
+                self._work, page_for_snap, sel["panel"],
+                a_new_line, b_new_line, tx, ty, nx, ny,
+            )
+
             # 共有頂点 a を、前の辺 (poly[ei-1] → a) の line と新 line の交点へ
             # → 前の辺の角度を維持したまま頂点が新 line 上にスライド
             prev_idx = (ei - 1 + n) % n
@@ -686,7 +884,9 @@ class BNAME_OT_panel_edge_move(Operator):
             panel = page.panels[sel["panel"]]
             _set_panel_polygon(panel, new_poly)
 
-            # 隣接 edge も同じ shift で動かす + 共有頂点を交点補正 (gap 維持)
+            # 隣接 edge も同じ shift で動かす (snap 後の実シフトを反映、gap 維持)
+            actual_sx = a_new_line[0] - a[0]
+            actual_sy = a_new_line[1] - a[1]
             for adj_st in self._original_geometry.get("adjacent_edges", []):
                 p2 = self._work.pages[adj_st["page"]].panels[adj_st["panel"]]
                 op2 = adj_st["poly"]
@@ -694,8 +894,8 @@ class BNAME_OT_panel_edge_move(Operator):
                 n2 = len(op2)
                 a2 = op2[ei2]
                 b2 = op2[(ei2 + 1) % n2]
-                a2_line = (a2[0] + sx, a2[1] + sy)
-                b2_line = (b2[0] + sx, b2[1] + sy)
+                a2_line = (a2[0] + actual_sx, a2[1] + actual_sy)
+                b2_line = (b2[0] + actual_sx, b2[1] + actual_sy)
                 prev_idx2 = (ei2 - 1 + n2) % n2
                 a2_prev = op2[prev_idx2]
                 new_a2 = _line_intersect(a2_prev, a2, a2_line, b2_line, fallback=a2_line)
@@ -769,16 +969,20 @@ class BNAME_OT_panel_edge_move(Operator):
         ifr = inner_frame_rect(paper)
 
         # 候補となる「線」のリスト (page-local 座標) と種別を保持。
-        # 種別: "bleed" (裁ち落とし枠) / "inner" (基本枠) / "panel" (他コマ辺)
+        # 種別: "bleed" (裁ち落とし枠の **1mm 外側**) / "inner" (基本枠) /
+        #       "panel" (他コマ辺)
+        # bleed は最初から「1mm 外側位置」を candidate に登録することで、
+        # 後段の offset 計算が不要になり、edge が既に bleed 1mm 外側にいる場合の
+        # 誤スナップを防ぐ。
         candidate_lines: list[
             tuple[tuple[float, float], tuple[float, float], str]
         ] = []
-        # 裁ち落とし枠の 4 辺
+        # 裁ち落とし枠の 4 辺 (1mm 外側位置)
         candidate_lines.extend([
-            ((br.x, br.y), (br.x2, br.y), "bleed"),
-            ((br.x2, br.y), (br.x2, br.y2), "bleed"),
-            ((br.x2, br.y2), (br.x, br.y2), "bleed"),
-            ((br.x, br.y2), (br.x, br.y), "bleed"),
+            ((br.x - 1.0, br.y - 1.0), (br.x2 + 1.0, br.y - 1.0), "bleed"),
+            ((br.x2 + 1.0, br.y - 1.0), (br.x2 + 1.0, br.y2 + 1.0), "bleed"),
+            ((br.x2 + 1.0, br.y2 + 1.0), (br.x - 1.0, br.y2 + 1.0), "bleed"),
+            ((br.x - 1.0, br.y2 + 1.0), (br.x - 1.0, br.y - 1.0), "bleed"),
         ])
         # 基本枠の 4 辺
         candidate_lines.extend([
@@ -813,16 +1017,23 @@ class BNAME_OT_panel_edge_move(Operator):
         gap_h = float(self._work.panel_gap.horizontal_mm)
         target_gap_axis = gap_v if abs(ny) >= abs(nx) else gap_h
 
-        OVERLAP_TOL_MM = 0.5  # 元辺との距離が ≤ これで「ピッタリ重なっている」と判定
+        OVERLAP_TOL_MM = 0.5  # 拡張候補から除外するしきい値 (snap 後の最小距離)
+        OVERLAP_NEAR_TOL_MM = 0.05  # case B (gap 空け) 発火用の「ピッタリ重なり」判定
 
-        # ===== 特殊ケース: 元 selected edge と「ほぼ距離 0」で重なっている隣接コマがあり、
+        # ===== 特殊ケース: 現在の継ぎ目を実際に共有している隣接コマがあり、
         # かつ ▲sign 方向が「その panel から離れる方向」の場合 → gap を空ける =====
-        # 「離れる方向」判定は panel 中心の符号で行う (panel の中心が -sign 側にあれば
-        # ▲sign は panel から遠ざかる方向)
+        # 「近くに平行な線がある」だけでは発火させず、十分な重なり率を持つ
+        # 実際の隣接枠線だけを対象にする。
         has_panel_overlap_opposite = False
-        for panel_i2, p2 in enumerate(page.panels):
-            if panel_i2 == sel["panel"]:
-                continue
+        overlapping_edges = _find_overlapping_panel_edges(
+            page,
+            sel["panel"],
+            ei,
+            max_distance_mm=OVERLAP_NEAR_TOL_MM,
+            min_overlap_ratio=0.8,
+        )
+        for panel_i2, _ei2 in overlapping_edges:
+            p2 = page.panels[panel_i2]
             poly2 = _panel_polygon(p2)
             if len(poly2) < 3:
                 continue
@@ -832,27 +1043,8 @@ class BNAME_OT_panel_edge_move(Operator):
             # panel 中心が -sign 側にあるとき only (= ▲sign が「離れる方向」)
             if -sign * d_center <= 0:
                 continue
-            for ei2 in range(len(poly2)):
-                ca = poly2[ei2]
-                cb = poly2[(ei2 + 1) % len(poly2)]
-                # 平行性: 辺方向が selected edge と平行な辺だけ対象
-                ux2 = cb[0] - ca[0]
-                uy2 = cb[1] - ca[1]
-                l2 = math.hypot(ux2, uy2)
-                if l2 < 1e-6:
-                    continue
-                dot = (ux2 / l2) * tx + (uy2 / l2) * ty
-                if abs(abs(dot) - 1.0) > 0.05:
-                    continue
-                if not _has_tangent_overlap(ca, cb):
-                    continue
-                mid = ((ca[0] + cb[0]) * 0.5, (ca[1] + cb[1]) * 0.5)
-                d = (mid[0] - a[0]) * nx + (mid[1] - a[1]) * ny
-                if abs(d) < OVERLAP_TOL_MM:
-                    has_panel_overlap_opposite = True
-                    break
-            if has_panel_overlap_opposite:
-                break
+            has_panel_overlap_opposite = True
+            break
 
         has_panel_overlap = has_panel_overlap_opposite
 
@@ -870,6 +1062,8 @@ class BNAME_OT_panel_edge_move(Operator):
             kind_label = "隣接コマからスキマを空けました"
         else:
             # ===== 通常: sign 方向の最寄り候補を探索 =====
+            # candidate_lines の bleed は既に「1mm 外側位置」、その他は ピッタリ位置。
+            # よって offset は不要 (= 0)。candidate との sign 方向距離だけで順位判定。
             best_dist = float("inf")
             best_line: Optional[tuple[tuple[float, float], tuple[float, float]]] = None
             best_kind: str = ""
@@ -886,25 +1080,10 @@ class BNAME_OT_panel_edge_move(Operator):
                 self.report({"INFO"}, "拡張先が見つかりません")
                 return
 
-            # 種別ごとのスナップ位置オフセット
-            # - bleed: 裁ち落とし枠の **1mm 外側**
-            # - panel: 隣接コマ辺に **ピッタリ重ねる** (gap=0)
-            #   → ピッタリ重なった後にユーザーが反対方向の▲を押せば
-            #     上の "has_panel_overlap" ケースで gap が空く動作
-            # - inner: 基本枠線にピッタリ
-            if best_kind == "bleed":
-                offset_along_norm = 1.0
-            elif best_kind == "panel":
-                offset_along_norm = 0.0
-            else:
-                offset_along_norm = 0.0
-
             ca, cb = best_line
-            shift_vec_x = sign * offset_along_norm * nx
-            shift_vec_y = sign * offset_along_norm * ny
-            # 新 selected line = スナップ先 line (オフセット適用済) → **角度はスナップ先と同じ**
-            a_new_line = (ca[0] + shift_vec_x, ca[1] + shift_vec_y)
-            b_new_line = (cb[0] + shift_vec_x, cb[1] + shift_vec_y)
+            # 新 selected line = スナップ先 line そのもの → **角度はスナップ先と同じ**
+            a_new_line = ca
+            b_new_line = cb
             if math.hypot(b_new_line[0] - a_new_line[0],
                           b_new_line[1] - a_new_line[1]) < 1e-6:
                 self.report({"WARNING"}, "拡張先 line が縮退しています")
@@ -936,6 +1115,7 @@ class BNAME_OT_panel_edge_move(Operator):
             self._save_changes()
         except Exception:  # noqa: BLE001
             _logger.exception("edge_move: extend save failed")
+        self._push_undo_step("B-Name: 枠線拡張")
         self.report({"INFO"}, f"枠線を拡張: {kind_label}")
 
     # ---- 形状変化検出 ----
@@ -1150,6 +1330,131 @@ def _remove_edge_style(panel, edge_index: int) -> bool:
     return False
 
 
+def _panel_edge_count(panel) -> int:
+    poly = _panel_polygon(panel)
+    return len(poly)
+
+
+def _vertex_edge_indices(panel, vertex_index: int) -> tuple[int, int] | None:
+    edge_count = _panel_edge_count(panel)
+    if edge_count <= 0 or not (0 <= vertex_index < edge_count):
+        return None
+    return ((vertex_index - 1 + edge_count) % edge_count, vertex_index)
+
+
+def _find_edge_style(panel, edge_index: int):
+    for style in panel.edge_styles:
+        if int(style.edge_index) == int(edge_index):
+            return style
+    return None
+
+
+def _selected_style_target(context):
+    wm = context.window_manager
+    kind = getattr(wm, "bname_edge_select_kind", "none")
+    if kind == "none":
+        return None
+    work = get_work(context)
+    if work is None or not work.loaded:
+        return None
+    page_index = int(getattr(wm, "bname_edge_select_page", -1))
+    panel_index = int(getattr(wm, "bname_edge_select_panel", -1))
+    if not (0 <= page_index < len(work.pages)):
+        return None
+    page = work.pages[page_index]
+    if not (0 <= panel_index < len(page.panels)):
+        return None
+    panel = page.panels[panel_index]
+    return (kind, work, page, panel, wm)
+
+
+def _selected_style_values(context) -> tuple[tuple[float, float, float, float], float] | None:
+    target = _selected_style_target(context)
+    if target is None:
+        return None
+    kind, _work, _page, panel, wm = target
+    if kind == "border":
+        return (tuple(panel.border.color), float(panel.border.width_mm))
+    if kind == "edge":
+        edge_index = int(getattr(wm, "bname_edge_select_edge", -1))
+        style = _find_edge_style(panel, edge_index)
+        if style is not None:
+            return (tuple(style.color), float(style.width_mm))
+        return (tuple(panel.border.color), float(panel.border.width_mm))
+    if kind == "vertex":
+        vertex_index = int(getattr(wm, "bname_edge_select_vertex", -1))
+        edge_pair = _vertex_edge_indices(panel, vertex_index)
+        if edge_pair is None:
+            return None
+        for edge_index in edge_pair:
+            style = _find_edge_style(panel, edge_index)
+            if style is not None:
+                return (tuple(style.color), float(style.width_mm))
+        return (tuple(panel.border.color), float(panel.border.width_mm))
+    return None
+
+
+def _sync_selected_style_props(context) -> None:
+    global _SELECTION_STYLE_SYNCING
+    values = _selected_style_values(context)
+    if values is None:
+        return
+    color, width = values
+    wm = context.window_manager
+    _SELECTION_STYLE_SYNCING = True
+    try:
+        wm.bname_edge_style_color = color
+        wm.bname_edge_style_width_mm = width
+    finally:
+        _SELECTION_STYLE_SYNCING = False
+
+
+def _tag_view3d_redraw(context) -> None:
+    screen = getattr(context, "screen", None)
+    if screen is None:
+        return
+    for area in screen.areas:
+        if area.type == "VIEW_3D":
+            area.tag_redraw()
+
+
+def _apply_selected_style_values(context, color: tuple[float, float, float, float], width_mm: float) -> None:
+    target = _selected_style_target(context)
+    if target is None:
+        return
+    kind, work, page, panel, wm = target
+    if kind == "border":
+        panel.border.color = color
+        panel.border.width_mm = float(width_mm)
+    elif kind == "edge":
+        edge_index = int(getattr(wm, "bname_edge_select_edge", -1))
+        style = _find_or_add_edge_style(panel, edge_index)
+        style.color = color
+        style.width_mm = float(width_mm)
+    elif kind == "vertex":
+        vertex_index = int(getattr(wm, "bname_edge_select_vertex", -1))
+        edge_pair = _vertex_edge_indices(panel, vertex_index)
+        if edge_pair is None:
+            return
+        for edge_index in edge_pair:
+            style = _find_or_add_edge_style(panel, edge_index)
+            style.color = color
+            style.width_mm = float(width_mm)
+    else:
+        return
+    _save_panel_change(work, page)
+    _tag_view3d_redraw(context)
+
+
+def _on_selected_style_prop_changed(_self, context) -> None:
+    if context is None or _SELECTION_STYLE_SYNCING:
+        return
+    wm = context.window_manager
+    color = tuple(float(v) for v in getattr(wm, "bname_edge_style_color", (0.0, 0.0, 0.0, 1.0)))
+    width_mm = float(getattr(wm, "bname_edge_style_width_mm", 0.5))
+    _apply_selected_style_values(context, color, width_mm)
+
+
 def _save_panel_change(work, page) -> None:
     if work is None or work.work_dir == "":
         return
@@ -1187,9 +1492,8 @@ class BNAME_OT_edge_style_create(Operator):
         panel = page.panels[pn]
         _find_or_add_edge_style(panel, ei)
         _save_panel_change(work, page)
-        for area in context.screen.areas:
-            if area.type == "VIEW_3D":
-                area.tag_redraw()
+        _sync_selected_style_props(context)
+        _tag_view3d_redraw(context)
         return {"FINISHED"}
 
 
@@ -1218,9 +1522,8 @@ class BNAME_OT_edge_style_remove(Operator):
         panel = page.panels[pn]
         _remove_edge_style(panel, ei)
         _save_panel_change(work, page)
-        for area in context.screen.areas:
-            if area.type == "VIEW_3D":
-                area.tag_redraw()
+        _sync_selected_style_props(context)
+        _tag_view3d_redraw(context)
         return {"FINISHED"}
 
 
@@ -1248,9 +1551,42 @@ class BNAME_OT_edge_style_clear_all(Operator):
         panel = page.panels[pn]
         panel.edge_styles.clear()
         _save_panel_change(work, page)
-        for area in context.screen.areas:
-            if area.type == "VIEW_3D":
-                area.tag_redraw()
+        _sync_selected_style_props(context)
+        _tag_view3d_redraw(context)
+        return {"FINISHED"}
+
+
+class BNAME_OT_vertex_style_remove(Operator):
+    """選択中の頂点に接続する 2 辺の edge_style override を削除."""
+
+    bl_idname = "bname.vertex_style_remove"
+    bl_label = "頂点の個別設定を削除"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        wm = context.window_manager
+        if wm.bname_edge_select_kind != "vertex":
+            return {"CANCELLED"}
+        work = get_work(context)
+        if work is None or not work.loaded:
+            return {"CANCELLED"}
+        pi = wm.bname_edge_select_page
+        pn = wm.bname_edge_select_panel
+        vi = int(getattr(wm, "bname_edge_select_vertex", -1))
+        if not (0 <= pi < len(work.pages)):
+            return {"CANCELLED"}
+        page = work.pages[pi]
+        if not (0 <= pn < len(page.panels)):
+            return {"CANCELLED"}
+        panel = page.panels[pn]
+        edge_pair = _vertex_edge_indices(panel, vi)
+        if edge_pair is None:
+            return {"CANCELLED"}
+        for edge_index in edge_pair:
+            _remove_edge_style(panel, edge_index)
+        _save_panel_change(work, page)
+        _sync_selected_style_props(context)
+        _tag_view3d_redraw(context)
         return {"FINISHED"}
 
 
@@ -1259,11 +1595,12 @@ _CLASSES = (
     BNAME_OT_edge_style_create,
     BNAME_OT_edge_style_remove,
     BNAME_OT_edge_style_clear_all,
+    BNAME_OT_vertex_style_remove,
 )
 
 
 def register() -> None:
-    from bpy.props import EnumProperty, IntProperty
+    from bpy.props import EnumProperty, FloatProperty, FloatVectorProperty, IntProperty
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.WindowManager.bname_edge_select_kind = EnumProperty(
@@ -1272,12 +1609,30 @@ def register() -> None:
             ("none", "未選択", ""),
             ("edge", "辺", ""),
             ("border", "枠線全体", ""),
+            ("vertex", "頂点", ""),
         ],
         default="none",
     )
     bpy.types.WindowManager.bname_edge_select_page = IntProperty(default=-1)
     bpy.types.WindowManager.bname_edge_select_panel = IntProperty(default=-1)
     bpy.types.WindowManager.bname_edge_select_edge = IntProperty(default=-1)
+    bpy.types.WindowManager.bname_edge_select_vertex = IntProperty(default=-1)
+    bpy.types.WindowManager.bname_edge_style_color = FloatVectorProperty(
+        name="線色",
+        subtype="COLOR",
+        size=4,
+        default=(0.0, 0.0, 0.0, 1.0),
+        min=0.0,
+        max=1.0,
+        update=_on_selected_style_prop_changed,
+    )
+    bpy.types.WindowManager.bname_edge_style_width_mm = FloatProperty(
+        name="線幅 (mm)",
+        default=0.5,
+        min=0.0,
+        soft_max=10.0,
+        update=_on_selected_style_prop_changed,
+    )
 
 
 def unregister() -> None:
@@ -1286,6 +1641,9 @@ def unregister() -> None:
         "bname_edge_select_page",
         "bname_edge_select_panel",
         "bname_edge_select_edge",
+        "bname_edge_select_vertex",
+        "bname_edge_style_color",
+        "bname_edge_style_width_mm",
     ):
         try:
             delattr(bpy.types.WindowManager, prop)

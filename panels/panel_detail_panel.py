@@ -6,6 +6,7 @@ import bpy
 from bpy.types import Panel
 
 from ..core.work import get_active_page
+from .edge_style_ui import draw_selected_edge_style_box
 
 B_NAME_CATEGORY = "B-Name"
 
@@ -83,7 +84,9 @@ class BNAME_PT_panel_border(Panel):
 
     @classmethod
     def poll(cls, context):
-        return _get_active_panel(context) is not None
+        if _get_active_panel(context) is not None:
+            return True
+        return getattr(context.window_manager, "bname_edge_select_kind", "none") != "none"
 
     def draw_header(self, context):
         entry = _get_active_panel(context)
@@ -93,26 +96,27 @@ class BNAME_PT_panel_border(Panel):
     def draw(self, context):
         layout = self.layout
         entry = _get_active_panel(context)
-        if entry is None:
-            return
-        b = entry.border
-        layout.active = b.visible
-        layout.prop(b, "style")
-        layout.prop(b, "width_mm")
-        layout.prop(b, "color")
-        row = layout.row(align=True)
-        row.prop(b, "corner_type")
-        sub = row.row(align=True)
-        sub.enabled = b.corner_type != "square"
-        sub.prop(b, "corner_radius_mm", text="半径")
+        if entry is not None:
+            b = entry.border
+            content = layout.column()
+            content.active = b.visible
+            content.prop(b, "style")
+            content.prop(b, "width_mm")
+            content.prop(b, "color")
+            row = content.row(align=True)
+            row.prop(b, "corner_type")
+            sub = row.row(align=True)
+            sub.enabled = b.corner_type != "square"
+            sub.prop(b, "corner_radius_mm", text="半径")
 
-        # 辺ごとオーバーライド
-        box = layout.box()
-        box.label(text="辺ごとオーバーライド")
-        _draw_border_edge(box, "上", b.edge_top)
-        _draw_border_edge(box, "右", b.edge_right)
-        _draw_border_edge(box, "下", b.edge_bottom)
-        _draw_border_edge(box, "左", b.edge_left)
+            box = content.box()
+            box.label(text="辺ごとオーバーライド")
+            _draw_border_edge(box, "上", b.edge_top)
+            _draw_border_edge(box, "右", b.edge_right)
+            _draw_border_edge(box, "下", b.edge_bottom)
+            _draw_border_edge(box, "左", b.edge_left)
+
+        draw_selected_edge_style_box(layout, context)
 
 
 def _draw_border_edge(layout, label: str, edge) -> None:

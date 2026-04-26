@@ -6,7 +6,8 @@ import bpy
 from bpy.types import Panel, UIList
 
 from ..core.mode import MODE_PAGE, MODE_PANEL, get_mode
-from ..core.work import get_active_page, get_work
+from ..core.work import get_active_page
+from .edge_style_ui import draw_selected_edge_style_box
 
 B_NAME_CATEGORY = "B-Name"
 
@@ -159,57 +160,8 @@ class BNAME_PT_panels(Panel):
 
 
 def _draw_edge_style_box(layout, context) -> None:
-    """枠線選択ツールで選択中の辺/枠線の color/width を編集する UI."""
-    wm = context.window_manager
-    kind = getattr(wm, "bname_edge_select_kind", "none")
-    if kind == "none":
-        return
-    work = get_work(context)
-    if work is None or not work.loaded:
-        return
-    pi = int(getattr(wm, "bname_edge_select_page", -1))
-    pn = int(getattr(wm, "bname_edge_select_panel", -1))
-    if not (0 <= pi < len(work.pages)):
-        return
-    page = work.pages[pi]
-    if not (0 <= pn < len(page.panels)):
-        return
-    panel_entry = page.panels[pn]
-
-    box = layout.box()
-    if kind == "border":
-        box.label(
-            text=f"枠線全体: P{pi:04d} {panel_entry.id}",
-            icon="MESH_DATA",
-        )
-        box.prop(panel_entry.border, "color")
-        box.prop(panel_entry.border, "width_mm")
-        box.operator("bname.edge_style_clear_all", icon="X")
-    elif kind == "edge":
-        ei = int(getattr(wm, "bname_edge_select_edge", -1))
-        box.label(
-            text=f"辺 [{ei}] : P{pi:04d} {panel_entry.id}",
-            icon="EDGESEL",
-        )
-        # edge_style override の有無で表示分岐
-        override = None
-        for s in panel_entry.edge_styles:
-            if int(s.edge_index) == ei:
-                override = s
-                break
-        if override is None:
-            box.label(text="この辺は枠線全体の設定を継承中", icon="LINKED")
-            # 継承中は read-only 表示 (誤って panel 全体の border を編集しない)
-            sub = box.column(align=True)
-            sub.enabled = False
-            sub.prop(panel_entry.border, "color", text="継承中の色")
-            sub.prop(panel_entry.border, "width_mm", text="継承中の線幅")
-            box.operator("bname.edge_style_create", icon="ADD")
-        else:
-            box.label(text="この辺は個別設定", icon="UNLINKED")
-            box.prop(override, "color")
-            box.prop(override, "width_mm")
-            box.operator("bname.edge_style_remove", icon="X")
+    """枠線選択ツールで選択中の辺/枠線/頂点の color/width を編集する UI."""
+    draw_selected_edge_style_box(layout, context)
 
 
 _CLASSES = (

@@ -26,6 +26,7 @@ from gpu_extras.batch import batch_for_shader
 
 from ..core.work import get_work
 from ..io import page_io, panel_io
+from . import panel_modal_state
 from ..utils import geom, log, page_grid
 
 _logger = log.get_logger(__name__)
@@ -419,6 +420,12 @@ class BNAME_OT_panel_knife_cut(Operator):
         target = _find_view3d(context)
         if target is None:
             return {"PASS_THROUGH"}
+        if panel_modal_state.get_active("knife_cut") is not None:
+            panel_modal_state.finish_active(
+                "knife_cut", context, keep_selection=False,
+            )
+            return {"FINISHED"}
+        panel_modal_state.finish_active("edge_move", context, keep_selection=False)
         self._area, self._region, self._rv3d = target
         self._work = get_work(context)
         if self._work is None or not self._work.loaded:
@@ -430,12 +437,14 @@ class BNAME_OT_panel_knife_cut(Operator):
         self._p2_px: tuple[float, float] | None = None
         self._dragging = False
         self._cut_count_total = 0
+        self._externally_finished = False
 
         # POST_PIXEL でラバーバンドを描画
         self._draw_handler = bpy.types.SpaceView3D.draw_handler_add(
             _draw_callback, (self,), "WINDOW", "POST_PIXEL"
         )
         context.window_manager.modal_handler_add(self)
+        panel_modal_state.set_active("knife_cut", self)
         self._tag_redraw()
         self.report(
             {"INFO"},
@@ -445,6 +454,15 @@ class BNAME_OT_panel_knife_cut(Operator):
 
     def _to_window(self, ev):
         return ev.mouse_x - self._region.x, ev.mouse_y - self._region.y
+
+    def _region_at_mouse(self, ev):
+        for region in self._area.regions:
+            if (
+                region.x <= ev.mouse_x < region.x + region.width
+                and region.y <= ev.mouse_y < region.y + region.height
+            ):
+                return region
+        return None
 
     def _snap_p2(
         self, p2: tuple[float, float], shift: bool,
@@ -465,10 +483,8 @@ class BNAME_OT_panel_knife_cut(Operator):
         return (x1, y2)  # 垂直にスナップ
 
     def _is_inside_region(self, ev) -> bool:
-        return (
-            self._region.x <= ev.mouse_x < self._region.x + self._region.width
-            and self._region.y <= ev.mouse_y < self._region.y + self._region.height
-        )
+        region = self._region_at_mouse(ev)
+        return region is not None and region.type == "WINDOW" and region == self._region
 
     def _tag_redraw(self) -> None:
         if self._region is not None:
@@ -484,11 +500,22 @@ class BNAME_OT_panel_knife_cut(Operator):
             self._draw_handler = None
         self._tag_redraw()
 
+    def finish_from_external(self, context, *, keep_selection: bool) -> None:
+        _ = keep_selection
+        if getattr(self, "_externally_finished", False):
+            return
+        self._externally_finished = True
+        self._cleanup()
+        panel_modal_state.clear_active("knife_cut", self)
+
     def modal(self, context, event):
+        if getattr(self, "_externally_finished", False):
+            panel_modal_state.clear_active("knife_cut", self)
+            return {"FINISHED", "PASS_THROUGH"}
         # Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y は modal 保持中の PropertyGroup 参照を
         # stale 化させて C レベル crash を起こすため、検知したら即終了して譲る。
         if event.value == "PRESS" and event.type in {"Z", "Y"} and event.ctrl:
-            self._cleanup()
+            self.finish_from_external(context, keep_selection=False)
             return {"FINISHED", "PASS_THROUGH"}
 
         # B-Name のモード/ツール切替ショートカットが押されたら modal を終了して譲る
@@ -499,7 +526,9 @@ class BNAME_OT_panel_knife_cut(Operator):
             and not event.ctrl
             and not event.alt
         ):
-            self._cleanup()
+            if not self._is_inside_region(event):
+                return {"PASS_THROUGH"}
+            self.finish_from_external(context, keep_selection=False)
             return {"FINISHED", "PASS_THROUGH"}
 
         # F (自分自身) を modal 中に押されたら consume (= 二重起動を防ぐ)
@@ -510,9 +539,13 @@ class BNAME_OT_panel_knife_cut(Operator):
             and not event.alt
             and not event.shift
         ):
+            if not self._is_inside_region(event):
+                return {"PASS_THROUGH"}
             return {"RUNNING_MODAL"}
 
         if event.type == "MOUSEMOVE":
+            if not self._dragging and not self._is_inside_region(event):
+                return {"PASS_THROUGH"}
             if self._dragging:
                 self._p2_px = self._snap_p2(self._to_window(event), event.shift)
                 self._tag_redraw()
@@ -528,6 +561,8 @@ class BNAME_OT_panel_knife_cut(Operator):
                 self._tag_redraw()
                 return {"RUNNING_MODAL"}
             if event.value == "RELEASE":
+                if not self._dragging and not self._is_inside_region(event):
+                    return {"PASS_THROUGH"}
                 if self._dragging and self._p1_px is not None and self._p2_px is not None:
                     # リリース直前の Shift 状態でも軸ロックを反映
                     self._p2_px = self._snap_p2(self._p2_px, event.shift)
@@ -539,9 +574,23 @@ class BNAME_OT_panel_knife_cut(Operator):
                     self._tag_redraw()
                 return {"RUNNING_MODAL"}
 
-        if event.type in {"RIGHTMOUSE", "ESC", "RET", "NUMPAD_ENTER"} \
-                and event.value == "PRESS":
-            self._cleanup()
+        if event.type == "RIGHTMOUSE" and event.value == "PRESS":
+            if not self._is_inside_region(event):
+                return {"PASS_THROUGH"}
+            self.finish_from_external(context, keep_selection=False)
+            if self._cut_count_total > 0:
+                self.report(
+                    {"INFO"},
+                    f"枠線カットツール終了 (合計 {self._cut_count_total} コマ分割)",
+                )
+            else:
+                self.report({"INFO"}, "枠線カットツール終了")
+            return {"FINISHED"}
+
+        if event.type in {"ESC", "RET", "NUMPAD_ENTER"} and event.value == "PRESS":
+            if not self._is_inside_region(event):
+                return {"PASS_THROUGH"}
+            self.finish_from_external(context, keep_selection=False)
             if self._cut_count_total > 0:
                 self.report(
                     {"INFO"},
