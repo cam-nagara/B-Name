@@ -18,6 +18,16 @@ def _get_collection(scene):
     return getattr(scene, "bname_image_layers", None)
 
 
+def _allocate_image_id(coll) -> str:
+    used = {entry.id for entry in coll}
+    i = 1
+    while True:
+        candidate = f"image_{i:04d}"
+        if candidate not in used:
+            return candidate
+        i += 1
+
+
 class BNAME_OT_image_layer_add(Operator, ImportHelper):
     """画像ファイルを選択して新規画像レイヤーを追加.
 
@@ -54,7 +64,7 @@ class BNAME_OT_image_layer_add(Operator, ImportHelper):
             self.report({"ERROR"}, f"ファイルが見つかりません: {path}")
             return {"CANCELLED"}
         entry = coll.add()
-        entry.id = f"image_{len(coll):04d}"
+        entry.id = _allocate_image_id(coll)
         entry.title = path.stem
         entry.filepath = str(path)
         context.scene.bname_active_image_layer_index = len(coll) - 1
@@ -136,14 +146,6 @@ def register() -> None:
 
     bpy.types.Scene.bname_image_layers = bpy.props.CollectionProperty(type=BNameImageLayer)
     bpy.types.Scene.bname_active_image_layer_index = bpy.props.IntProperty(default=-1, min=-1)
-    bpy.types.Scene.bname_active_layer_kind = bpy.props.EnumProperty(
-        name="アクティブレイヤー種別",
-        items=(
-            ("gp", "Grease Pencil", ""),
-            ("image", "画像", ""),
-        ),
-        default="gp",
-    )
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
 
@@ -155,7 +157,6 @@ def unregister() -> None:
         except RuntimeError:
             pass
     for attr in (
-        "bname_active_layer_kind",
         "bname_active_image_layer_index",
         "bname_image_layers",
     ):

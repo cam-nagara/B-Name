@@ -11,10 +11,11 @@
 from __future__ import annotations
 
 import bpy
-from bpy.types import Panel
+from bpy.types import Panel, UIList
 
-from ..core.work import get_work
+from ..core.work import get_active_page, get_work
 from ..utils import gpencil as gp_utils
+from ..utils import layer_stack as layer_stack_utils
 
 B_NAME_CATEGORY = "B-Name"
 _GP_OBJECT_TYPE = "GREASEPENCIL"
@@ -42,133 +43,111 @@ def _indent(row, depth: int) -> None:
         row.separator(factor=1.25 * depth)
 
 
-def _draw_gp_layer_row(col, layer, active_layer, depth: int) -> None:
-    row = col.row(align=True)
-    _indent(row, depth)
-    is_active = (layer == active_layer)
-    select_icon = "RADIOBUT_ON" if is_active else "RADIOBUT_OFF"
-    op = row.operator(
-        "bname.gpencil_layer_select",
-        text="",
-        icon=select_icon,
-        emboss=False,
-    )
-    op.layer_name = layer.name
-    row.prop(layer, "name", text="")
-    if hasattr(layer, "hide"):
+def _kind_icon(kind: str) -> str:
+    return {
+        "gp": "OUTLINER_OB_GREASEPENCIL",
+        "gp_folder": "FILE_FOLDER",
+        "image": "IMAGE_DATA",
+        "balloon": "MOD_FLUID",
+        "text": "FONT_DATA",
+        "effect": "STROKE",
+    }.get(kind, "RENDERLAYERS")
+
+
+def _draw_stack_gp_row(row, item, resolved) -> None:
+    target = resolved.get("target") if resolved is not None else None
+    if target is None:
+        row.label(text=item.label, icon=_kind_icon(item.kind))
+        return
+    if item.kind == "gp_folder":
+        expanded = bool(getattr(target, "is_expanded", True))
         row.prop(
-            layer,
+            target,
+            "is_expanded",
+            text="",
+            emboss=False,
+            icon="TRIA_DOWN" if expanded else "TRIA_RIGHT",
+        )
+        row.prop(target, "name", text="")
+    else:
+        row.label(text="", icon=_kind_icon(item.kind))
+        row.prop(target, "name", text="")
+    if hasattr(target, "hide"):
+        row.prop(
+            target,
             "hide",
             text="",
             emboss=False,
-            icon="HIDE_ON" if layer.hide else "HIDE_OFF",
+            icon="HIDE_ON" if target.hide else "HIDE_OFF",
         )
-    if hasattr(layer, "lock"):
+    if hasattr(target, "lock"):
         row.prop(
-            layer,
+            target,
             "lock",
             text="",
             emboss=False,
-            icon="LOCKED" if layer.lock else "UNLOCKED",
+            icon="LOCKED" if target.lock else "UNLOCKED",
         )
-    if getattr(layer, "parent_group", None) is not None:
-        op = row.operator(
-            "bname.gpencil_layer_move_to_folder",
-            text="外",
-            emboss=False,
-        )
-        op.layer_name = layer.name
-        op.folder_name = ""
 
 
-def _draw_gp_group_row(col, group, active_layer, depth: int) -> None:
-    row = col.row(align=True)
-    _indent(row, depth)
-    expanded = bool(getattr(group, "is_expanded", True))
-    row.prop(
-        group,
-        "is_expanded",
-        text="",
-        emboss=False,
-        icon="TRIA_DOWN" if expanded else "TRIA_RIGHT",
-    )
-    row.prop(group, "name", text="")
-    if hasattr(group, "hide"):
+def _draw_stack_data_row(row, item, resolved) -> None:
+    target = resolved.get("target") if resolved is not None else None
+    if target is None:
+        row.label(text=item.label, icon=_kind_icon(item.kind))
+        return
+    if item.kind == "image":
+        row.label(text="", icon="IMAGE_DATA")
+        row.prop(target, "title", text="")
         row.prop(
-            group,
-            "hide",
+            target,
+            "visible",
             text="",
             emboss=False,
-            icon="HIDE_ON" if group.hide else "HIDE_OFF",
+            icon="HIDE_OFF" if target.visible else "HIDE_ON",
         )
-    if hasattr(group, "lock"):
         row.prop(
-            group,
-            "lock",
+            target,
+            "locked",
             text="",
             emboss=False,
-            icon="LOCKED" if group.lock else "UNLOCKED",
+            icon="LOCKED" if target.locked else "UNLOCKED",
         )
-    if active_layer is not None and getattr(active_layer, "parent_group", None) != group:
+    elif item.kind == "balloon":
+        row.label(text=target.id, icon="MOD_FLUID")
+        row.prop(target, "shape", text="")
+    elif item.kind == "text":
+        row.label(text="", icon="FONT_DATA")
+        row.prop(target, "body", text="")
+    elif item.kind == "effect":
+        _draw_stack_gp_row(row, item, resolved)
+    else:
+        row.label(text=item.label, icon=_kind_icon(item.kind))
+
+
+class BNAME_UL_layer_stack(UIList):
+    """統合レイヤーリスト。UIList の実CollectionをD&D並び替え対象にする."""
+
+    bl_idname = "BNAME_UL_layer_stack"
+
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+        if self.layout_type not in {"DEFAULT", "COMPACT"}:
+            layout.label(text=item.label, icon=_kind_icon(item.kind))
+            return
+        row = layout.row(align=True)
+        _indent(row, int(getattr(item, "depth", 0)))
+        active = int(getattr(context.scene, "bname_active_layer_stack_index", -1)) == index
         op = row.operator(
-            "bname.gpencil_layer_move_to_folder",
-            text="入",
+            "bname.layer_stack_select",
+            text="",
+            icon="RADIOBUT_ON" if active else "RADIOBUT_OFF",
             emboss=False,
         )
-        op.layer_name = active_layer.name
-        op.folder_name = group.name
-    op = row.operator("bname.gpencil_folder_add", text="", icon="ADD")
-    op.parent_folder_name = group.name
-    op = row.operator("bname.gpencil_folder_remove", text="", icon="REMOVE")
-    op.folder_name = group.name
-
-
-def _draw_gp_layer_tree(col, nodes, active_layer, depth: int = 0) -> None:
-    for node in nodes:
-        if gp_utils.is_layer_group(node):
-            _draw_gp_group_row(col, node, active_layer, depth)
-            if bool(getattr(node, "is_expanded", True)):
-                _draw_gp_layer_tree(col, getattr(node, "children", []), active_layer, depth + 1)
+        op.index = index
+        resolved = layer_stack_utils.resolve_stack_item(context, item)
+        if item.kind in {"gp", "gp_folder", "effect"}:
+            _draw_stack_gp_row(row, item, resolved)
         else:
-            _draw_gp_layer_row(col, node, active_layer, depth)
-
-
-def _active_image_layer(context):
-    coll = getattr(context.scene, "bname_image_layers", None)
-    if coll is None:
-        return None, -1, None
-    idx = int(getattr(context.scene, "bname_active_image_layer_index", -1))
-    if 0 <= idx < len(coll):
-        return coll, idx, coll[idx]
-    return coll, idx, None
-
-
-def _draw_image_layer_row(col, entry, index: int, *, active: bool) -> None:
-    row = col.row(align=True)
-    select_icon = "RADIOBUT_ON" if active else "RADIOBUT_OFF"
-    op = row.operator(
-        "bname.image_layer_select",
-        text="",
-        icon=select_icon,
-        emboss=False,
-    )
-    op.index = index
-    row.label(text="", icon="IMAGE_DATA")
-    row.prop(entry, "title", text="")
-    row.prop(
-        entry,
-        "visible",
-        text="",
-        emboss=False,
-        icon="HIDE_OFF" if entry.visible else "HIDE_ON",
-    )
-    row.prop(
-        entry,
-        "locked",
-        text="",
-        emboss=False,
-        icon="LOCKED" if entry.locked else "UNLOCKED",
-    )
+            _draw_stack_data_row(row, item, resolved)
 
 
 def _draw_gp_selected_settings(box, obj, active_layer) -> None:
@@ -198,6 +177,12 @@ def _draw_gp_selected_settings(box, obj, active_layer) -> None:
             flag_row.prop(gp_style, "show_fill", text="塗りを描く")
     else:
         settings.label(text="(レイヤー色を取得できません)", icon="ERROR")
+    if hasattr(active_layer, "blend_mode"):
+        settings.prop(active_layer, "blend_mode", text="ブレンド")
+    if hasattr(active_layer, "tint_color"):
+        settings.prop(active_layer, "tint_color", text="色合い")
+    if hasattr(active_layer, "tint_factor"):
+        settings.prop(active_layer, "tint_factor", text="色合い量")
 
 
 def _draw_image_selected_settings(box, entry) -> None:
@@ -227,32 +212,274 @@ def _draw_image_selected_settings(box, entry) -> None:
     sub.prop(entry, "binarize_threshold")
 
 
-def _draw_image_only_layer_list(layout, context) -> None:
-    box = layout.box()
-    box.label(text="レイヤー", icon="RENDERLAYERS")
-    image_layers, active_image_idx, active_image = _active_image_layer(context)
-    if active_image is not None:
-        _draw_image_selected_settings(box, active_image)
+def _draw_balloon_selected_settings(box, context, entry) -> None:
+    settings = box.column(align=True)
+    settings.label(text=f"選択中: {entry.id} (フキダシ)")
+    settings.prop(entry, "shape")
+    row = settings.row(align=True)
+    row.prop(entry, "x_mm")
+    row.prop(entry, "y_mm")
+    row = settings.row(align=True)
+    row.prop(entry, "width_mm")
+    row.prop(entry, "height_mm")
+    settings.prop(entry, "rotation_deg")
+    row = settings.row(align=True)
+    row.prop(entry, "flip_h", toggle=True)
+    row.prop(entry, "flip_v", toggle=True)
+    settings.prop(entry, "opacity", slider=True)
+    settings.prop(entry, "rounded_corner_enabled")
+    sub = settings.row()
+    sub.enabled = entry.rounded_corner_enabled
+    sub.prop(entry, "rounded_corner_radius_mm")
+
+    line_box = box.box()
+    line_box.label(text="線・塗り")
+    line_box.prop(entry, "line_style")
+    line_box.prop(entry, "line_width_mm")
+    line_box.prop(entry, "line_color")
+    line_box.prop(entry, "fill_color")
+
+    sp = entry.shape_params
+    if entry.shape == "cloud":
+        shape_box = box.box()
+        shape_box.label(text="雲パラメータ")
+        shape_box.prop(sp, "cloud_wave_count")
+        shape_box.prop(sp, "cloud_wave_amplitude_mm")
+    elif entry.shape in ("spike_curve", "spike_straight"):
+        shape_box = box.box()
+        shape_box.label(text="トゲパラメータ")
+        shape_box.prop(sp, "spike_count")
+        shape_box.prop(sp, "spike_depth_mm")
+        shape_box.prop(sp, "spike_jitter")
+
+    move_box = box.box()
+    move_box.label(text="親子連動移動", icon="CON_TRACKTO")
+    row = move_box.row(align=True)
+    op = row.operator("bname.balloon_move", text="← 5mm")
+    op.delta_x_mm = -5.0
+    op = row.operator("bname.balloon_move", text="→ 5mm")
+    op.delta_x_mm = 5.0
+    op = row.operator("bname.balloon_move", text="↑ 5mm")
+    op.delta_y_mm = 5.0
+    op = row.operator("bname.balloon_move", text="↓ 5mm")
+    op.delta_y_mm = -5.0
+
+    tail_box = box.box()
+    row = tail_box.row(align=True)
+    row.label(text=f"尻尾 ({len(entry.tails)})")
+    row.operator("bname.balloon_tail_add", text="", icon="ADD")
+    for i, tail in enumerate(entry.tails):
+        sub = tail_box.box()
+        sub.label(text=f"尻尾 {i + 1}")
+        sub.prop(tail, "type")
+        sub.prop(tail, "direction_deg")
+        sub.prop(tail, "length_mm")
+        row = sub.row(align=True)
+        row.prop(tail, "root_width_mm")
+        row.prop(tail, "tip_width_mm")
+        if tail.type == "curve":
+            sub.prop(tail, "curve_bend")
+
+
+def _draw_text_selected_settings(box, context, entry) -> None:
+    page = get_active_page(context)
+    settings = box.column(align=True)
+    settings.label(text=f"選択中: {entry.id} (テキスト)")
+    settings.prop(entry, "body")
+    settings.prop(entry, "speaker_type")
+    row = settings.row(align=True)
+    row.prop(entry, "x_mm")
+    row.prop(entry, "y_mm")
+    row = settings.row(align=True)
+    row.prop(entry, "width_mm")
+    row.prop(entry, "height_mm")
+
+    type_box = box.box()
+    type_box.label(text="組版", icon="FONT_DATA")
+    type_box.prop(entry, "writing_mode")
+    type_box.prop(entry, "font_size_pt")
+    row = type_box.row(align=True)
+    row.prop(entry, "font_bold", toggle=True)
+    row.prop(entry, "font_italic", toggle=True)
+    type_box.prop(entry, "color")
+    row = type_box.row(align=True)
+    row.prop(entry, "line_height")
+    row.prop(entry, "letter_spacing")
+
+    stroke_box = box.box()
+    stroke_box.prop(entry, "stroke_enabled")
+    sub = stroke_box.column()
+    sub.enabled = entry.stroke_enabled
+    sub.prop(entry, "stroke_width_mm")
+    sub.prop(entry, "stroke_color")
+
+    parent_box = box.box()
+    parent_box.label(text="親フキダシ", icon="LINKED")
+    parent_box.prop(entry, "parent_balloon_id", text="ID")
+    if page is not None and len(page.balloons) > 0:
+        row = parent_box.row(align=True)
+        row.label(text="紐付け:")
+        for balloon in page.balloons:
+            op = row.operator("bname.text_attach_to_balloon", text=balloon.id)
+            op.balloon_id = balloon.id
+        op = parent_box.operator(
+            "bname.text_attach_to_balloon",
+            text="独立テキストにする",
+            icon="UNLINKED",
+        )
+        op.balloon_id = ""
+
+
+def _draw_effect_selected_settings(box, context, obj, active_layer) -> None:
+    settings = box.column(align=True)
+    name = getattr(active_layer, "name", "効果線")
+    settings.label(text=f"選択中: {name} (効果線)")
+    if active_layer is not None and hasattr(active_layer, "opacity"):
+        settings.prop(active_layer, "opacity", text="不透明度", slider=True)
+    if active_layer is not None and hasattr(active_layer, "hide"):
+        settings.prop(active_layer, "hide", text="非表示")
+    params = getattr(context.scene, "bname_effect_line_params", None)
+    if params is None:
+        settings.label(text="効果線パラメータが未初期化です", icon="ERROR")
+        return
+
+    param_box = box.box()
+    param_box.label(text="効果線設定", icon="STROKE")
+    param_box.prop(params, "effect_type")
+    param_box.prop(params, "base_shape")
+    if params.base_shape == "polygon":
+        param_box.prop(params, "base_vertex_count")
+    param_box.prop(params, "start_from_center")
+    param_box.prop(params, "rotation_deg")
+
+    line_box = box.box()
+    line_box.label(text="線")
+    line_box.prop(params, "brush_size_mm")
+    row = line_box.row(align=True)
+    row.prop(params, "brush_jitter_enabled", text="乱れ")
+    sub = row.row()
+    sub.enabled = params.brush_jitter_enabled
+    sub.prop(params, "brush_jitter_amount", text="")
+    line_box.prop(params, "spacing_mode")
+    if params.spacing_mode == "angle":
+        line_box.prop(params, "spacing_angle_deg")
+    else:
+        line_box.prop(params, "spacing_distance_mm")
+    line_box.prop(params, "length_mm")
+    line_box.prop(params, "extend_past_panel")
+
+    base_box = box.box()
+    base_box.label(text="基準位置 / ギザ")
+    base_box.prop(params, "base_position")
+    base_box.prop(params, "base_position_offset")
+    base_box.prop(params, "base_jagged_enabled")
+    sub = base_box.column()
+    sub.enabled = params.base_jagged_enabled
+    sub.prop(params, "base_jagged_count")
+    sub.prop(params, "base_jagged_height_mm")
+
+    inout_box = box.box()
+    inout_box.label(text="入り抜き")
+    inout_box.prop(params, "inout_apply")
+    row = inout_box.row(align=True)
+    row.prop(params, "in_percent")
+    row.prop(params, "out_percent")
+
+    color_box = box.box()
+    color_box.label(text="色")
+    color_box.prop(params, "line_color")
+    if params.effect_type == "beta_flash":
+        color_box.prop(params, "fill_color")
+        color_box.prop(params, "fill_opacity")
+        color_box.prop(params, "fill_base_shape")
+    if params.effect_type == "speed":
+        speed_box = box.box()
+        speed_box.label(text="流線")
+        speed_box.prop(params, "speed_angle_deg")
+        speed_box.prop(params, "speed_line_count")
+    box.operator("bname.effect_line_generate", text="効果線を追加", icon="STROKE")
+
+
+def _draw_selected_stack_settings(box, context) -> None:
+    item = layer_stack_utils.active_stack_item(context)
+    if item is None:
+        return
+    resolved = layer_stack_utils.resolve_stack_item(context, item)
+    if resolved is None or resolved.get("target") is None:
+        return
+    kind = item.kind
+    target = resolved["target"]
+    obj = resolved.get("object")
+    if kind == "gp":
+        _draw_gp_selected_settings(box, obj, target)
+        box.separator()
+    elif kind == "image":
+        _draw_image_selected_settings(box, target)
+        box.separator()
+    elif kind == "balloon":
+        _draw_balloon_selected_settings(box, context, target)
+        box.separator()
+    elif kind == "text":
+        _draw_text_selected_settings(box, context, target)
+        box.separator()
+    elif kind == "effect":
+        _draw_effect_selected_settings(box, context, obj, target)
+        box.separator()
+    elif kind == "gp_folder":
+        box.label(text=f"選択中: {target.name} (フォルダ)", icon="FILE_FOLDER")
+        if hasattr(target, "hide"):
+            box.prop(target, "hide", text="非表示")
+        if hasattr(target, "lock"):
+            box.prop(target, "lock", text="ロック")
         box.separator()
 
-    if image_layers is None or len(image_layers) == 0:
+
+def _draw_layer_add_buttons(box) -> None:
+    row = box.row(align=True)
+    row.operator("bname.gpencil_layer_add", text="GP", icon="OUTLINER_OB_GREASEPENCIL")
+    row.operator("bname.image_layer_add", text="画像", icon="IMAGE_DATA")
+    row.operator("bname.balloon_add", text="フキダシ", icon="MOD_FLUID")
+    row.operator("bname.text_add", text="テキスト", icon="FONT_DATA")
+    row.operator("bname.effect_line_generate", text="効果線", icon="STROKE")
+    row.operator("bname.gpencil_folder_add", text="フォルダ", icon="FILE_FOLDER")
+
+
+def _draw_layer_stack_box(layout, context) -> None:
+    layer_stack_utils.sync_layer_stack(context)
+    # UIList のD&Dで stack の順序だけが変わった場合も、次の描画で実データ順へ反映する。
+    layer_stack_utils.apply_stack_order(context)
+    scene = context.scene
+    box = layout.box()
+    box.label(text="レイヤー", icon="RENDERLAYERS")
+    _draw_selected_stack_settings(box, context)
+
+    stack = getattr(scene, "bname_layer_stack", None)
+    if stack is None or len(stack) == 0:
         box.label(text="(レイヤーがありません)")
     else:
-        col = box.column(align=True)
-        header = col.row(align=True)
-        header.label(text="画像レイヤー", icon="IMAGE_DATA")
-        for i, entry in enumerate(image_layers):
-            _draw_image_layer_row(
-                col,
-                entry,
-                i,
-                active=i == active_image_idx,
-            )
+        row = box.row()
+        row.template_list(
+            BNAME_UL_layer_stack.bl_idname,
+            "",
+            scene,
+            "bname_layer_stack",
+            scene,
+            "bname_active_layer_stack_index",
+            rows=8,
+        )
+        col = row.column(align=True)
+        op = col.operator("bname.layer_stack_move", text="", icon="TRIA_UP_BAR")
+        op.direction = "FRONT"
+        op = col.operator("bname.layer_stack_move", text="", icon="TRIA_UP")
+        op.direction = "UP"
+        op = col.operator("bname.layer_stack_move", text="", icon="TRIA_DOWN")
+        op.direction = "DOWN"
+        op = col.operator("bname.layer_stack_move", text="", icon="TRIA_DOWN_BAR")
+        op.direction = "BACK"
+        col.separator()
+        col.operator("bname.layer_stack_delete", text="", icon="REMOVE")
 
-    row = box.row(align=True)
-    row.operator("bname.image_layer_add", text="画像", icon="IMAGE_DATA")
-    if active_image is not None:
-        row.operator("bname.image_layer_remove", text="削除", icon="REMOVE")
+    _draw_layer_add_buttons(box)
 
 
 class BNAME_PT_gpencil(Panel):
@@ -293,7 +520,7 @@ class BNAME_PT_gpencil(Panel):
         obj = _master_gp_object()
         if obj is None:
             layout.label(text="(マスター GP が未生成です)", icon="INFO")
-            _draw_image_only_layer_list(layout, context)
+            _draw_layer_stack_box(layout, context)
             return
 
         row = layout.row(align=True)
@@ -317,78 +544,7 @@ class BNAME_PT_gpencil(Panel):
         )
         op.mode = _GP_EDIT_MODE
 
-        gp_data = obj.data
-
-        # --- レイヤー一覧 ---
-        box = layout.box()
-        box.label(text="レイヤー", icon="RENDERLAYERS")
-        layers = getattr(gp_data, "layers", None)
-        if layers is None:
-            box.label(text="(GP v3 layers にアクセスできません)", icon="ERROR")
-            return
-
-        active_layer = getattr(layers, "active", None)
-        if active_layer is None and len(layers) > 0:
-            try:
-                layers.active = layers[0]
-                active_layer = getattr(layers, "active", None)
-            except Exception:  # noqa: BLE001
-                active_layer = layers[0]
-        image_layers, active_image_idx, active_image = _active_image_layer(context)
-        active_kind = getattr(context.scene, "bname_active_layer_kind", "gp")
-        image_selected = active_kind == "image" and active_image is not None
-        if image_selected:
-            _draw_image_selected_settings(box, active_image)
-            box.separator()
-        elif active_layer is not None:
-            _draw_gp_selected_settings(box, obj, active_layer)
-            box.separator()
-
-        has_image_layers = image_layers is not None and len(image_layers) > 0
-        if len(layers) == 0 and not has_image_layers:
-            box.label(text="(レイヤーがありません)")
-        else:
-            col = box.column(align=True)
-            if len(layers) > 0:
-                gp_selected_layer = None if image_selected else active_layer
-                root_nodes = getattr(gp_data, "root_nodes", None)
-                if root_nodes is None:
-                    for layer in layers:
-                        _draw_gp_layer_row(col, layer, gp_selected_layer, 0)
-                else:
-                    _draw_gp_layer_tree(col, root_nodes, gp_selected_layer)
-            if has_image_layers:
-                if len(layers) > 0:
-                    col.separator()
-                header = col.row(align=True)
-                header.label(text="画像レイヤー", icon="IMAGE_DATA")
-                for i, entry in enumerate(image_layers):
-                    _draw_image_layer_row(
-                        col,
-                        entry,
-                        i,
-                        active=image_selected and i == active_image_idx,
-                    )
-
-        row = box.row(align=True)
-        row.operator("bname.gpencil_layer_add", text="GP", icon="OUTLINER_OB_GREASEPENCIL")
-        row.operator("bname.image_layer_add", text="画像", icon="IMAGE_DATA")
-        row.operator("bname.gpencil_folder_add", text="フォルダ", icon="FILE_FOLDER")
-        if image_selected:
-            row.operator("bname.image_layer_remove", text="削除", icon="REMOVE")
-        else:
-            row.operator("bname.gpencil_layer_remove", text="削除", icon="REMOVE")
-
-        # アクティブレイヤーの追加プロパティ
-        if active_layer is not None and not image_selected:
-            prop_box = layout.box()
-            prop_box.label(text=f"アクティブ: {active_layer.name}")
-            if hasattr(active_layer, "blend_mode"):
-                prop_box.prop(active_layer, "blend_mode")
-            if hasattr(active_layer, "tint_color"):
-                prop_box.prop(active_layer, "tint_color")
-            if hasattr(active_layer, "tint_factor"):
-                prop_box.prop(active_layer, "tint_factor")
+        _draw_layer_stack_box(layout, context)
 
         # ブラシ (描画モード時のみ)
         if obj.mode == _GP_PAINT_MODE:
@@ -482,6 +638,7 @@ class BNAME_OT_gpencil_master_mode_set(bpy.types.Operator):
 
 
 _CLASSES = (
+    BNAME_UL_layer_stack,
     BNAME_OT_gpencil_master_ensure,
     BNAME_OT_gpencil_master_mode_set,
     BNAME_PT_gpencil,

@@ -271,6 +271,10 @@ class BNAME_OT_gpencil_folder_add(Operator):
             group.is_expanded = True
         except Exception:  # noqa: BLE001
             pass
+        if hasattr(context.scene, "bname_active_layer_kind"):
+            context.scene.bname_active_layer_kind = "gp_folder"
+        if hasattr(context.scene, "bname_active_gp_folder_key"):
+            context.scene.bname_active_gp_folder_key = group.name
         return {"FINISHED"}
 
 
@@ -307,6 +311,10 @@ class BNAME_OT_gpencil_folder_remove(Operator):
         if not gp_utils.remove_layer_group_preserve_children(gp_data, group):
             self.report({"ERROR"}, "フォルダ削除失敗")
             return {"CANCELLED"}
+        if hasattr(context.scene, "bname_active_layer_kind"):
+            context.scene.bname_active_layer_kind = "gp"
+        if hasattr(context.scene, "bname_active_gp_folder_key"):
+            context.scene.bname_active_gp_folder_key = ""
         return {"FINISHED"}
 
 

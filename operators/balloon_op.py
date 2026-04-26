@@ -156,6 +156,8 @@ class BNAME_OT_balloon_add(Operator):
         entry.height_mm = self.height_mm
         entry.rounded_corner_enabled = (self.shape == "rect")
         page.active_balloon_index = len(page.balloons) - 1
+        if hasattr(context.scene, "bname_active_layer_kind"):
+            context.scene.bname_active_layer_kind = "balloon"
         self.report({"INFO"}, f"フキダシ追加: {entry.id} ({self.shape})")
         return {"FINISHED"}
 
@@ -189,6 +191,8 @@ class BNAME_OT_balloon_remove(Operator):
             page.active_balloon_index = -1
         elif idx >= len(page.balloons):
             page.active_balloon_index = len(page.balloons) - 1
+        if len(page.balloons) == 0 and hasattr(context.scene, "bname_active_layer_kind"):
+            context.scene.bname_active_layer_kind = "gp"
         self.report({"INFO"}, f"フキダシ削除: {bid}")
         return {"FINISHED"}
 

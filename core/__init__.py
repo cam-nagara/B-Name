@@ -16,6 +16,7 @@ from . import (
     balloon,
     effect_line,
     image_layer,
+    layer_stack,
     mode,
     panel,
     panel_border,
@@ -41,6 +42,7 @@ _MODULES = (
     page,
     effect_line,
     image_layer,
+    layer_stack,
     work,
     mode,
 )

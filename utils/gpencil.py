@@ -831,13 +831,24 @@ def add_stroke_to_drawing(
     if not pts:
         return False
     try:
+        start_index = len(getattr(drawing, "strokes", []))
         strokes = drawing.add_strokes([len(pts)])
-        stroke = strokes[0]
+        if strokes is None:
+            stroke = drawing.strokes[start_index]
+        else:
+            stroke = strokes[0]
         stroke.cyclic = cyclic
+        if hasattr(stroke, "points") and len(stroke.points) >= len(pts):
+            for i, (x, y, z) in enumerate(pts):
+                point = stroke.points[i]
+                point.position = (x, y, z)
+                if hasattr(point, "radius"):
+                    point.radius = radius
+            return True
         pos_attr = drawing.attributes.get("position")
         if pos_attr is None:
             return False
-        offset = stroke.points.offset
+        offset = getattr(stroke.points, "offset", 0)
         for i, (x, y, z) in enumerate(pts):
             pos_attr.data[offset + i].vector = (x, y, z)
         rad_attr = drawing.attributes.get("radius")

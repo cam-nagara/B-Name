@@ -114,6 +114,8 @@ class BNAME_OT_text_add(Operator):
                     f"親フキダシ {self.parent_balloon_id} が見つかりません (独立テキストとして追加)",
                 )
         page.active_text_index = len(page.texts) - 1
+        if hasattr(context.scene, "bname_active_layer_kind"):
+            context.scene.bname_active_layer_kind = "text"
         self.report({"INFO"}, f"テキスト追加: {entry.id}")
         return {"FINISHED"}
 
@@ -143,6 +145,8 @@ class BNAME_OT_text_remove(Operator):
             page.active_text_index = -1
         elif idx >= len(page.texts):
             page.active_text_index = len(page.texts) - 1
+        if len(page.texts) == 0 and hasattr(context.scene, "bname_active_layer_kind"):
+            context.scene.bname_active_layer_kind = "gp"
         self.report({"INFO"}, f"テキスト削除: {tid}")
         return {"FINISHED"}
 

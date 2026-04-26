@@ -15,6 +15,18 @@ from ..utils import log
 _logger = log.get_logger(__name__)
 
 
+def _unique_layer_name(gp_data, base: str) -> str:
+    existing = {layer.name for layer in getattr(gp_data, "layers", [])}
+    if base not in existing:
+        return base
+    i = 1
+    while True:
+        candidate = f"{base}.{i:03d}"
+        if candidate not in existing:
+            return candidate
+        i += 1
+
+
 class BNAME_OT_effect_line_generate(Operator):
     bl_idname = "bname.effect_line_generate"
     bl_label = "効果線を生成"
@@ -40,8 +52,12 @@ class BNAME_OT_effect_line_generate(Operator):
         try:
             gp_obj = gpencil.ensure_gpencil_object("BName_EffectLines")
             gp_data = gp_obj.data
-            layer_name = f"effect_{params.effect_type}"
+            layer_name = _unique_layer_name(gp_data, f"effect_{params.effect_type}")
             layer = gpencil.ensure_layer(gp_data, layer_name)
+            try:
+                gp_data.layers.active = layer
+            except Exception:  # noqa: BLE001
+                pass
             frame = gpencil.ensure_active_frame(layer)
             if frame is None:
                 self.report({"ERROR"}, "Grease Pencil フレーム確保失敗")
@@ -58,6 +74,10 @@ class BNAME_OT_effect_line_generate(Operator):
             self.report({"ERROR"}, f"効果線生成失敗: {exc}")
             return {"CANCELLED"}
 
+        if hasattr(context.scene, "bname_active_layer_kind"):
+            context.scene.bname_active_layer_kind = "effect"
+        if hasattr(context.scene, "bname_active_effect_layer_name"):
+            context.scene.bname_active_effect_layer_name = layer.name
         self.report({"INFO"}, f"効果線生成: {added}/{len(strokes)} ストローク")
         return {"FINISHED"}
 
