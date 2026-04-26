@@ -1248,6 +1248,57 @@ def apply_bname_shading_mode(context=None) -> int:
     return count
 
 
+def set_viewport_overlays_enabled(context=None, *, enabled: bool) -> int:
+    """全ウィンドウの全 VIEW_3D で Blender 標準オーバーレイ表示を切り替える."""
+    ctx = context or bpy.context
+    wm = getattr(ctx, "window_manager", None)
+    if wm is None:
+        return 0
+    count = 0
+    for window in wm.windows:
+        screen = getattr(window, "screen", None)
+        if screen is None:
+            continue
+        for area in screen.areas:
+            if area.type != "VIEW_3D":
+                continue
+            for space in getattr(area, "spaces", []):
+                if space.type != "VIEW_3D":
+                    continue
+                overlay = getattr(space, "overlay", None)
+                if overlay is None:
+                    continue
+                try:
+                    if bool(getattr(overlay, "show_overlays", True)) != bool(enabled):
+                        overlay.show_overlays = bool(enabled)
+                        count += 1
+                except Exception:  # noqa: BLE001
+                    _logger.exception("set_viewport_overlays_enabled: set failed")
+            try:
+                area.tag_redraw()
+            except Exception:  # noqa: BLE001
+                pass
+    return count
+
+
+def schedule_viewport_overlays_enabled(*, enabled: bool, retries: int = 6, interval: float = 0.1) -> None:
+    """load_post 直後の UI 再構築をまたいでオーバーレイ表示を再適用する."""
+    state = {"left": max(1, int(retries))}
+
+    def _tick():
+        try:
+            set_viewport_overlays_enabled(bpy.context, enabled=enabled)
+        except Exception:  # noqa: BLE001
+            pass
+        state["left"] -= 1
+        return interval if state["left"] > 0 else None
+
+    try:
+        bpy.app.timers.register(_tick, first_interval=interval)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def reset_viewport_background_to_theme(context=None) -> int:
     """全ウィンドウの全 VIEW_3D の solid shading 背景をテーマ色 (Blender 既定) に戻す.
 

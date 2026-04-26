@@ -224,6 +224,8 @@ def _bname_on_load_post(filepath_arg) -> None:  # signature: (str,) in Blender h
 
                     _overlay.reset_viewport_background_to_theme(bpy.context)
                     _overlay.apply_bname_shading_mode(bpy.context)
+                    _overlay.set_viewport_overlays_enabled(bpy.context, enabled=False)
+                    _overlay.schedule_viewport_overlays_enabled(enabled=False)
                 except Exception:  # noqa: BLE001
                     _logger.exception(
                         "load_post: shading/background reset failed"

@@ -95,6 +95,18 @@ def _cleanup_default_scene_objects() -> None:
                 pass
 
 
+def _disable_work_viewport_overlays(context, *, schedule: bool = False) -> None:
+    """ページ一覧ファイル用に Blender 標準オーバーレイをオフへ揃える."""
+    try:
+        from ..ui import overlay as _overlay
+
+        _overlay.set_viewport_overlays_enabled(context, enabled=False)
+        if schedule:
+            _overlay.schedule_viewport_overlays_enabled(enabled=False)
+    except Exception:  # noqa: BLE001
+        _logger.exception("work viewport overlay setup failed")
+
+
 class BNAME_OT_work_new(Operator, ExportHelper):
     """新規作品を作成 (.bname ディレクトリを生成).
 
@@ -174,6 +186,7 @@ class BNAME_OT_work_new(Operator, ExportHelper):
             except Exception:  # noqa: BLE001
                 _logger.exception("work_new: preset selector sync failed")
 
+            _disable_work_viewport_overlays(context)
             blend_io.save_work_blend(work_dir)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("work_new failed")
@@ -189,6 +202,7 @@ class BNAME_OT_work_new(Operator, ExportHelper):
 
             _overlay.reset_viewport_background_to_theme(context)
             _overlay.apply_bname_shading_mode(context)
+            _disable_work_viewport_overlays(context, schedule=True)
         except Exception:  # noqa: BLE001
             _logger.exception("work_new: shading/background setup failed")
 
@@ -290,6 +304,7 @@ class BNAME_OT_work_open(Operator, ImportHelper):
 
             _overlay.reset_viewport_background_to_theme(context)
             _overlay.apply_bname_shading_mode(context)
+            _disable_work_viewport_overlays(context, schedule=True)
         except Exception:  # noqa: BLE001
             _logger.exception("work_open: shading/background setup failed")
 
@@ -327,6 +342,8 @@ class BNAME_OT_work_save(Operator):
                 page = get_active_page(context)
             if page is not None:
                 page_io.save_page_json(work_dir, page)
+            if mode != MODE_PANEL:
+                _disable_work_viewport_overlays(context)
 
             # 2) .blend 保存. ユーザーが File > Save As で work_dir 外に保存
             #    していた場合は、そのパスを尊重して save_mainfile する (B-Name の
