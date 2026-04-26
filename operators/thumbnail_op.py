@@ -44,13 +44,29 @@ def take_area_screenshot(context, out_path: Path) -> bool:
         _logger.warning("no VIEW_3D area found for screenshot")
         return False
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    scene = getattr(context, "scene", None)
+    prev_suppress = None
     try:
+        if scene is not None:
+            prev_suppress = bool(scene.get("_bname_suppress_panel_reference_overlay", False))
+            scene["_bname_suppress_panel_reference_overlay"] = True
+            try:
+                bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=1)
+            except Exception:  # noqa: BLE001
+                pass
         with bpy.context.temp_override(window=window, area=area, region=region):
             bpy.ops.screen.screenshot_area(filepath=str(out_path))
         return True
     except Exception as exc:  # noqa: BLE001 - Blender の一部バージョンで属性欠けあり
         _logger.warning("screenshot_area failed: %s", exc)
         return False
+    finally:
+        if scene is not None and prev_suppress is not None:
+            scene["_bname_suppress_panel_reference_overlay"] = prev_suppress
+            try:
+                bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=1)
+            except Exception:  # noqa: BLE001
+                pass
 
 
 class BNAME_OT_panel_update_thumb(Operator):

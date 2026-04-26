@@ -26,7 +26,7 @@ from gpu_extras.batch import batch_for_shader
 from ..core.work import get_work
 from ..io import page_io, panel_io
 from . import panel_modal_state
-from ..utils import geom, log, page_grid
+from ..utils import geom, log, page_grid, polygon_geom
 
 _logger = log.get_logger(__name__)
 
@@ -46,6 +46,9 @@ COLOR_SELECTED_EDGE = (1.0, 0.5, 0.0, 1.0)  # 橙
 COLOR_SELECTED_BORDER = (1.0, 0.3, 0.0, 1.0)  # 濃橙 (枠線全体選択)
 COLOR_SELECTED_VERTEX = (1.0, 0.5, 0.0, 1.0)
 COLOR_HANDLE = (1.0, 0.85, 0.0, 1.0)  # 黄
+NAV_GIZMO_HITBOX_WIDTH_PX = 112.0
+NAV_GIZMO_HITBOX_HEIGHT_PX = 232.0
+NAV_GIZMO_HITBOX_MARGIN_PX = 8.0
 
 
 def _find_view3d(context):
@@ -150,6 +153,7 @@ def _line_intersect(
 
 # drag 中のスナップしきい値 (mm)
 DRAG_SNAP_TOL_MM = 1.5
+MIN_PANEL_AREA_MM2 = 0.01
 
 
 def _snap_drag_line(
@@ -220,6 +224,47 @@ def _snap_drag_line(
     sx = best_offset * nx
     sy = best_offset * ny
     return (a_new[0] + sx, a_new[1] + sy), (b_new[0] + sx, b_new[1] + sy)
+
+
+def _build_shifted_edge_polygon(
+    poly: list[tuple[float, float]],
+    edge_idx: int,
+    a_new_line: tuple[float, float],
+    b_new_line: tuple[float, float],
+) -> list[tuple[float, float]] | None:
+    n = len(poly)
+    if n < 3:
+        return None
+    a = poly[edge_idx]
+    b = poly[(edge_idx + 1) % n]
+    prev_idx = (edge_idx - 1 + n) % n
+    next_idx = (edge_idx + 2) % n
+    a_prev = poly[prev_idx]
+    b_next = poly[next_idx]
+    new_a = _line_intersect(a_prev, a, a_new_line, b_new_line, fallback=a_new_line)
+    new_b = _line_intersect(b, b_next, a_new_line, b_new_line, fallback=b_new_line)
+    new_poly = list(poly)
+    new_poly[edge_idx] = new_a
+    new_poly[(edge_idx + 1) % n] = new_b
+    return new_poly
+
+
+def _is_valid_panel_polygon(
+    poly: list[tuple[float, float]],
+    *,
+    reference_poly: list[tuple[float, float]] | None = None,
+) -> bool:
+    area = polygon_geom.signed_polygon_area(poly)
+    if abs(area) < MIN_PANEL_AREA_MM2:
+        return False
+    if not polygon_geom.is_simple_polygon(poly):
+        return False
+    if reference_poly is None:
+        return True
+    ref_area = polygon_geom.signed_polygon_area(reference_poly)
+    if abs(ref_area) < MIN_PANEL_AREA_MM2:
+        return True
+    return area * ref_area > 0.0
 
 
 # ---------- 隣接 panel との連動 ----------
@@ -499,11 +544,9 @@ class BNAME_OT_panel_edge_move(Operator):
     @classmethod
     def poll(cls, context):
         work = get_work(context)
-        return work is not None and work.loaded and context.area is not None
+        return work is not None and work.loaded
 
     def invoke(self, context, event):
-        if context.area is None or context.area.type != "VIEW_3D":
-            return {"PASS_THROUGH"}
         target = _find_view3d(context)
         if target is None:
             return {"PASS_THROUGH"}
@@ -524,6 +567,7 @@ class BNAME_OT_panel_edge_move(Operator):
         self._drag_start_world: Optional[tuple[float, float]] = None
         self._original_geometry: Optional[dict] = None
         self._externally_finished = False
+        self._navigation_drag_passthrough = False
         # シングル/ダブルクリック判定用
         self._last_press_time = 0.0
         self._last_press_edge: Optional[tuple[int, int, int]] = None
@@ -591,6 +635,24 @@ class BNAME_OT_panel_edge_move(Operator):
         region = self._region_at_mouse(ev)
         return region is not None and region.type == "WINDOW" and region == self._region
 
+    def _is_over_navigation_gizmo(self, ev) -> bool:
+        if not self._is_inside_region(ev):
+            return False
+        prefs_view = getattr(getattr(bpy.context, "preferences", None), "view", None)
+        if prefs_view is not None and not bool(getattr(prefs_view, "show_navigate_ui", True)):
+            return False
+        space = getattr(self._area.spaces, "active", None)
+        if space is not None:
+            if not bool(getattr(space, "show_gizmo", True)):
+                return False
+            if not bool(getattr(space, "show_gizmo_navigate", True)):
+                return False
+        mx, my = self._to_window(ev)
+        return (
+            mx >= self._region.width - NAV_GIZMO_HITBOX_WIDTH_PX - NAV_GIZMO_HITBOX_MARGIN_PX
+            and my >= self._region.height - NAV_GIZMO_HITBOX_HEIGHT_PX - NAV_GIZMO_HITBOX_MARGIN_PX
+        )
+
     def _tag_redraw(self) -> None:
         if self._region is not None:
             self._region.tag_redraw()
@@ -629,6 +691,10 @@ class BNAME_OT_panel_edge_move(Operator):
         if getattr(self, "_externally_finished", False):
             panel_modal_state.clear_active("edge_move", self)
             return {"FINISHED", "PASS_THROUGH"}
+        if getattr(self, "_navigation_drag_passthrough", False):
+            if event.type == "LEFTMOUSE" and event.value == "RELEASE":
+                self._navigation_drag_passthrough = False
+            return {"PASS_THROUGH"}
         # Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y (undo / redo) はモーダルが保持する
         # PropertyGroup 参照を stale 化させて C レベル crash を起こすため、
         # 検知したら即座に modal を終了して event を本来の undo に譲る。
@@ -636,19 +702,23 @@ class BNAME_OT_panel_edge_move(Operator):
             self.finish_from_external(context, keep_selection=True)
             return {"FINISHED", "PASS_THROUGH"}
 
-        # B-Name の他ツール/モード切替ショートカットで modal を終了して譲る
         if (
             event.value == "PRESS"
-            and event.type in {"O", "P", "F", "COMMA", "PERIOD"}
+            and event.type == "F"
             and not event.ctrl
             and not event.alt
+            and not event.shift
         ):
             if not self._is_inside_region(event):
                 return {"PASS_THROUGH"}
             self.finish_from_external(context, keep_selection=True)
-            return {"FINISHED", "PASS_THROUGH"}
+            try:
+                with context.temp_override(area=self._area, region=self._region):
+                    bpy.ops.bname.panel_knife_cut("INVOKE_DEFAULT")
+            except Exception:  # noqa: BLE001
+                _logger.exception("edge_move: failed to switch to knife_cut")
+            return {"FINISHED"}
 
-        # G (自分自身) を modal 中に押されたら consume (= 二重起動を防ぐ)
         if (
             event.value == "PRESS"
             and event.type == "G"
@@ -658,9 +728,24 @@ class BNAME_OT_panel_edge_move(Operator):
         ):
             if not self._is_inside_region(event):
                 return {"PASS_THROUGH"}
-            return {"RUNNING_MODAL"}
+            self.finish_from_external(context, keep_selection=True)
+            return {"FINISHED"}
+
+        # B-Name の他ツール/モード切替ショートカットで modal を終了して譲る
+        if (
+            event.value == "PRESS"
+            and event.type in {"O", "P", "COMMA", "PERIOD"}
+            and not event.ctrl
+            and not event.alt
+        ):
+            if not self._is_inside_region(event):
+                return {"PASS_THROUGH"}
+            self.finish_from_external(context, keep_selection=True)
+            return {"FINISHED", "PASS_THROUGH"}
 
         if event.type == "MOUSEMOVE":
+            if not self._dragging and self._is_over_navigation_gizmo(event):
+                return {"PASS_THROUGH"}
             if not self._dragging and not self._is_inside_region(event):
                 return {"PASS_THROUGH"}
             if self._dragging and self._selection is not None:
@@ -672,6 +757,9 @@ class BNAME_OT_panel_edge_move(Operator):
 
         if event.type == "LEFTMOUSE":
             if event.value == "PRESS":
+                if self._is_over_navigation_gizmo(event):
+                    self._navigation_drag_passthrough = True
+                    return {"PASS_THROUGH"}
                 if not self._is_inside_region(event):
                     return {"PASS_THROUGH"}
                 mx, my = self._to_window(event)
@@ -866,63 +954,62 @@ class BNAME_OT_panel_edge_move(Operator):
                 self._work, page_for_snap, sel["panel"],
                 a_new_line, b_new_line, tx, ty, nx, ny,
             )
-
-            # 共有頂点 a を、前の辺 (poly[ei-1] → a) の line と新 line の交点へ
-            # → 前の辺の角度を維持したまま頂点が新 line 上にスライド
-            prev_idx = (ei - 1 + n) % n
-            a_prev = orig_poly[prev_idx]
-            new_a = _line_intersect(a_prev, a, a_new_line, b_new_line, fallback=a_new_line)
-            # 共有頂点 b を、次の辺 (b → poly[ei+2]) の line と新 line の交点へ
-            next_idx = (ei + 2) % n
-            b_next = orig_poly[next_idx]
-            new_b = _line_intersect(b, b_next, a_new_line, b_new_line, fallback=b_new_line)
-
-            new_poly = list(orig_poly)
-            new_poly[ei] = new_a
-            new_poly[(ei + 1) % n] = new_b
-            page = self._work.pages[sel["page"]]
-            panel = page.panels[sel["panel"]]
-            _set_panel_polygon(panel, new_poly)
+            new_poly = _build_shifted_edge_polygon(
+                orig_poly, ei, a_new_line, b_new_line
+            )
+            if new_poly is None or not _is_valid_panel_polygon(
+                new_poly, reference_poly=orig_poly
+            ):
+                return
 
             # 隣接 edge も同じ shift で動かす (snap 後の実シフトを反映、gap 維持)
             actual_sx = a_new_line[0] - a[0]
             actual_sy = a_new_line[1] - a[1]
+            adjacent_updates = []
             for adj_st in self._original_geometry.get("adjacent_edges", []):
-                p2 = self._work.pages[adj_st["page"]].panels[adj_st["panel"]]
                 op2 = adj_st["poly"]
                 ei2 = adj_st["edge"]
-                n2 = len(op2)
                 a2 = op2[ei2]
-                b2 = op2[(ei2 + 1) % n2]
+                b2 = op2[(ei2 + 1) % len(op2)]
                 a2_line = (a2[0] + actual_sx, a2[1] + actual_sy)
                 b2_line = (b2[0] + actual_sx, b2[1] + actual_sy)
-                prev_idx2 = (ei2 - 1 + n2) % n2
-                a2_prev = op2[prev_idx2]
-                new_a2 = _line_intersect(a2_prev, a2, a2_line, b2_line, fallback=a2_line)
-                next_idx2 = (ei2 + 2) % n2
-                b2_next = op2[next_idx2]
-                new_b2 = _line_intersect(b2, b2_next, a2_line, b2_line, fallback=b2_line)
-                np2 = list(op2)
-                np2[ei2] = new_a2
-                np2[(ei2 + 1) % n2] = new_b2
-                _set_panel_polygon(p2, np2)
+                np2 = _build_shifted_edge_polygon(op2, ei2, a2_line, b2_line)
+                if np2 is None or not _is_valid_panel_polygon(
+                    np2, reference_poly=op2
+                ):
+                    return
+                adjacent_updates.append((adj_st["page"], adj_st["panel"], np2))
+
+            page = self._work.pages[sel["page"]]
+            panel = page.panels[sel["panel"]]
+            _set_panel_polygon(panel, new_poly)
+            for page_i2, panel_i2, poly2 in adjacent_updates:
+                p2 = self._work.pages[page_i2].panels[panel_i2]
+                _set_panel_polygon(p2, poly2)
 
         elif sel["type"] == "vertex":
             orig_poly = self._original_geometry["poly"]
             vi = sel["vertex"]
             new_poly = list(orig_poly)
             new_poly[vi] = (orig_poly[vi][0] + dx, orig_poly[vi][1] + dy)
+            if not _is_valid_panel_polygon(new_poly, reference_poly=orig_poly):
+                return
+            shared_updates = []
             page = self._work.pages[sel["page"]]
             panel = page.panels[sel["panel"]]
-            _set_panel_polygon(panel, new_poly)
             # 共有頂点を同量シフト
             for sh in self._original_geometry.get("shared_vertices", []):
-                p2 = self._work.pages[sh["page"]].panels[sh["panel"]]
                 op2 = sh["poly"]
                 vi2 = sh["vertex"]
                 np2 = list(op2)
                 np2[vi2] = (op2[vi2][0] + dx, op2[vi2][1] + dy)
-                _set_panel_polygon(p2, np2)
+                if not _is_valid_panel_polygon(np2, reference_poly=op2):
+                    return
+                shared_updates.append((sh["page"], sh["panel"], np2))
+            _set_panel_polygon(panel, new_poly)
+            for page_i2, panel_i2, poly2 in shared_updates:
+                p2 = self._work.pages[page_i2].panels[panel_i2]
+                _set_panel_polygon(p2, poly2)
 
     # ---- ハンドルアクション (拡張) ----
     def _do_extend(self, direction: int) -> None:
@@ -930,7 +1017,7 @@ class BNAME_OT_panel_edge_move(Operator):
 
         スナップ仕様:
         - 拡張先候補は同ページの他コマ辺 / 基本枠 / 裁ち落とし枠
-        - **辺の角度はスナップ先 line の角度に合わせる** (両端を新 line に射影)
+        - **辺の角度は維持したまま**、平行移動で候補 line に重ねる
         - 共有頂点は prev/next 辺の line と新 line の交点で補正 (= 隣接辺の角度維持)
         - スナップ位置のオフセット:
           - bleed: 1mm 外側
@@ -1008,9 +1095,10 @@ class BNAME_OT_panel_edge_move(Operator):
         def _has_tangent_overlap(ca_, cb_) -> bool:
             t_a = (ca_[0] - a[0]) * tx + (ca_[1] - a[1]) * ty
             t_b = (cb_[0] - a[0]) * tx + (cb_[1] - a[1]) * ty
-            lo = min(t_a, t_b)
-            hi = max(t_a, t_b)
-            return hi >= -L * 0.1 and lo <= L * 1.1
+            lo = max(0.0, min(t_a, t_b))
+            hi = min(L, max(t_a, t_b))
+            overlap = max(0.0, hi - lo)
+            return overlap >= L * ADJACENCY_OVERLAP_RATIO
 
         # コマ間隔 (現拡張軸に応じた値)
         gap_v = float(self._work.panel_gap.vertical_mm)
@@ -1059,57 +1147,66 @@ class BNAME_OT_panel_edge_move(Operator):
             sy_ext = sign * total_shift * ny
             a_new_line = (a[0] + sx_ext, a[1] + sy_ext)
             b_new_line = (b[0] + sx_ext, b[1] + sy_ext)
+            new_poly = _build_shifted_edge_polygon(poly, ei, a_new_line, b_new_line)
+            if new_poly is None or not _is_valid_panel_polygon(
+                new_poly, reference_poly=poly
+            ):
+                self.report({"WARNING"}, "拡張するとコマ形状が破綻するため中止しました")
+                return
             kind_label = "隣接コマからスキマを空けました"
         else:
             # ===== 通常: sign 方向の最寄り候補を探索 =====
-            # candidate_lines の bleed は既に「1mm 外側位置」、その他は ピッタリ位置。
-            # よって offset は不要 (= 0)。candidate との sign 方向距離だけで順位判定。
-            best_dist = float("inf")
-            best_line: Optional[tuple[tuple[float, float], tuple[float, float]]] = None
-            best_kind: str = ""
+            # selected edge 自体の角度は保ちたいので、平行な候補だけを対象にする。
+            # 近い順に試し、自己交差や面積 0 を起こさない案だけ採用する。
+            candidates: list[
+                tuple[float, float, tuple[float, float], tuple[float, float], str]
+            ] = []
             for ca, cb, kind in candidate_lines:
+                cdx = cb[0] - ca[0]
+                cdy = cb[1] - ca[1]
+                c_len = math.hypot(cdx, cdy)
+                if c_len < 1e-6:
+                    continue
+                dot = (cdx / c_len) * tx + (cdy / c_len) * ty
+                if abs(abs(dot) - 1.0) > 0.05:
+                    continue
                 mid = ((ca[0] + cb[0]) * 0.5, (ca[1] + cb[1]) * 0.5)
                 d = (mid[0] - a[0]) * nx + (mid[1] - a[1]) * ny
                 d_signed = sign * d
-                if d_signed > OVERLAP_TOL_MM and d_signed < best_dist:
-                    if _has_tangent_overlap(ca, cb):
-                        best_dist = d_signed
-                        best_line = (ca, cb)
-                        best_kind = kind
-            if best_line is None:
+                if d_signed <= OVERLAP_TOL_MM:
+                    continue
+                if not _has_tangent_overlap(ca, cb):
+                    continue
+                candidates.append((d_signed, d, ca, cb, kind))
+            candidates.sort(key=lambda item: item[0])
+            if not candidates:
                 self.report({"INFO"}, "拡張先が見つかりません")
                 return
-
-            ca, cb = best_line
-            # 新 selected line = スナップ先 line そのもの → **角度はスナップ先と同じ**
-            a_new_line = ca
-            b_new_line = cb
-            if math.hypot(b_new_line[0] - a_new_line[0],
-                          b_new_line[1] - a_new_line[1]) < 1e-6:
-                self.report({"WARNING"}, "拡張先 line が縮退しています")
+            new_poly = None
+            kind_label = ""
+            for _d_signed, d, _ca, _cb, kind in candidates:
+                test_a_line = (a[0] + nx * d, a[1] + ny * d)
+                test_b_line = (b[0] + nx * d, b[1] + ny * d)
+                test_poly = _build_shifted_edge_polygon(
+                    poly, ei, test_a_line, test_b_line
+                )
+                if test_poly is None or not _is_valid_panel_polygon(
+                    test_poly, reference_poly=poly
+                ):
+                    continue
+                a_new_line = test_a_line
+                b_new_line = test_b_line
+                new_poly = test_poly
+                kind_label = {
+                    "bleed": "裁ち落とし枠の 1mm 外側",
+                    "inner": "基本枠",
+                    "panel": "隣接コマ辺にピッタリ",
+                }.get(kind, "拡張先")
+                break
+            if new_poly is None:
+                self.report({"WARNING"}, "拡張するとコマ形状が破綻するため中止しました")
                 return
-            kind_label = {
-                "bleed": "裁ち落とし枠の 1mm 外側",
-                "inner": "基本枠",
-                "panel": "隣接コマ辺にピッタリ",
-            }.get(best_kind, "拡張先")
 
-        # 共有頂点を prev/next 辺の line と新 selected line の交点に補正することで、
-        # 隣接辺の角度を維持する
-        prev_idx = (ei - 1 + n) % n
-        a_prev = poly[prev_idx]
-        new_a = _line_intersect(
-            a_prev, a, a_new_line, b_new_line, fallback=a_new_line
-        )
-        next_idx = (ei + 2) % n
-        b_next = poly[next_idx]
-        new_b = _line_intersect(
-            b, b_next, a_new_line, b_new_line, fallback=b_new_line
-        )
-
-        new_poly = list(poly)
-        new_poly[ei] = new_a
-        new_poly[(ei + 1) % n] = new_b
         _set_panel_polygon(panel, new_poly)
         try:
             self._save_changes()
@@ -1234,6 +1331,8 @@ def _draw_callback(op: "BNAME_OT_panel_edge_move") -> None:
         shader.bind()
         shader.uniform_float("color", COLOR_SELECTED_EDGE)
         batch.draw(shader)
+        _draw_square_marker(shader, ap, COLOR_SELECTED_VERTEX)
+        _draw_square_marker(shader, bp, COLOR_SELECTED_VERTEX)
         try:
             gpu.state.line_width_set(1.0)
         except Exception:  # noqa: BLE001
@@ -1257,19 +1356,7 @@ def _draw_callback(op: "BNAME_OT_panel_edge_move") -> None:
         vp = _world_mm_to_region(region, rv3d, v[0] + ox, v[1] + oy)
         if vp is None:
             return
-        # 頂点ハイライト (小さい円 = 矩形で代用)
-        s = 6.0
-        verts = [
-            (vp[0] - s, vp[1] - s), (vp[0] + s, vp[1] - s),
-            (vp[0] + s, vp[1] + s), (vp[0] - s, vp[1] + s),
-        ]
-        batch = batch_for_shader(
-            shader, "TRIS", {"pos": verts},
-            indices=[(0, 1, 2), (0, 2, 3)],
-        )
-        shader.bind()
-        shader.uniform_float("color", COLOR_SELECTED_VERTEX)
-        batch.draw(shader)
+        _draw_square_marker(shader, vp, COLOR_SELECTED_VERTEX)
 
 
 def _draw_triangle_handle(
@@ -1303,6 +1390,26 @@ def _draw_triangle_handle(
     )
     shader.bind()
     shader.uniform_float("color", COLOR_HANDLE)
+    batch.draw(shader)
+
+
+def _draw_square_marker(
+    shader,
+    center: tuple[float, float],
+    color: tuple[float, float, float, float],
+    size_px: float = 6.0,
+) -> None:
+    cx, cy = center
+    verts = [
+        (cx - size_px, cy - size_px), (cx + size_px, cy - size_px),
+        (cx + size_px, cy + size_px), (cx - size_px, cy + size_px),
+    ]
+    batch = batch_for_shader(
+        shader, "TRIS", {"pos": verts},
+        indices=[(0, 1, 2), (0, 2, 3)],
+    )
+    shader.bind()
+    shader.uniform_float("color", color)
     batch.draw(shader)
 
 

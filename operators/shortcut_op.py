@@ -12,6 +12,7 @@ from __future__ import annotations
 import bpy
 from bpy.types import Operator
 
+from ..core.mode import MODE_PAGE, get_mode
 from ..core.work import get_work
 from ..utils import gpencil as gp_utils
 from ..utils import log
@@ -107,7 +108,11 @@ def _focus_view_to_page(context, work, page_index: int) -> None:
     if scene is None:
         return
     cols, gap, cw, ch = _resolve_overview_params(scene, work)
-    ox_mm, oy_mm = page_grid_offset_mm(page_index, cols, gap, cw, ch)
+    start_side = getattr(work.paper, "start_side", "right")
+    read_direction = getattr(work.paper, "read_direction", "left")
+    ox_mm, oy_mm = page_grid_offset_mm(
+        page_index, cols, gap, cw, ch, start_side, read_direction
+    )
     cx = mm_to_m(ox_mm + cw / 2.0)
     cy = mm_to_m(oy_mm + ch / 2.0)
 
@@ -144,7 +149,12 @@ class BNAME_OT_page_next(Operator):
     @classmethod
     def poll(cls, context):
         work = get_work(context)
-        return work is not None and work.loaded and len(work.pages) > 0
+        return (
+            work is not None
+            and work.loaded
+            and len(work.pages) > 0
+            and get_mode(context) == MODE_PAGE
+        )
 
     def execute(self, context):
         work = get_work(context)
@@ -168,7 +178,12 @@ class BNAME_OT_page_prev(Operator):
     @classmethod
     def poll(cls, context):
         work = get_work(context)
-        return work is not None and work.loaded and len(work.pages) > 0
+        return (
+            work is not None
+            and work.loaded
+            and len(work.pages) > 0
+            and get_mode(context) == MODE_PAGE
+        )
 
     def execute(self, context):
         work = get_work(context)
@@ -335,17 +350,31 @@ class BNAME_OT_gp_paste_to_new_layer(Operator):
                 gp_data = obj.data
                 layers = getattr(gp_data, "layers", None)
                 if layers is not None:
+                    active_layer = getattr(layers, "active", None)
+                    parent_group = getattr(active_layer, "parent_group", None)
                     new_layer = layers.new(name="Pasted")
                     try:
                         layers.active = new_layer
                     except Exception:  # noqa: BLE001
                         pass
+                    if parent_group is not None:
+                        try:
+                            from ..utils import gpencil as gp_utils
+                            gp_utils.move_layer_to_group(gp_data, new_layer, parent_group)
+                        except Exception:  # noqa: BLE001
+                            pass
                     # 新レイヤーに現在フレームの空フレームを補充
                     try:
                         from ..utils import gpencil as gp_utils
                         gp_utils.ensure_active_frame(
                             new_layer,
                             frame_number=scene.frame_current if scene else 1,
+                        )
+                        gp_utils.ensure_layer_material(
+                            obj,
+                            new_layer,
+                            activate=True,
+                            assign_existing=True,
                         )
                     except Exception:  # noqa: BLE001
                         pass

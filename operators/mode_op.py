@@ -2,7 +2,7 @@
 
 モード切替時の .blend 入出力:
 - **enter_panel_mode**: 現在の work.blend を save → panel_NNN.blend を open
-  (panel_NNN.blend が未作成なら、現在の mainfile をそのまま save_as で新規化)
+  (panel_NNN.blend が未作成なら、空 scene から新規生成)
 - **exit_panel_mode**: 現在の panel_NNN.blend を save → work.blend を open
 """
 
@@ -15,10 +15,21 @@ from bpy.types import Operator
 
 from ..core.mode import MODE_PAGE, MODE_PANEL, get_mode, set_mode
 from ..core.work import get_active_page, get_work
-from ..io import blend_io
+from ..io import blend_io, page_io, work_io
 from ..utils import geom, log, paths
 
 _logger = log.get_logger(__name__)
+
+
+def _save_current_work_metadata(work, page) -> None:
+    """mainfile 切替前に JSON 側へ現在の用紙/ページ状態を反映する."""
+    if work is None or not getattr(work, "work_dir", ""):
+        return
+    work_dir = Path(work.work_dir)
+    work_io.save_work_json(work_dir, work)
+    page_io.save_pages_json(work_dir, work)
+    if page is not None:
+        page_io.save_page_json(work_dir, page)
 
 
 def _resolve_panel_at_event(context, event) -> tuple[int, int] | None:
@@ -67,8 +78,8 @@ def _resolve_panel_at_event(context, event) -> tuple[int, int] | None:
 class BNAME_OT_enter_panel_mode(Operator):
     """選択中 or マウス直下のコマの 3D シーンに入る (コマ編集モード).
 
-    work.blend を保存し、panel_NNN.blend を開く。未作成なら現シーンを
-    そのまま save_as_mainfile で新規化する。
+    work.blend を保存し、panel_NNN.blend を開く。未作成なら空の scene から
+    panel.blend を初期化する。
 
     invoke(event) ではマウス直下のコマを優先的に逆引きして active を更新
     (キーマップのダブルクリックや UI 操作から呼び出される)。execute のみ
@@ -100,14 +111,22 @@ class BNAME_OT_enter_panel_mode(Operator):
               f" poll_ok={self.__class__.poll(context)}")
         # ダブルクリックからの起動: マウス直下のコマへ active をフォーカス
         hit = _resolve_panel_at_event(context, event)
-        if hit is not None:
-            work = get_work(context)
-            page_idx, panel_idx = hit
-            if work is not None and 0 <= page_idx < len(work.pages):
-                work.active_page_index = page_idx
-                page = work.pages[page_idx]
-                if 0 <= panel_idx < len(page.panels):
-                    page.active_panel_index = panel_idx
+        if hit is None:
+            # ダブルクリック時のみ、未ヒットなら現在の active panel に
+            # フォールバックせず何もしない。UI ボタンからの EXEC_DEFAULT は
+            # 従来どおり active panel を対象に execute へ入る。
+            return {"PASS_THROUGH"}
+
+        work = get_work(context)
+        page_idx, panel_idx = hit
+        if work is None or not (0 <= page_idx < len(work.pages)):
+            return {"PASS_THROUGH"}
+        page = work.pages[page_idx]
+        if not (0 <= panel_idx < len(page.panels)):
+            return {"PASS_THROUGH"}
+
+        work.active_page_index = page_idx
+        page.active_panel_index = panel_idx
         return self.execute(context)
 
     def execute(self, context):
@@ -125,10 +144,16 @@ class BNAME_OT_enter_panel_mode(Operator):
         if not paths.is_valid_panel_stem(stem):
             self.report({"ERROR"}, f"不正なコマ stem: {stem}")
             return {"CANCELLED"}
+        page_id = page.id
         index = int(stem.split("_", 1)[1])
         work_dir = Path(work.work_dir)
 
         try:
+            # work.blend を開く前後の load_post は work.json を正として再同期する。
+            # 用紙色や開始ページを UI で変えた直後に panel.blend へ入っても
+            # 古い JSON で巻き戻らないよう、mainfile 切替前に必ず保存する。
+            _save_current_work_metadata(work, page)
+
             # 1) 現在の mainfile が work.blend なら上書き保存
             cur = blend_io.current_mainfile_path()
             expected_work = paths.work_blend_path(work_dir).resolve()
@@ -136,24 +161,60 @@ class BNAME_OT_enter_panel_mode(Operator):
                 blend_io.save_current_as(expected_work)
 
             # 2) panel_NNN.blend を開く。未作成なら現シーンを新規保存して遷移。
-            if blend_io.panel_blend_exists(work_dir, page.id, index):
-                ok = blend_io.open_panel_blend(work_dir, page.id, index)
+            if blend_io.panel_blend_exists(work_dir, page_id, index):
+                ok = blend_io.open_panel_blend(work_dir, page_id, index)
                 if not ok:
                     self.report({"ERROR"}, "panel.blend を開けませんでした")
                     return {"CANCELLED"}
             else:
-                ok = blend_io.save_panel_blend(work_dir, page.id, index)
+                if not blend_io.read_homefile():
+                    self.report({"ERROR"}, "panel.blend の初期化に失敗")
+                    return {"CANCELLED"}
+                from ..utils import panel_scene
+
+                ok = panel_scene.bootstrap_new_panel_blend(
+                    bpy.context,
+                    work_dir,
+                    page_id,
+                    stem,
+                )
                 if not ok:
                     self.report({"ERROR"}, "panel.blend の新規作成に失敗")
+                    try:
+                        blend_io.open_work_blend(work_dir)
+                    except Exception:  # noqa: BLE001
+                        _logger.exception("enter_panel_mode: failed to restore work.blend")
                     return {"CANCELLED"}
+                ok = blend_io.save_panel_blend(work_dir, page_id, index)
+                if not ok:
+                    self.report({"ERROR"}, "panel.blend の新規保存に失敗")
+                    try:
+                        blend_io.open_work_blend(work_dir)
+                    except Exception:  # noqa: BLE001
+                        _logger.exception("enter_panel_mode: failed to restore work.blend")
+                    return {"CANCELLED"}
+                # save_as_mainfile 直後は load_post が走らないので、mode/stem/page_id と
+                # viewport 状態は明示的に current scene に反映する。
+                try:
+                    from ..ui import overlay as _overlay
+
+                    set_mode(MODE_PANEL, bpy.context)
+                    bpy.context.scene.bname_current_panel_stem = stem
+                    bpy.context.scene.bname_current_panel_page_id = page_id
+                    _overlay.reset_viewport_background_to_theme(bpy.context)
+                    _overlay.apply_bname_shading_mode(bpy.context)
+                except Exception:  # noqa: BLE001
+                    _logger.exception("enter_panel_mode: initial panel scene finalize failed")
         except Exception as exc:  # noqa: BLE001
             _logger.exception("enter_panel_mode failed")
             self.report({"ERROR"}, f"コマ編集モード遷移失敗: {exc}")
             return {"CANCELLED"}
 
         # load_post ハンドラがモード/stem を同期するが、念のため明示的にも設定
-        set_mode(MODE_PANEL, context)
-        context.scene.bname_current_panel_stem = stem
+        ctx = bpy.context
+        set_mode(MODE_PANEL, ctx)
+        ctx.scene.bname_current_panel_stem = stem
+        ctx.scene.bname_current_panel_page_id = page_id
         self.report({"INFO"}, f"コマ編集モード: {stem}")
         return {"FINISHED"}
 
@@ -180,7 +241,6 @@ class BNAME_OT_exit_panel_mode(Operator):
         if (
             work is not None
             and work.loaded
-            and page is not None
             and stem
             and paths.is_valid_panel_stem(stem)
         ):
@@ -188,8 +248,10 @@ class BNAME_OT_exit_panel_mode(Operator):
                 from . import thumbnail_op
 
                 index = int(stem.split("_", 1)[1])
-                out = paths.panel_thumb_path(Path(work.work_dir), page.id, index)
-                thumbnail_op.take_area_screenshot(context, out)
+                page_id = getattr(context.scene, "bname_current_panel_page_id", "")
+                if paths.is_valid_page_id(page_id):
+                    out = paths.panel_thumb_path(Path(work.work_dir), page_id, index)
+                    thumbnail_op.take_area_screenshot(context, out)
             except Exception:  # noqa: BLE001
                 _logger.exception("auto thumbnail failed on exit_panel_mode")
 
@@ -197,14 +259,17 @@ class BNAME_OT_exit_panel_mode(Operator):
         if (
             work is not None
             and work.loaded
-            and page is not None
             and paths.is_valid_panel_stem(stem)
         ):
             work_dir = Path(work.work_dir)
             try:
+                page_id = getattr(context.scene, "bname_current_panel_page_id", "")
+                if not paths.is_valid_page_id(page_id):
+                    self.report({"ERROR"}, "編集中コマの page_id が失われています")
+                    return {"CANCELLED"}
                 index = int(stem.split("_", 1)[1])
                 cur = blend_io.current_mainfile_path()
-                expected_panel = paths.panel_blend_path(work_dir, page.id, index).resolve()
+                expected_panel = paths.panel_blend_path(work_dir, page_id, index).resolve()
                 if cur is not None and cur == expected_panel:
                     blend_io.save_current_as(expected_panel)
                 # work.blend を開く. 通常 work_new で必ず作られているはずで、
@@ -229,8 +294,10 @@ class BNAME_OT_exit_panel_mode(Operator):
                 self.report({"ERROR"}, f"work.blend 切替失敗: {exc}")
                 return {"CANCELLED"}
 
-        set_mode(MODE_PAGE, context)
-        context.scene.bname_current_panel_stem = ""
+        ctx = bpy.context
+        set_mode(MODE_PAGE, ctx)
+        ctx.scene.bname_current_panel_stem = ""
+        ctx.scene.bname_current_panel_page_id = ""
         self.report({"INFO"}, "紙面編集モード")
         return {"FINISHED"}
 

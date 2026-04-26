@@ -14,6 +14,7 @@ import bpy
 from bpy.props import BoolProperty, FloatProperty, IntProperty
 from bpy.types import Operator
 
+from ..core.mode import MODE_PAGE, get_mode
 from ..core.work import get_work
 from ..utils import geom, log
 
@@ -120,8 +121,8 @@ def _fit_view_to_rect_mm(
 def _overview_layout_bbox(work) -> tuple[float, float, float, float] | None:
     """全ページ一覧時の全体 bbox (x, y, w, h) を mm で返す.
 
-    ページは右→左 (漫画読順) に展開するため、ページ 0001 が x=0、以降は負の
-    X 方向に展開される。bbox の左端 (min_x) は負、右端 (0 + cw) が max_x。
+    ``start_side`` / ``read_direction`` / overview cols を反映した実配置から
+    bbox を算出する。
     """
     n = len(work.pages)
     if n == 0:
@@ -131,15 +132,27 @@ def _overview_layout_bbox(work) -> tuple[float, float, float, float] | None:
     gap = float(getattr(scene, "bname_overview_gap_mm", 30.0))
     cw = work.paper.canvas_width_mm
     ch = work.paper.canvas_height_mm
-    rows = (n + cols - 1) // cols
-    used_cols = min(n, cols)
-    total_w = used_cols * cw + max(0, used_cols - 1) * gap
-    total_h = rows * ch + max(0, rows - 1) * gap
-    # 最左列の左端: -(used_cols - 1) * (cw + gap)
-    min_x = -((used_cols - 1) * (cw + gap))
-    # 最下行の底: -(rows - 1) * (ch + gap)
-    min_y = -((rows - 1) * (ch + gap))
-    return (min_x, min_y, total_w, total_h)
+    start_side = getattr(work.paper, "start_side", "right")
+    read_direction = getattr(work.paper, "read_direction", "left")
+    from ..utils.page_grid import page_grid_offset_mm as _pg_offset
+
+    min_x = None
+    min_y = None
+    max_x = None
+    max_y = None
+    for i in range(n):
+        ox, oy = _pg_offset(i, cols, gap, cw, ch, start_side, read_direction)
+        x0 = ox
+        y0 = oy
+        x1 = ox + cw
+        y1 = oy + ch
+        min_x = x0 if min_x is None else min(min_x, x0)
+        min_y = y0 if min_y is None else min(min_y, y0)
+        max_x = x1 if max_x is None else max(max_x, x1)
+        max_y = y1 if max_y is None else max(max_y, y1)
+    if min_x is None or min_y is None or max_x is None or max_y is None:
+        return None
+    return (min_x, min_y, max_x - min_x, max_y - min_y)
 
 
 # ---------- オペレータ ----------
@@ -155,7 +168,7 @@ class BNAME_OT_view_fit_page(Operator):
     @classmethod
     def poll(cls, context):
         work = get_work(context)
-        return work is not None and work.loaded
+        return work is not None and work.loaded and get_mode(context) == MODE_PAGE
 
     def execute(self, context):
         work = get_work(context)
@@ -208,7 +221,12 @@ class BNAME_OT_view_fit_all(Operator):
     @classmethod
     def poll(cls, context):
         work = get_work(context)
-        return work is not None and work.loaded and len(work.pages) > 0
+        return (
+            work is not None
+            and work.loaded
+            and len(work.pages) > 0
+            and get_mode(context) == MODE_PAGE
+        )
 
     def execute(self, context):
         work = get_work(context)
@@ -246,7 +264,8 @@ class BNAME_OT_view_overview_toggle(Operator):
 
     @classmethod
     def poll(cls, context):
-        return True
+        work = get_work(context)
+        return work is not None and work.loaded and get_mode(context) == MODE_PAGE
 
     def execute(self, context):
         scene = context.scene

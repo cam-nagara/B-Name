@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import bpy
+
 from . import (
     balloon_panel,
     effect_line_panel,
     export_panel,
     gpencil_panel,
-    layer_panel,
+    layer_panel as _legacy_layer_panel,
     page_panel,
     panel_detail_panel,
     panel_list_panel,
@@ -21,7 +23,6 @@ _MODULES = (
     page_panel,
     panel_list_panel,
     panel_detail_panel,
-    layer_panel,
     balloon_panel,
     effect_line_panel,
     gpencil_panel,
@@ -29,7 +30,26 @@ _MODULES = (
 )
 
 
+def _unregister_legacy_image_layer_panel() -> None:
+    """旧「画像レイヤー」独立パネルを登録済みクラス名からも確実に外す."""
+    try:
+        _legacy_layer_panel.unregister()
+    except Exception:
+        pass
+    for class_name in ("BNAME_PT_image_layers", "BNAME_UL_image_layers"):
+        cls = getattr(bpy.types, class_name, None)
+        if cls is None:
+            continue
+        try:
+            bpy.utils.unregister_class(cls)
+        except Exception:
+            pass
+
+
 def register() -> None:
+    # 旧「画像レイヤー」独立パネルは新 UI では登録しない。
+    # Reload Addons 時に前回登録分が残っている場合もここで外す。
+    _unregister_legacy_image_layer_panel()
     for module in _MODULES:
         module.register()
 
@@ -40,3 +60,4 @@ def unregister() -> None:
             module.unregister()
         except Exception:
             pass
+    _unregister_legacy_image_layer_panel()

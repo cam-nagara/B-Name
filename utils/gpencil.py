@@ -92,9 +92,11 @@ def ensure_layer(gp_data, layer_name: str):
     return layer
 
 
-# ---------- 既定マテリアル (ブラック描画色) ----------
+# ---------- Grease Pencil マテリアル ----------
 
 _DEFAULT_STROKE_MAT_NAME = "BName_Pen_Black"
+_LAYER_MATERIAL_PROP = "bname_material_name"
+_LAYER_MATERIAL_PREFIX = "BName_GP_Layer_"
 
 
 def ensure_default_stroke_material(
@@ -156,6 +158,227 @@ def ensure_default_stroke_material(
     except Exception:  # noqa: BLE001
         _logger.exception("ensure_default_stroke_material: attach failed")
     return mat
+
+
+def _ensure_gp_material_data(mat):
+    if mat is None:
+        return None
+    if getattr(mat, "grease_pencil", None) is None:
+        try:
+            bpy.data.materials.create_gpencil_data(mat)
+        except (AttributeError, RuntimeError):
+            pass
+    return getattr(mat, "grease_pencil", None)
+
+
+def _safe_material_suffix(name: str) -> str:
+    cleaned = "".join(ch if ch not in '\\/:*?"<>|' else "_" for ch in str(name))
+    cleaned = cleaned.strip().strip(".")
+    return cleaned or "Layer"
+
+
+def _layer_material_name(layer) -> str:
+    try:
+        value = layer.get(_LAYER_MATERIAL_PROP, "")
+        if value:
+            return str(value)
+    except Exception:  # noqa: BLE001
+        pass
+    return f"{_LAYER_MATERIAL_PREFIX}{_safe_material_suffix(getattr(layer, 'name', 'Layer'))}"
+
+
+def _store_layer_material_name(layer, material_name: str) -> None:
+    try:
+        layer[_LAYER_MATERIAL_PROP] = material_name
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _material_slot_index(obj, mat) -> int:
+    mats = getattr(getattr(obj, "data", None), "materials", None)
+    if mats is None or mat is None:
+        return -1
+    for i, existing in enumerate(mats):
+        if existing is mat or getattr(existing, "name", None) == mat.name:
+            return i
+    try:
+        mats.append(mat)
+        return len(mats) - 1
+    except Exception:  # noqa: BLE001
+        _logger.exception("material slot append failed: %s", getattr(mat, "name", ""))
+        return -1
+
+
+def _assign_material_to_layer_strokes(layer, material_index: int) -> None:
+    if material_index < 0:
+        return
+    frames = getattr(layer, "frames", None)
+    if frames is None:
+        return
+    for frame in frames:
+        drawing = getattr(frame, "drawing", None)
+        strokes = getattr(drawing, "strokes", None)
+        if strokes is None:
+            continue
+        for stroke in strokes:
+            try:
+                stroke.material_index = material_index
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def ensure_layer_material(
+    obj,
+    layer,
+    *,
+    activate: bool = False,
+    assign_existing: bool = True,
+):
+    """GP レイヤー専用の内部マテリアルを確保し、必要なら active 化する.
+
+    B-Name UI ではマテリアルを見せず、レイヤーの線色/塗り色として扱う。
+    実体は Grease Pencil の描画仕様に合わせてレイヤーごとに 1 マテリアルを
+    自動管理する。
+    """
+    if obj is None or layer is None or getattr(obj, "type", "") != "GREASEPENCIL":
+        return None
+
+    mat_name = _layer_material_name(layer)
+    created = False
+    mat = bpy.data.materials.get(mat_name)
+    if mat is None:
+        mat = bpy.data.materials.new(name=mat_name)
+        created = True
+        _store_layer_material_name(layer, mat.name)
+    else:
+        _store_layer_material_name(layer, mat.name)
+
+    style_missing = getattr(mat, "grease_pencil", None) is None
+    gp_style = _ensure_gp_material_data(mat)
+    if gp_style is not None:
+        if created or style_missing:
+            try:
+                gp_style.show_stroke = True
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                gp_style.color = (0.0, 0.0, 0.0, 1.0)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                gp_style.fill_color = (1.0, 1.0, 1.0, 1.0)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                gp_style.show_fill = False
+            except Exception:  # noqa: BLE001
+                pass
+    try:
+        mat.diffuse_color = tuple(getattr(gp_style, "color", mat.diffuse_color))
+    except Exception:  # noqa: BLE001
+        pass
+
+    material_index = _material_slot_index(obj, mat)
+    if activate and material_index >= 0:
+        try:
+            obj.active_material_index = material_index
+        except Exception:  # noqa: BLE001
+            pass
+    if assign_existing:
+        _assign_material_to_layer_strokes(layer, material_index)
+    return mat
+
+
+def ensure_active_layer_material(obj, *, activate: bool = True):
+    layers = getattr(getattr(obj, "data", None), "layers", None)
+    if layers is None:
+        return None
+    layer = getattr(layers, "active", None)
+    return ensure_layer_material(obj, layer, activate=activate)
+
+
+def layer_effectively_hidden(layer) -> bool:
+    """レイヤー自身または親フォルダが非表示なら True."""
+    if bool(getattr(layer, "hide", False)):
+        return True
+    group = getattr(layer, "parent_group", None)
+    while group is not None:
+        if bool(getattr(group, "hide", False)):
+            return True
+        group = getattr(group, "parent_group", None)
+    return False
+
+
+def layer_effectively_locked(layer) -> bool:
+    """レイヤー自身または親フォルダがロックなら True."""
+    if bool(getattr(layer, "lock", False)):
+        return True
+    group = getattr(layer, "parent_group", None)
+    while group is not None:
+        if bool(getattr(group, "lock", False)):
+            return True
+        group = getattr(group, "parent_group", None)
+    return False
+
+
+def is_layer_group(node) -> bool:
+    return hasattr(node, "children") and hasattr(node, "is_expanded")
+
+
+def unique_layer_group_name(gp_data, base: str = "フォルダ") -> str:
+    groups = getattr(gp_data, "layer_groups", None)
+    if groups is None:
+        return base
+    existing = {group.name for group in groups}
+    name = base
+    i = 0
+    while name in existing:
+        i += 1
+        name = f"{base}.{i:03d}"
+    return name
+
+
+def move_layer_to_group(gp_data, layer, group) -> bool:
+    layers = getattr(gp_data, "layers", None)
+    if layers is None or layer is None:
+        return False
+    try:
+        layers.move_to_layer_group(layer, group)
+    except Exception:  # noqa: BLE001
+        _logger.exception("move layer to group failed")
+        return False
+    return True
+
+
+def move_group_to_group(gp_data, group, parent_group) -> bool:
+    groups = getattr(gp_data, "layer_groups", None)
+    if groups is None or group is None:
+        return False
+    try:
+        groups.move_to_layer_group(group, parent_group)
+    except Exception:  # noqa: BLE001
+        _logger.exception("move group to group failed")
+        return False
+    return True
+
+
+def remove_layer_group_preserve_children(gp_data, group) -> bool:
+    """フォルダを削除し、中身のレイヤー/子フォルダは親階層へ退避する."""
+    groups = getattr(gp_data, "layer_groups", None)
+    if groups is None or group is None:
+        return False
+    parent = getattr(group, "parent_group", None)
+    for child in list(getattr(group, "children", [])):
+        if is_layer_group(child):
+            move_group_to_group(gp_data, child, parent)
+        else:
+            move_layer_to_group(gp_data, child, parent)
+    try:
+        groups.remove(group)
+    except Exception:  # noqa: BLE001
+        _logger.exception("remove layer group failed: %s", getattr(group, "name", ""))
+        return False
+    return True
 
 
 # ---------- ページ Collection / GP ----------
@@ -254,11 +477,21 @@ def ensure_master_gpencil(scene, layer_name: str = "ネーム"):
                 ensure_active_frame(layer, frame_number=frame_num)
             except Exception:  # noqa: BLE001
                 _logger.exception("ensure_master_gpencil: default frame create failed")
-    # 黒線マテリアル
+    # レイヤー専用マテリアル
     try:
-        ensure_default_stroke_material(obj)
+        layers = getattr(obj.data, "layers", None)
+        if layers is not None and len(layers) > 0:
+            for existing_layer in layers:
+                ensure_layer_material(
+                    obj,
+                    existing_layer,
+                    activate=(existing_layer == layer),
+                    assign_existing=True,
+                )
+        else:
+            ensure_default_stroke_material(obj)
     except Exception:  # noqa: BLE001
-        _logger.exception("ensure_master_gpencil: default stroke material setup failed")
+        _logger.exception("ensure_master_gpencil: layer material setup failed")
     return obj
 
 
@@ -283,6 +516,52 @@ def _ensure_paper_material():
     return mat
 
 
+def _paper_rgba_from_value(color_value) -> tuple[float, float, float, float]:
+    """PropertyGroup / シーケンス由来の色値を紙表示用 RGBA に正規化."""
+    if color_value is None:
+        return (1.0, 1.0, 1.0, 1.0)
+    try:
+        r = float(color_value[0])
+        g = float(color_value[1])
+        b = float(color_value[2])
+    except Exception:  # noqa: BLE001
+        return (1.0, 1.0, 1.0, 1.0)
+    alpha = 1.0
+    try:
+        alpha = float(color_value[3])
+    except Exception:  # noqa: BLE001
+        alpha = 1.0
+    return (
+        max(0.0, min(1.0, r)),
+        max(0.0, min(1.0, g)),
+        max(0.0, min(1.0, b)),
+        max(0.0, min(1.0, alpha)),
+    )
+
+
+def sync_paper_material_color(color_value) -> object | None:
+    """紙メッシュ共有マテリアルの表示色を ``paper_color`` に同期."""
+    mat = _ensure_paper_material()
+    rgba = _paper_rgba_from_value(color_value)
+    try:
+        if tuple(float(c) for c in mat.diffuse_color[:4]) != rgba:
+            mat.diffuse_color = rgba
+        mat.update_tag()
+    except Exception:  # noqa: BLE001
+        _logger.exception("sync_paper_material_color: material update failed")
+        return mat
+
+    # Solid 表示が OBJECT 色だった場合にも見え方が揃うよう、紙オブジェクト色も合わせる。
+    for obj in tuple(bpy.data.objects):
+        if not obj.name.startswith("page_") or not obj.name.endswith("_paper"):
+            continue
+        try:
+            obj.color = rgba
+        except Exception:  # noqa: BLE001
+            pass
+    return mat
+
+
 def page_paper_object_name(page_id: str) -> str:
     return f"page_{page_id}_paper"
 
@@ -291,7 +570,13 @@ def page_paper_mesh_name(page_id: str) -> str:
     return f"page_{page_id}_paper_data"
 
 
-def ensure_page_paper(scene, page_id: str, canvas_width_mm: float, canvas_height_mm: float):
+def ensure_page_paper(
+    scene,
+    page_id: str,
+    canvas_width_mm: float,
+    canvas_height_mm: float,
+    paper_color=None,
+):
     """ページ用紙メッシュ (Plane) をページ Collection に生成/更新.
 
     GPU overlay で紙塗りすると POST_VIEW で必ず GP の上に乗ってしまうため、
@@ -335,11 +620,17 @@ def ensure_page_paper(scene, page_id: str, canvas_width_mm: float, canvas_height
             pass
 
     # マテリアル割当 (1 つだけ)
-    mat = _ensure_paper_material()
+    mat = sync_paper_material_color(paper_color)
+    if mat is None:
+        mat = _ensure_paper_material()
     if len(obj.data.materials) == 0:
         obj.data.materials.append(mat)
     else:
         obj.data.materials[0] = mat
+    try:
+        obj.color = _paper_rgba_from_value(paper_color)
+    except Exception:  # noqa: BLE001
+        pass
 
     # 編集を防ぐためのフラグ (誤って動かさないように)
     try:
@@ -377,6 +668,7 @@ def ensure_page_gpencil(scene, page_id: str, layer_name: str = "ネーム"):
                 scene, page_id,
                 float(work.paper.canvas_width_mm),
                 float(work.paper.canvas_height_mm),
+                work.paper.paper_color,
             )
     except Exception:  # noqa: BLE001
         _logger.exception("ensure_page_gpencil: paper mesh setup failed for %s", page_id)

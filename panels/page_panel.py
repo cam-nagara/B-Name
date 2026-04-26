@@ -5,6 +5,7 @@ from __future__ import annotations
 import bpy
 from bpy.types import Panel, UIList
 
+from ..core.mode import MODE_PANEL, get_mode
 from ..core.work import get_work
 
 B_NAME_CATEGORY = "B-Name"
@@ -57,8 +58,14 @@ class BNAME_PT_pages(Panel):
         work = get_work(context)
         if work is None:
             return
+        is_panel_mode = get_mode(context) == MODE_PANEL
+
+        if is_panel_mode:
+            box = layout.box()
+            box.label(text="コマ編集モード中は紙面操作できません", icon="INFO")
 
         row = layout.row()
+        row.enabled = not is_panel_mode
         row.template_list(
             BNAME_UL_pages.bl_idname,
             "",
@@ -69,6 +76,7 @@ class BNAME_PT_pages(Panel):
             rows=6,
         )
         col = row.column(align=True)
+        col.enabled = not is_panel_mode
         col.operator("bname.page_add", text="", icon="ADD")
         col.operator("bname.page_remove", text="", icon="REMOVE")
         col.separator()
@@ -81,6 +89,7 @@ class BNAME_PT_pages(Panel):
 
         # 見開き操作
         box = layout.box()
+        box.enabled = not is_panel_mode
         box.label(text="見開き")
         row = box.row(align=True)
         row.operator("bname.pages_merge_spread", text="変更", icon="ARROW_LEFTRIGHT")
@@ -98,6 +107,7 @@ class BNAME_PT_pages(Panel):
         # ビュー操作 (真正面表示 / 全ページ一覧)
         scene = context.scene
         box = layout.box()
+        box.enabled = not is_panel_mode
         box.label(text="ビュー", icon="VIEW_CAMERA")
         row = box.row(align=True)
         row.operator("bname.view_fit_page", text="ページに合わせる", icon="ZOOM_SELECTED")

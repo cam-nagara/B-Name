@@ -15,7 +15,7 @@ import bpy
 from bpy.types import Operator
 
 from ..core.mode import MODE_PANEL, get_mode
-from ..core.work import get_active_page, get_work
+from ..core.work import find_page_by_id, get_work
 from ..io import panel_io
 from ..utils import bpy_link, log, paths
 
@@ -70,8 +70,9 @@ class BNAME_OT_record_asset_link(Operator):
 
     def execute(self, context):
         work = get_work(context)
-        page = get_active_page(context)
         stem = getattr(context.scene, "bname_current_panel_stem", "")
+        page_id = getattr(context.scene, "bname_current_panel_page_id", "")
+        page = find_page_by_id(work, page_id)
         if work is None or page is None or not stem:
             self.report({"ERROR"}, "コマ編集モード + アクティブコマが必要です")
             return {"CANCELLED"}

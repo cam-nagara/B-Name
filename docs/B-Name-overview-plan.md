@@ -92,8 +92,8 @@ Collection の transform でページを grid 位置に配置。GP/テキスト/
   - panel モード中は overview 描画をスキップし従来通りアクティブ panel の 2D 表示のみ
 - `operators/view_op.py`:
   - `bname.view_fit_all` / `bname.view_overview_toggle` は維持。`bname.view_fit_page` は単一ページ表示トグル用途に残す
-- コマ操作 4 種を **カーソル位置から対象ページ/コマを逆引き** して動作させる:
-  - `panel_cut`, `panel_edit_vertices`, `panel_knife_cut`, `panel_to_polygon/to_rect`
+- コマ操作 3 種を **カーソル位置から対象ページ/コマを逆引き** して動作させる:
+  - `panel_edit_vertices`, `panel_knife_cut`, `panel_to_polygon/to_rect`
   - 新規ヘルパ `find_panel_at_world_mm(work, wx_mm, wy_mm) -> (page_entry, panel_entry)`: 全ページの grid 位置を考慮してヒット判定
   - 各 operator の invoke で mouse → world_mm → (page, panel) に解決し、`self._work/_page/_entry` にセット。active_page_index も更新
 - **コマ一覧 UIList にダブルクリック → `bname.enter_panel_mode`** をハンドラで結線:
@@ -127,7 +127,7 @@ Collection の transform でページを grid 位置に配置。GP/テキスト/
 
 - [ ] `作品を新規作成` で `.bname/work.blend` が作成される (page.blend は作成されない)
 - [ ] ページ追加 2 回で overview に 3 ページ並ぶ (右→左の既存グリッド配置)
-- [ ] overview 上で任意ページのコマに「水平カット」「垂直カット」「ナイフツール」「頂点/辺ドラッグ」が効く
+- [ ] overview 上で任意ページのコマに「ナイフツール」「頂点/辺ドラッグ」が効く
 - [ ] active_page_index が操作したページに自動で追随する
 - [ ] コマ一覧のダブルクリック or 「コマ編集へ」で `panel_NNN.blend` に遷移できる
 - [ ] panel モードの「戻る」で `work.blend` に戻り、panel 編集内容が保存されている

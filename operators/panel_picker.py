@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import bpy
 
-from ..utils import log
+from ..utils import log, page_grid
 
 _logger = log.get_logger(__name__)
 
@@ -81,18 +81,28 @@ def find_panel_at_world_mm(
         if not (0 <= idx < len(work.pages)):
             return None
         page = work.pages[idx]
-        hit = _hit_test_page(page, x_mm, y_mm)
+        cols = max(1, int(getattr(scene, "bname_overview_cols", 4)))
+        gap = float(getattr(scene, "bname_overview_gap_mm", 30.0))
+        cw = work.paper.canvas_width_mm
+        ch = work.paper.canvas_height_mm
+        start_side = getattr(work.paper, "start_side", "right")
+        read_direction = getattr(work.paper, "read_direction", "left")
+        ox, oy = page_grid.page_grid_offset_mm(
+            idx, cols, gap, cw, ch, start_side, read_direction
+        )
+        hit = _hit_test_page(page, x_mm - ox, y_mm - oy)
         return (idx, hit) if hit is not None else None
 
     cols = max(1, int(getattr(scene, "bname_overview_cols", 4)))
     gap = float(getattr(scene, "bname_overview_gap_mm", 30.0))
     cw = work.paper.canvas_width_mm
     ch = work.paper.canvas_height_mm
+    start_side = getattr(work.paper, "start_side", "right")
+    read_direction = getattr(work.paper, "read_direction", "left")
     for i, page in enumerate(work.pages):
-        col = i % cols
-        row = i // cols
-        ox = -col * (cw + gap)  # 日本漫画は右→左展開 (負の X)
-        oy = -row * (ch + gap)
+        ox, oy = page_grid.page_grid_offset_mm(
+            i, cols, gap, cw, ch, start_side, read_direction
+        )
         local_x = x_mm - ox
         local_y = y_mm - oy
         # キャンバス矩形の外は早期スキップ (パフォーマンス最適化)

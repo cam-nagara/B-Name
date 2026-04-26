@@ -9,7 +9,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import bpy
-from bpy.props import FloatProperty, IntProperty
 from bpy.types import Operator
 
 from ..core.work import get_active_page, get_work
@@ -68,118 +67,6 @@ def _resolve_target_from_event(context, event) -> None:
                 if 0 <= panel_idx < len(page.panels):
                     page.active_panel_index = panel_idx
             return
-
-
-class BNAME_OT_panel_cut(Operator):
-    """選択中のコマを水平/垂直で分割 (枠線カットツール簡易版)."""
-
-    bl_idname = "bname.panel_cut"
-    bl_label = "コマを分割"
-    bl_options = {"REGISTER", "UNDO"}
-
-    axis: IntProperty(  # type: ignore[valid-type]
-        name="軸",
-        description="0=水平カット (上下分割), 1=垂直カット (左右分割)",
-        default=0,
-        min=0,
-        max=1,
-    )
-    ratio: FloatProperty(  # type: ignore[valid-type]
-        name="分割比",
-        description="0.0-1.0 で分割位置を指定 (0.5 で中央)",
-        default=0.5,
-        min=0.05,
-        max=0.95,
-    )
-
-    @classmethod
-    def poll(cls, context):
-        work = get_work(context)
-        return work is not None and work.loaded
-
-    def invoke(self, context, event):
-        # マウス直下のコマへフォーカス (overview 時は全ページ逆引き)
-        _resolve_target_from_event(context, event)
-        page = get_active_page(context)
-        if (
-            page is None
-            or not (0 <= page.active_panel_index < len(page.panels))
-            or page.panels[page.active_panel_index].shape_type != "rect"
-        ):
-            self.report({"WARNING"}, "矩形コマを選択してください")
-            return {"CANCELLED"}
-        return context.window_manager.invoke_props_dialog(self)
-
-    def execute(self, context):
-        work = get_work(context)
-        page = get_active_page(context)
-        if work is None or page is None:
-            return {"CANCELLED"}
-        idx = page.active_panel_index
-        if not (0 <= idx < len(page.panels)):
-            return {"CANCELLED"}
-        src = page.panels[idx]
-        if src.shape_type != "rect":
-            self.report({"WARNING"}, "矩形コマにのみ適用可能です")
-            return {"CANCELLED"}
-        work_dir = Path(work.work_dir)
-        gap_v = work.panel_gap.vertical_mm
-        gap_h = work.panel_gap.horizontal_mm
-
-        try:
-            if self.axis == 0:
-                # 水平カット: 上下に分割
-                total_h = src.rect_height_mm - gap_v
-                top_h = total_h * (1.0 - self.ratio)
-                bot_h = total_h * self.ratio
-                new_stem = panel_io.allocate_new_panel_stem(work_dir, page.id)
-                new_entry = page.panels.add()
-                from .panel_op import _copy_panel_entry
-
-                _copy_panel_entry(src, new_entry)
-                new_entry.panel_stem = new_stem
-                new_entry.id = new_stem.split("_", 1)[1]
-                new_entry.title = f"{src.title} 下"
-                new_entry.rect_x_mm = src.rect_x_mm
-                new_entry.rect_y_mm = src.rect_y_mm
-                new_entry.rect_width_mm = src.rect_width_mm
-                new_entry.rect_height_mm = bot_h
-                new_entry.z_order = max((p.z_order for p in page.panels), default=0) + 1
-                # src を上側に縮小
-                src.rect_y_mm += bot_h + gap_v
-                src.rect_height_mm = top_h
-            else:
-                # 垂直カット: 左右に分割
-                total_w = src.rect_width_mm - gap_h
-                left_w = total_w * self.ratio
-                right_w = total_w * (1.0 - self.ratio)
-                new_stem = panel_io.allocate_new_panel_stem(work_dir, page.id)
-                new_entry = page.panels.add()
-                from .panel_op import _copy_panel_entry
-
-                _copy_panel_entry(src, new_entry)
-                new_entry.panel_stem = new_stem
-                new_entry.id = new_stem.split("_", 1)[1]
-                new_entry.title = f"{src.title} 右"
-                new_entry.rect_x_mm = src.rect_x_mm + left_w + gap_h
-                new_entry.rect_y_mm = src.rect_y_mm
-                new_entry.rect_width_mm = right_w
-                new_entry.rect_height_mm = src.rect_height_mm
-                new_entry.z_order = max((p.z_order for p in page.panels), default=0) + 1
-                # src を左側に縮小
-                src.rect_width_mm = left_w
-
-            panel_io.save_panel_meta(work_dir, page.id, src)
-            panel_io.save_panel_meta(work_dir, page.id, new_entry)
-            page_io.save_page_json(work_dir, page)
-            page.panel_count = len(page.panels)
-            page_io.save_pages_json(work_dir, work)
-        except Exception as exc:  # noqa: BLE001
-            _logger.exception("panel_cut failed")
-            self.report({"ERROR"}, f"コマ分割失敗: {exc}")
-            return {"CANCELLED"}
-        self.report({"INFO"}, "コマを分割しました")
-        return {"FINISHED"}
 
 
 class BNAME_OT_panel_to_polygon(Operator):
@@ -300,7 +187,6 @@ class BNAME_OT_panel_to_rect(Operator):
 
 
 _CLASSES = (
-    BNAME_OT_panel_cut,
     BNAME_OT_panel_to_polygon,
     BNAME_OT_panel_to_rect,
 )

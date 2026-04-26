@@ -104,7 +104,7 @@ def paper_from_dict(paper, data: dict[str, Any]) -> None:
     alpha = float(data.get("paperColorAlpha", 1.0))
     paper.paper_color = hex_to_rgba(hex_code, alpha)
     paper.color_profile = data.get("colorProfile", "sRGB IEC61966-2.1")
-    paper.start_side = data.get("startSide", "right")
+    paper.start_side = data.get("startSide", "left")
     paper.read_direction = data.get("readDirection", "left")
     paper.preset_name = data.get("presetName", "集英社マンガ誌汎用")
 
@@ -220,18 +220,38 @@ def nombre_from_dict(n, data: dict[str, Any]) -> None:
 
 def safe_area_to_dict(sa) -> dict[str, Any]:
     # opacity / blend_mode は仕様変更で常に 1.0 / multiply 固定 (PG から削除)
+    color = tuple(float(c) for c in sa.color[:3])
+    if all(abs(c - 0.7) < 1e-4 for c in color):
+        color_hex = "#B3B3B3"
+    else:
+        color_hex = color_to_hex(sa.color)
     return {
         "enabled": bool(sa.enabled),
-        "color": color_to_hex(sa.color),
+        "color": color_hex,
     }
 
 
 def safe_area_from_dict(sa, data: dict[str, Any]) -> None:
     data = data or {}
     sa.enabled = bool(data.get("enabled", True))
-    # color は size=3 の RGB のみ (旧データの alpha は無視)
-    rgba = hex_to_rgba(data.get("color", "#B3B3B3"))
-    sa.color = (float(rgba[0]), float(rgba[1]), float(rgba[2]))
+    # color は size=3 の RGB のみ (旧データの alpha は無視)。
+    # 未保存時の既定値は明度 0.7 のグレーに揃える。
+    if "color" in data:
+        color_code = str(data["color"]).strip().upper()
+        # 旧版の既定値は #808080 だった。保存済み作品の「旧既定」が
+        # 新規既定に見えてしまうため、読み込み時に現行既定へ移行する。
+        if color_code in {
+            "#808080", "808080",
+            "#7F7F7F", "7F7F7F",
+            "#B2B2B2", "B2B2B2",
+            "#B3B3B3", "B3B3B3",
+        }:
+            sa.color = (0.7, 0.7, 0.7)
+        else:
+            rgba = hex_to_rgba(color_code)
+            sa.color = (float(rgba[0]), float(rgba[1]), float(rgba[2]))
+    else:
+        sa.color = (0.7, 0.7, 0.7)
     # 旧 opacity / blendMode フィールドが残っていても無視 (互換読込)
 
 

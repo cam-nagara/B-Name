@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import bpy
-from bpy.props import StringProperty
+from bpy.props import IntProperty, StringProperty
 from bpy.types import Operator
 from bpy_extras.io_utils import ImportHelper
 
@@ -58,6 +58,8 @@ class BNAME_OT_image_layer_add(Operator, ImportHelper):
         entry.title = path.stem
         entry.filepath = str(path)
         context.scene.bname_active_image_layer_index = len(coll) - 1
+        if hasattr(context.scene, "bname_active_layer_kind"):
+            context.scene.bname_active_layer_kind = "image"
 
         # Blender 側に Image を読み込み (draw_handler 側で gpu.texture として使う)
         try:
@@ -95,13 +97,37 @@ class BNAME_OT_image_layer_remove(Operator):
             context.scene.bname_active_image_layer_index = -1
         elif idx >= len(coll):
             context.scene.bname_active_image_layer_index = len(coll) - 1
+        if len(coll) == 0 and hasattr(context.scene, "bname_active_layer_kind"):
+            context.scene.bname_active_layer_kind = "gp"
         self.report({"INFO"}, f"画像レイヤー削除: {name}")
+        return {"FINISHED"}
+
+
+class BNAME_OT_image_layer_select(Operator):
+    bl_idname = "bname.image_layer_select"
+    bl_label = "画像レイヤーを選択"
+    bl_options = {"REGISTER"}
+
+    index: IntProperty(default=-1)  # type: ignore[valid-type]
+
+    @classmethod
+    def poll(cls, context):
+        return _get_collection(context.scene) is not None
+
+    def execute(self, context):
+        coll = _get_collection(context.scene)
+        if coll is None or not (0 <= self.index < len(coll)):
+            return {"CANCELLED"}
+        context.scene.bname_active_image_layer_index = self.index
+        if hasattr(context.scene, "bname_active_layer_kind"):
+            context.scene.bname_active_layer_kind = "image"
         return {"FINISHED"}
 
 
 _CLASSES = (
     BNAME_OT_image_layer_add,
     BNAME_OT_image_layer_remove,
+    BNAME_OT_image_layer_select,
 )
 
 
@@ -110,6 +136,14 @@ def register() -> None:
 
     bpy.types.Scene.bname_image_layers = bpy.props.CollectionProperty(type=BNameImageLayer)
     bpy.types.Scene.bname_active_image_layer_index = bpy.props.IntProperty(default=-1, min=-1)
+    bpy.types.Scene.bname_active_layer_kind = bpy.props.EnumProperty(
+        name="アクティブレイヤー種別",
+        items=(
+            ("gp", "Grease Pencil", ""),
+            ("image", "画像", ""),
+        ),
+        default="gp",
+    )
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
 
@@ -120,7 +154,11 @@ def unregister() -> None:
             bpy.utils.unregister_class(cls)
         except RuntimeError:
             pass
-    for attr in ("bname_active_image_layer_index", "bname_image_layers"):
+    for attr in (
+        "bname_active_layer_kind",
+        "bname_active_image_layer_index",
+        "bname_image_layers",
+    ):
         try:
             delattr(bpy.types.Scene, attr)
         except AttributeError:

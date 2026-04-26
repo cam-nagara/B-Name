@@ -241,8 +241,7 @@ class KeymapState:
 
         Blender のキーマップ評価は Window kc (空間非依存) が area kc より先に
         走るため、ここに登録すると他のアドオンが area kc に登録した同キーを
-        先取りできる。3D View 以外で押された場合は invoke 側で
-        ``context.area`` をチェックしてキャンセルする。
+        先取りできる。枠線ツール側は invoke 時に利用可能な 3D View を探索する。
         """
         # preferences 取得 (失敗時は SPACE 既定)
         try:

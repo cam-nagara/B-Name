@@ -79,8 +79,10 @@ class BNAME_PT_paper(Panel):
         sub.enabled = sa.enabled
         sub.prop(sa, "color", text="塗りつぶし色")
 
-        # 「色・線数」セクションは UI からは削除 (色情報は書き出し処理が
-        # 内部で参照するためデータ層は維持。書き出しダイアログから個別指定可)
+        box = layout.box()
+        box.label(text="色")
+        box.prop(p, "paper_color", text="用紙色")
+
         # 綴じ / 読む方向
         box = layout.box()
         box.label(text="綴じ / 読む方向")

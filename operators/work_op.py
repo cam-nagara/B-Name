@@ -10,7 +10,7 @@ from bpy.types import Operator
 from bpy_extras.io_utils import ImportHelper, ExportHelper
 
 from ..core.mode import MODE_PAGE, MODE_PANEL, get_mode, set_mode
-from ..core.work import get_active_page, get_work
+from ..core.work import find_page_by_id, get_active_page, get_work
 from ..io import blend_io, page_io, presets, work_io
 from ..utils import gpencil as gp_utils
 from ..utils import log, page_grid, paths
@@ -49,6 +49,12 @@ def _apply_phase1_defaults(work) -> None:
             pass
     # 既定プリセット適用 (見つからなくても既定値は PropertyGroup に入っている)
     presets.load_default_preset(work.paper)
+    # セーフライン外塗りは新規作品ごとに既定値へ戻す。
+    # PropertyGroup は同一 scene 内で前回値を保持するため、ここで明示的に初期化しないと
+    # 「前の作品で変えた色」が新規作品へ漏れる。プリセット適用後に置き直して、
+    # 今後プリセット側が拡張されても新規作品の既定を固定する。
+    work.safe_area_overlay.enabled = True
+    work.safe_area_overlay.color = (0.7, 0.7, 0.7)
 
 
 def _cleanup_default_scene_objects() -> None:
@@ -150,6 +156,13 @@ class BNAME_OT_work_new(Operator, ExportHelper):
             # overview 編集モード既定。保存前にモード/stem を確実にセット。
             set_mode(MODE_PAGE, context)
             context.scene.bname_current_panel_stem = ""
+            context.scene.bname_current_panel_page_id = ""
+            try:
+                from . import preset_op
+
+                preset_op.sync_paper_preset_selector(context)
+            except Exception:  # noqa: BLE001
+                _logger.exception("work_new: preset selector sync failed")
 
             blend_io.save_work_blend(work_dir)
         except Exception as exc:  # noqa: BLE001
@@ -227,6 +240,15 @@ class BNAME_OT_work_open(Operator, ImportHelper):
             page_io.load_pages_json(work_dir, work)
             work.work_dir = str(work_dir.resolve())
             work.loaded = True
+            set_mode(MODE_PAGE, context)
+            context.scene.bname_current_panel_stem = ""
+            context.scene.bname_current_panel_page_id = ""
+            try:
+                from . import preset_op
+
+                preset_op.sync_paper_preset_selector(context)
+            except Exception:  # noqa: BLE001
+                _logger.exception("work_open: preset selector sync failed")
         except FileNotFoundError as exc:
             _logger.exception("work_open: missing file")
             work.loaded = False
@@ -279,7 +301,11 @@ class BNAME_OT_work_save(Operator):
             work_io.save_work_json(work_dir, work)
             page_io.save_pages_json(work_dir, work)
             mode = get_mode(context)
-            page = get_active_page(context)
+            if mode == MODE_PANEL:
+                page_id = getattr(context.scene, "bname_current_panel_page_id", "")
+                page = find_page_by_id(work, page_id)
+            else:
+                page = get_active_page(context)
             if page is not None:
                 page_io.save_page_json(work_dir, page)
 
@@ -311,16 +337,17 @@ class BNAME_OT_work_save(Operator):
                     saved_blend = False
             else:
                 # work_dir 内 or 未保存 → B-Name 期待パスへ save_as
-                if mode == MODE_PANEL and page is not None:
+                if mode == MODE_PANEL:
                     stem = getattr(context.scene, "bname_current_panel_stem", "")
-                    if paths.is_valid_panel_stem(stem):
+                    page_id = getattr(context.scene, "bname_current_panel_page_id", "")
+                    if paths.is_valid_panel_stem(stem) and paths.is_valid_page_id(page_id):
                         index = int(stem.split("_", 1)[1])
                         saved_blend = blend_io.save_panel_blend(
-                            work_dir, page.id, index
+                            work_dir, page_id, index
                         )
                         if saved_blend:
                             saved_path = str(
-                                paths.panel_blend_path(work_dir, page.id, index)
+                                paths.panel_blend_path(work_dir, page_id, index)
                             )
                 else:
                     saved_blend = blend_io.save_work_blend(work_dir)
@@ -355,6 +382,9 @@ class BNAME_OT_work_close(Operator):
         work.active_page_index = -1
         work.loaded = False
         work.work_dir = ""
+        set_mode(MODE_PAGE, context)
+        context.scene.bname_current_panel_stem = ""
+        context.scene.bname_current_panel_page_id = ""
         self.report({"INFO"}, "作品を閉じました")
         return {"FINISHED"}
 

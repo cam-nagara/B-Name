@@ -94,12 +94,14 @@ def save_local_preset(work_dir: Path, paper, name: str, description: str = "") -
     templates.mkdir(parents=True, exist_ok=True)
     safe_name = _sanitize_filename(name)
     out = templates / f"{safe_name}{PRESET_SUFFIX}"
+    paper_data = schema.paper_to_dict(paper)
+    paper_data["presetName"] = name
     data = {
         "schemaVersion": 1,
         "presetType": "paper",
         "presetName": name,
         "description": description,
-        "paper": schema.paper_to_dict(paper),
+        "paper": paper_data,
     }
     json_io.write_json(out, data)
     _logger.info("local preset saved: %s", out)

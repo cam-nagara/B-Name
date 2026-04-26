@@ -58,6 +58,7 @@ def _sync_active_from_blend_path(
     # work.blend 直下 → overview モード
     if len(parts) == 1 and parts[0] == paths.WORK_BLEND_NAME:
         scene.bname_current_panel_stem = ""
+        scene.bname_current_panel_page_id = ""
         set_mode(MODE_PAGE, bpy.context)
         return
 
@@ -76,6 +77,7 @@ def _sync_active_from_blend_path(
                     work.active_page_index = i
                     break
             scene.bname_current_panel_stem = stem
+            scene.bname_current_panel_page_id = page_id
             set_mode(MODE_PANEL, bpy.context)
             return
 
@@ -108,6 +110,22 @@ def _reload_all_pages_panels(work, work_dir: Path) -> None:
             )
 
 
+def sync_scene_work_from_disk(context, work_dir: Path):
+    """現在 scene の ``bname_work`` を disk 上の work/pages/page json に同期."""
+    from ..core.work import get_work
+    from ..io import page_io, work_io
+
+    work = get_work(context)
+    if work is None:
+        return None
+    work_io.load_work_json(work_dir, work)
+    page_io.load_pages_json(work_dir, work)
+    _reload_all_pages_panels(work, work_dir)
+    work.work_dir = str(Path(work_dir).resolve())
+    work.loaded = True
+    return work
+
+
 def _reconcile_gpencil_collections(context, work) -> None:
     """master GP / 紙メッシュ × pages の整合をとる (新仕様).
 
@@ -136,6 +154,7 @@ def _reconcile_gpencil_collections(context, work) -> None:
                 scene, page_entry.id,
                 float(work.paper.canvas_width_mm),
                 float(work.paper.canvas_height_mm),
+                work.paper.paper_color,
             )
         except Exception:  # noqa: BLE001
             _logger.exception(
@@ -159,9 +178,6 @@ def _bname_on_load_post(filepath_arg) -> None:  # signature: (str,) in Blender h
     """.blend ロード直後に B-Name 作品のメタ情報を再同期."""
     try:
         # 遅延 import: サブシステムの初期化順を回避
-        from ..core.work import get_work
-        from ..io import page_io, work_io
-
         scene = bpy.context.scene
         if scene is None:
             return
@@ -171,23 +187,23 @@ def _bname_on_load_post(filepath_arg) -> None:  # signature: (str,) in Blender h
         work_dir = _find_work_root(blend_path)
         if work_dir is None:
             return
-        work = get_work(bpy.context)
+        work = sync_scene_work_from_disk(bpy.context, work_dir)
         if work is None:
             return
         try:
-            work_io.load_work_json(work_dir, work)
-            page_io.load_pages_json(work_dir, work)
-            # 全ページの panels を各 page.json から再ロード
-            # (他ページの panels が古い Scene キャッシュで上書きされる事故を防ぐ)
-            _reload_all_pages_panels(work, work_dir)
+            work.work_dir = str(work_dir.resolve())
+            work.loaded = True
         except Exception:  # noqa: BLE001
             _logger.exception("load_post: failed to sync work/pages json")
             return
-        work.work_dir = str(work_dir.resolve())
-        work.loaded = True
         _sync_active_from_blend_path(scene, work, work_dir, blend_path)
-        # work.blend を開いた場合のみ GP×ページ整合を確認・grid 再配置 +
-        # 旧バージョンで白く書き換えられた可能性のある solid 背景色をテーマ既定に戻す
+        try:
+            from ..operators import preset_op
+
+            preset_op.sync_paper_preset_selector(bpy.context)
+        except Exception:  # noqa: BLE001
+            _logger.exception("load_post: preset selector sync failed")
+        # work.blend / panel.blend ごとに Scene の整合を補正する。
         try:
             rel = blend_path.resolve().relative_to(work_dir.resolve())
             if len(rel.parts) == 1 and rel.parts[0] == paths.WORK_BLEND_NAME:
@@ -201,6 +217,18 @@ def _bname_on_load_post(filepath_arg) -> None:  # signature: (str,) in Blender h
                     _logger.exception(
                         "load_post: shading/background reset failed"
                     )
+            elif (
+                len(rel.parts) == 4
+                and rel.parts[0] == paths.PAGES_DIR_NAME
+                and rel.parts[2] == paths.PANELS_DIR_NAME
+                and rel.parts[3].endswith(".blend")
+            ):
+                from . import panel_scene
+                from ..ui import overlay as _overlay
+
+                panel_scene.prepare_panel_blend_scene(bpy.context)
+                _overlay.reset_viewport_background_to_theme(bpy.context)
+                _overlay.apply_bname_shading_mode(bpy.context)
         except ValueError:
             pass
         _logger.info("B-Name: load_post synced for %s", blend_path)

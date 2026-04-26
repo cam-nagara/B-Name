@@ -33,6 +33,9 @@ _logger = log.get_logger(__name__)
 
 
 COLOR_CUT_LINE = (1.0, 0.1, 0.1, 0.95)
+NAV_GIZMO_HITBOX_WIDTH_PX = 112.0
+NAV_GIZMO_HITBOX_HEIGHT_PX = 232.0
+NAV_GIZMO_HITBOX_MARGIN_PX = 8.0
 
 
 def _find_view3d(context):
@@ -410,13 +413,9 @@ class BNAME_OT_panel_knife_cut(Operator):
     @classmethod
     def poll(cls, context):
         work = get_work(context)
-        return work is not None and work.loaded and context.area is not None
+        return work is not None and work.loaded
 
     def invoke(self, context, event):
-        # 3D View 以外で押されたら他のショートカットに譲る (Window kc 経由で
-        # 全エリアから発火するため、ここで area タイプを判定して反応させる)
-        if context.area is None or context.area.type != "VIEW_3D":
-            return {"PASS_THROUGH"}
         target = _find_view3d(context)
         if target is None:
             return {"PASS_THROUGH"}
@@ -438,6 +437,7 @@ class BNAME_OT_panel_knife_cut(Operator):
         self._dragging = False
         self._cut_count_total = 0
         self._externally_finished = False
+        self._navigation_drag_passthrough = False
 
         # POST_PIXEL でラバーバンドを描画
         self._draw_handler = bpy.types.SpaceView3D.draw_handler_add(
@@ -486,6 +486,24 @@ class BNAME_OT_panel_knife_cut(Operator):
         region = self._region_at_mouse(ev)
         return region is not None and region.type == "WINDOW" and region == self._region
 
+    def _is_over_navigation_gizmo(self, ev) -> bool:
+        if not self._is_inside_region(ev):
+            return False
+        prefs_view = getattr(getattr(bpy.context, "preferences", None), "view", None)
+        if prefs_view is not None and not bool(getattr(prefs_view, "show_navigate_ui", True)):
+            return False
+        space = getattr(self._area.spaces, "active", None)
+        if space is not None:
+            if not bool(getattr(space, "show_gizmo", True)):
+                return False
+            if not bool(getattr(space, "show_gizmo_navigate", True)):
+                return False
+        mx, my = self._to_window(ev)
+        return (
+            mx >= self._region.width - NAV_GIZMO_HITBOX_WIDTH_PX - NAV_GIZMO_HITBOX_MARGIN_PX
+            and my >= self._region.height - NAV_GIZMO_HITBOX_HEIGHT_PX - NAV_GIZMO_HITBOX_MARGIN_PX
+        )
+
     def _tag_redraw(self) -> None:
         if self._region is not None:
             self._region.tag_redraw()
@@ -512,26 +530,33 @@ class BNAME_OT_panel_knife_cut(Operator):
         if getattr(self, "_externally_finished", False):
             panel_modal_state.clear_active("knife_cut", self)
             return {"FINISHED", "PASS_THROUGH"}
+        if getattr(self, "_navigation_drag_passthrough", False):
+            if event.type == "LEFTMOUSE" and event.value == "RELEASE":
+                self._navigation_drag_passthrough = False
+            return {"PASS_THROUGH"}
         # Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y は modal 保持中の PropertyGroup 参照を
         # stale 化させて C レベル crash を起こすため、検知したら即終了して譲る。
         if event.value == "PRESS" and event.type in {"Z", "Y"} and event.ctrl:
             self.finish_from_external(context, keep_selection=False)
             return {"FINISHED", "PASS_THROUGH"}
 
-        # B-Name のモード/ツール切替ショートカットが押されたら modal を終了して譲る
-        # (修飾なしの単独キーのみ。Shift は軸ロックに使うので除外せず判定しない)
         if (
             event.value == "PRESS"
-            and event.type in {"O", "P", "G", "COMMA", "PERIOD"}
+            and event.type == "G"
             and not event.ctrl
             and not event.alt
+            and not event.shift
         ):
             if not self._is_inside_region(event):
                 return {"PASS_THROUGH"}
             self.finish_from_external(context, keep_selection=False)
-            return {"FINISHED", "PASS_THROUGH"}
+            try:
+                with context.temp_override(area=self._area, region=self._region):
+                    bpy.ops.bname.panel_edge_move("INVOKE_DEFAULT")
+            except Exception:  # noqa: BLE001
+                _logger.exception("knife_cut: failed to switch to edge_move")
+            return {"FINISHED"}
 
-        # F (自分自身) を modal 中に押されたら consume (= 二重起動を防ぐ)
         if (
             event.value == "PRESS"
             and event.type == "F"
@@ -541,9 +566,24 @@ class BNAME_OT_panel_knife_cut(Operator):
         ):
             if not self._is_inside_region(event):
                 return {"PASS_THROUGH"}
-            return {"RUNNING_MODAL"}
+            self.finish_from_external(context, keep_selection=False)
+            return {"FINISHED"}
+
+        # B-Name のモード切替ショートカットが押されたら modal を終了して譲る。
+        if (
+            event.value == "PRESS"
+            and event.type in {"O", "P", "COMMA", "PERIOD"}
+            and not event.ctrl
+            and not event.alt
+        ):
+            if not self._is_inside_region(event):
+                return {"PASS_THROUGH"}
+            self.finish_from_external(context, keep_selection=False)
+            return {"FINISHED", "PASS_THROUGH"}
 
         if event.type == "MOUSEMOVE":
+            if not self._dragging and self._is_over_navigation_gizmo(event):
+                return {"PASS_THROUGH"}
             if not self._dragging and not self._is_inside_region(event):
                 return {"PASS_THROUGH"}
             if self._dragging:
@@ -553,6 +593,9 @@ class BNAME_OT_panel_knife_cut(Operator):
 
         if event.type == "LEFTMOUSE":
             if event.value == "PRESS":
+                if self._is_over_navigation_gizmo(event):
+                    self._navigation_drag_passthrough = True
+                    return {"PASS_THROUGH"}
                 if not self._is_inside_region(event):
                     return {"PASS_THROUGH"}
                 self._p1_px = self._to_window(event)

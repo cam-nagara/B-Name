@@ -129,20 +129,10 @@ class BNAME_PT_panels(Panel):
         op = row.operator("bname.panel_z_order", text="最前面", icon="TRIA_UP_BAR")
         op.direction = "FRONT"
 
-        # 分割テンプレート
+        # 枠線系ツール
         box = layout.box()
-        box.label(text="分割テンプレート")
+        box.label(text="枠線ツール")
         box.operator("bname.panel_split_template", text="縦横均等分割", icon="GRID")
-
-        # 枠線カットツール (選択中コマを 2 つに分割)
-        box = layout.box()
-        box.label(text="枠線カット (選択中コマを分割)")
-        row = box.row(align=True)
-        op = row.operator("bname.panel_cut", text="水平カット (上下)", icon="SNAP_EDGE")
-        op.axis = 0
-        op = row.operator("bname.panel_cut", text="垂直カット (左右)", icon="SNAP_MIDPOINT")
-        op.axis = 1
-        # 枠線カットツール (CSP 互換: 任意角度・複数コマ・連続カット)
         box.operator(
             "bname.panel_knife_cut",
             text="枠線カットツール (F)",

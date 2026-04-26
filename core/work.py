@@ -106,6 +106,15 @@ def get_active_page(context: bpy.types.Context | None = None) -> BNamePageEntry 
     return work.pages[idx]
 
 
+def find_page_by_id(work: BNameWorkData | None, page_id: str) -> BNamePageEntry | None:
+    if work is None or not work.loaded or not page_id:
+        return None
+    for page in work.pages:
+        if getattr(page, "id", "") == page_id:
+            return page
+    return None
+
+
 _CLASSES = (
     BNamePanelGap,
     BNameWorkData,

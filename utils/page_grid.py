@@ -20,23 +20,23 @@ from .geom import mm_to_m
 _logger = log.get_logger(__name__)
 
 
-def _logical_slot_index(page_index: int, start_side: str = "right") -> int:
+def _logical_slot_index(
+    page_index: int,
+    start_side: str = "right",
+    read_direction: str = "left",
+) -> int:
     """見開きスロット index (= 「1 ページ目の逆側の空白」分の補正込み).
 
-    start_side="right" (日本マンガ): page1 は「最初の論理見開きの右半分」.
-      左半分 (slot 0) は空白扱い。slot = page_index + 1
-        page_index=0 → slot 1 (右), page_index=1 → slot 2 (左, 見開み 2 開始),
-        page_index=2 → slot 3 (右), ...
-    start_side="left" (西洋本): page1 は「最初の論理見開きの左半分」.
-      右半分 (slot 1) は空白扱い。page_index=0 だけ slot 0、以降は slot=page_index+1.
-        page_index=0 → slot 0 (左), page_index=1 → slot 2 (左, 見開み 2 開始),
-        page_index=2 → slot 3 (右), page_index=3 → slot 4 (左), ...
-      これにより 2 ページ目以降が「次の論理見開きの左半分」から始まる。
+    1 ページ目だけは ``start_side`` と ``read_direction`` の組み合わせに応じて、
+    物理的な左/右位置が期待どおりになるスロットへ置く。反対側は空白扱いにし、
+    2 ページ目以降は常に ``page_index + 1`` へ進める。
     """
-    if start_side == "left":
-        if page_index <= 0:
-            return 0
-        return page_index + 1
+    if page_index <= 0:
+        first_page_is_slot0 = (
+            (start_side == "right" and read_direction == "left")
+            or (start_side == "left" and read_direction == "right")
+        )
+        return 0 if first_page_is_slot0 else 1
     return page_index + 1
 
 
@@ -52,11 +52,11 @@ def is_left_half_page(page_index: int, start_side: str = "right",
       - "left"  (日本マンガ): col 増加 = 画面左へ進む → c=0 が物理右、c=1 が物理左
 
     例: 日本マンガ (start_side="right", read_direction="left") の場合
-      - page 1 (slot 1, c=1): 物理左判定だが空白の隣で実質単独右ページとして扱う
-      - page 2 (slot 2, c=0): 物理右 = ペアの右ページ
-      - page 3 (slot 3, c=1): 物理左 = ペアの左ページ
+      - page 1 (slot 0, c=0): 物理右 = 単独右ページ
+      - page 2 (slot 2, c=0): 物理右 = 次の見開きの右ページ
+      - page 3 (slot 3, c=1): 物理左 = 次の見開きの左ページ
     """
-    slot = _logical_slot_index(page_index, start_side)
+    slot = _logical_slot_index(page_index, start_side, read_direction)
     c_in_pair = slot % 2
     if read_direction == "right":
         return c_in_pair == 0
@@ -91,7 +91,7 @@ def page_grid_offset_mm(
         # 縦スクロール: 全ページが 1 列に並ぶ。見開きの概念は無視。
         return (0.0, -page_index * (canvas_height_mm + gap_mm))
 
-    slot = _logical_slot_index(page_index, start_side)
+    slot = _logical_slot_index(page_index, start_side, read_direction)
     col = slot % cols
     row = slot // cols
     # X 方向は「列 c=0..col-1 の幅 + ペア境界 gap」を累積

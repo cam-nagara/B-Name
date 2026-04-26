@@ -9,7 +9,7 @@ from bpy.props import EnumProperty, StringProperty
 from bpy.types import Operator
 
 from ..core.work import get_work
-from ..io import presets
+from ..io import presets, work_io
 from ..utils import log
 
 _logger = log.get_logger(__name__)
@@ -19,6 +19,7 @@ _logger = log.get_logger(__name__)
 # GC でクラッシュすることがある (公式既知の不具合)。モジュールレベルで
 # キャッシュを保持して回避する。
 _PRESET_ENUM_CACHE: list[tuple[str, str, str]] = []
+_SUPPRESS_SELECTOR_UPDATE = False
 
 
 def _preset_enum_items(_self, context):
@@ -37,6 +38,9 @@ def _preset_enum_items(_self, context):
 
 def _on_paper_preset_selector_change(self, context):
     """WindowManager.bname_paper_preset_selector の変更時に用紙プリセットを即時適用."""
+    global _SUPPRESS_SELECTOR_UPDATE
+    if _SUPPRESS_SELECTOR_UPDATE:
+        return
     name = getattr(self, "bname_paper_preset_selector", "")
     if not name:
         return
@@ -49,6 +53,34 @@ def _on_paper_preset_selector_change(self, context):
         return
     presets.apply_preset_to_paper(preset, work.paper)
     _logger.info("paper preset applied via selector: %s", preset.name)
+
+
+def sync_paper_preset_selector(context) -> None:
+    """現在の ``work.paper.preset_name`` に selector を合わせる."""
+    global _SUPPRESS_SELECTOR_UPDATE
+
+    work = get_work(context)
+    if not (work and work.loaded):
+        return
+    name = (getattr(work.paper, "preset_name", "") or "").strip()
+    if not name:
+        return
+    work_dir = Path(work.work_dir) if work.work_dir else None
+    preset = presets.load_preset_by_name(name, work_dir)
+    if preset is None:
+        return
+    wm = getattr(context, "window_manager", None)
+    if wm is None or not hasattr(wm, "bname_paper_preset_selector"):
+        return
+    cur = getattr(wm, "bname_paper_preset_selector", "")
+    if cur == name:
+        return
+    _preset_enum_items(None, context)
+    _SUPPRESS_SELECTOR_UPDATE = True
+    try:
+        wm.bname_paper_preset_selector = name
+    finally:
+        _SUPPRESS_SELECTOR_UPDATE = False
 
 
 class BNAME_OT_paper_preset_apply(Operator):
@@ -81,6 +113,7 @@ class BNAME_OT_paper_preset_apply(Operator):
             self.report({"ERROR"}, f"プリセットが見つかりません: {self.preset_name}")
             return {"CANCELLED"}
         presets.apply_preset_to_paper(preset, work.paper)
+        sync_paper_preset_selector(context)
         self.report({"INFO"}, f"プリセット適用: {preset.name}")
         return {"FINISHED"}
 
@@ -126,6 +159,12 @@ class BNAME_OT_paper_preset_save_local(Operator):
             self.report({"ERROR"}, f"保存失敗: {exc}")
             return {"CANCELLED"}
         work.paper.preset_name = self.preset_name
+        try:
+            sync_paper_preset_selector(context)
+            work_io.save_work_json(work_dir, work)
+        except Exception as exc:  # noqa: BLE001
+            _logger.exception("preset_save_local post-save sync failed")
+            self.report({"WARNING"}, f"プリセット保存後の同期に失敗: {exc}")
         self.report({"INFO"}, f"ローカルプリセット保存: {out.name}")
         return {"FINISHED"}
 

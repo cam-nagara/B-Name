@@ -6,7 +6,7 @@ import bpy
 from bpy.types import Panel
 
 from ..core.work import get_active_page
-from .edge_style_ui import draw_selected_edge_style_box
+from .edge_style_ui import draw_selected_edge_style_box, get_selected_panel_entry
 
 B_NAME_CATEGORY = "B-Name"
 
@@ -19,6 +19,13 @@ def _get_active_panel(context):
     if not (0 <= idx < len(page.panels)):
         return None
     return page.panels[idx]
+
+
+def _get_border_target_panel(context):
+    selected = get_selected_panel_entry(context)
+    if selected is not None:
+        return selected
+    return _get_active_panel(context)
 
 
 class BNAME_PT_panel_shape(Panel):
@@ -84,18 +91,16 @@ class BNAME_PT_panel_border(Panel):
 
     @classmethod
     def poll(cls, context):
-        if _get_active_panel(context) is not None:
-            return True
-        return getattr(context.window_manager, "bname_edge_select_kind", "none") != "none"
+        return _get_border_target_panel(context) is not None
 
     def draw_header(self, context):
-        entry = _get_active_panel(context)
+        entry = _get_border_target_panel(context)
         if entry is not None:
             self.layout.prop(entry.border, "visible", text="")
 
     def draw(self, context):
         layout = self.layout
-        entry = _get_active_panel(context)
+        entry = _get_border_target_panel(context)
         if entry is not None:
             b = entry.border
             content = layout.column()

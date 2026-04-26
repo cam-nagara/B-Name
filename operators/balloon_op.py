@@ -90,7 +90,11 @@ def _resolve_page_from_event(context, event):
                 gap = float(getattr(scene, "bname_overview_gap_mm", 30.0))
                 cw = work.paper.canvas_width_mm
                 ch = work.paper.canvas_height_mm
-                ox, oy = page_grid.page_grid_offset_mm(page_idx, cols, gap, cw, ch)
+                start_side = getattr(work.paper, "start_side", "right")
+                read_direction = getattr(work.paper, "read_direction", "left")
+                ox, oy = page_grid.page_grid_offset_mm(
+                    page_idx, cols, gap, cw, ch, start_side, read_direction
+                )
                 return work, page, x_mm - ox, y_mm - oy
             return work, page, None, None
     return work, page, None, None

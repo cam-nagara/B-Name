@@ -36,6 +36,10 @@ def register() -> None:
         name="現在編集中のコマ stem",
         default="",
     )
+    bpy.types.Scene.bname_current_panel_page_id = StringProperty(
+        name="現在編集中のコマ page_id",
+        default="",
+    )
     _logger.debug("mode registered")
 
 
@@ -46,6 +50,10 @@ def unregister() -> None:
         pass
     try:
         del bpy.types.Scene.bname_current_panel_stem
+    except AttributeError:
+        pass
+    try:
+        del bpy.types.Scene.bname_current_panel_page_id
     except AttributeError:
         pass
 

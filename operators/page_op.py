@@ -14,7 +14,7 @@ import bpy
 from bpy.props import IntProperty
 from bpy.types import Operator
 
-from ..core.mode import MODE_PAGE, set_mode
+from ..core.mode import MODE_PAGE, get_mode, set_mode
 from ..core.work import get_work
 from ..io import page_io
 from ..utils import gpencil as gp_utils
@@ -40,7 +40,7 @@ class BNAME_OT_page_add(Operator):
     @classmethod
     def poll(cls, context):
         w = get_work(context)
-        return bool(w and w.loaded)
+        return bool(w and w.loaded and get_mode(context) == MODE_PAGE)
 
     def execute(self, context):
         work = get_work(context)
@@ -78,7 +78,10 @@ class BNAME_OT_page_remove(Operator):
     @classmethod
     def poll(cls, context):
         w = get_work(context)
-        return bool(w and w.loaded and 0 <= w.active_page_index < len(w.pages))
+        return bool(
+            w and w.loaded and get_mode(context) == MODE_PAGE
+            and 0 <= w.active_page_index < len(w.pages)
+        )
 
     def invoke(self, context, event):
         return context.window_manager.invoke_confirm(self, event)
@@ -125,7 +128,10 @@ class BNAME_OT_page_duplicate(Operator):
     @classmethod
     def poll(cls, context):
         w = get_work(context)
-        return bool(w and w.loaded and 0 <= w.active_page_index < len(w.pages))
+        return bool(
+            w and w.loaded and get_mode(context) == MODE_PAGE
+            and 0 <= w.active_page_index < len(w.pages)
+        )
 
     def execute(self, context):
         work = get_work(context)
@@ -183,7 +189,10 @@ class BNAME_OT_page_move(Operator):
     @classmethod
     def poll(cls, context):
         w = get_work(context)
-        return bool(w and w.loaded and 0 <= w.active_page_index < len(w.pages))
+        return bool(
+            w and w.loaded and get_mode(context) == MODE_PAGE
+            and 0 <= w.active_page_index < len(w.pages)
+        )
 
     def execute(self, context):
         work = get_work(context)
@@ -218,6 +227,7 @@ def _switch_to_page(context, work, work_dir: Path, new_index: int) -> bool:
     work.active_page_index = new_index
     set_mode(MODE_PAGE, context)
     context.scene.bname_current_panel_stem = ""
+    context.scene.bname_current_panel_page_id = ""
     return True
 
 
@@ -232,7 +242,12 @@ class BNAME_OT_page_select(Operator):
 
     def execute(self, context):
         work = get_work(context)
-        if work is None or not work.loaded or not work.work_dir:
+        if (
+            work is None
+            or not work.loaded
+            or not work.work_dir
+            or get_mode(context) != MODE_PAGE
+        ):
             return {"CANCELLED"}
         if not (0 <= self.index < len(work.pages)):
             return {"CANCELLED"}

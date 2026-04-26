@@ -44,6 +44,38 @@ _READ_DIRECTION_ITEMS = (
 )
 
 
+def _tag_view3d_redraw(context) -> None:
+    screen = getattr(context, "screen", None) if context is not None else None
+    if screen is None:
+        return
+    for area in screen.areas:
+        if area.type == "VIEW_3D":
+            area.tag_redraw()
+
+
+def _on_paper_visual_changed(_self, context) -> None:
+    try:
+        from ..utils import gpencil as gp_utils
+
+        gp_utils.sync_paper_material_color(getattr(_self, "paper_color", None))
+    except Exception:  # noqa: BLE001
+        pass
+    _tag_view3d_redraw(context)
+
+
+def _on_paper_layout_changed(_self, context) -> None:
+    try:
+        from ..core.work import get_work
+        from ..utils import page_grid
+
+        work = get_work(context)
+        if work is not None and work.loaded:
+            page_grid.apply_page_collection_transforms(context, work)
+    except Exception:  # noqa: BLE001
+        pass
+    _tag_view3d_redraw(context)
+
+
 class BNamePaperSettings(bpy.types.PropertyGroup):
     """用紙寸法・解像度・基本枠・セーフライン設定."""
 
@@ -178,6 +210,7 @@ class BNamePaperSettings(bpy.types.PropertyGroup):
         default=(1.0, 1.0, 1.0, 1.0),
         min=0.0,
         max=1.0,
+        update=_on_paper_visual_changed,
     )
     display_alpha: FloatProperty(  # type: ignore[valid-type]
         name="紙面表示アルファ",
@@ -198,13 +231,15 @@ class BNamePaperSettings(bpy.types.PropertyGroup):
         name="開始ページの位置",
         description="1 ページ目が見開きの左右どちらに来るか",
         items=_START_SIDE_ITEMS,
-        default="right",
+        default="left",
+        update=_on_paper_layout_changed,
     )
     read_direction: EnumProperty(  # type: ignore[valid-type]
         name="読む方向",
         description="overview で次の見開きペアが置かれる方向",
         items=_READ_DIRECTION_ITEMS,
         default="left",
+        update=_on_paper_layout_changed,
     )
 
     # --- プリセット参照 ---

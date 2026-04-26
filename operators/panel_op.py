@@ -11,6 +11,8 @@ from bpy.types import Operator
 from ..core.work import get_active_page, get_work
 from ..io import page_io, panel_io, schema
 from ..utils import log, paths
+from .panel_knife_cut_op import _panel_polygon, _polygon_area, _set_panel_polygon, _split_convex_polygon_by_line
+from . import panel_modal_state
 
 _logger = log.get_logger(__name__)
 
@@ -31,6 +33,123 @@ def _save_page_and_pages(work, page, work_dir: Path) -> None:
     page_io.save_page_json(work_dir, page)
     page.panel_count = len(page.panels)
     page_io.save_pages_json(work_dir, work)
+
+
+def _selected_edge_panel_target(context):
+    wm = context.window_manager
+    if getattr(wm, "bname_edge_select_kind", "none") == "none":
+        return None
+    work = get_work(context)
+    if work is None or not work.loaded:
+        return None
+    page_index = int(getattr(wm, "bname_edge_select_page", -1))
+    panel_index = int(getattr(wm, "bname_edge_select_panel", -1))
+    if not (0 <= page_index < len(work.pages)):
+        return None
+    page = work.pages[page_index]
+    if not (0 <= panel_index < len(page.panels)):
+        return None
+    return work, page_index, page, panel_index, page.panels[panel_index]
+
+
+def _require_target_panel(op: Operator, context):
+    selected = _selected_edge_panel_target(context)
+    if selected is not None:
+        work, page_index, page, panel_index, panel = selected
+        work.active_page_index = page_index
+        page.active_panel_index = panel_index
+        return work, page_index, page, panel_index, panel, True
+
+    work = get_work(context)
+    page = get_active_page(context)
+    if work is None or not work.loaded or page is None:
+        op.report({"ERROR"}, "作品 / コマが選択されていません")
+        return None
+    panel_index = int(page.active_panel_index)
+    if not (0 <= panel_index < len(page.panels)):
+        op.report({"ERROR"}, "コマが選択されていません")
+        return None
+    page_index = int(work.active_page_index)
+    return work, page_index, page, panel_index, page.panels[panel_index], False
+
+
+def _set_edge_selection(context, *, kind: str, page_index: int, panel_index: int) -> None:
+    wm = context.window_manager
+    wm.bname_edge_select_kind = kind
+    wm.bname_edge_select_page = int(page_index)
+    wm.bname_edge_select_panel = int(panel_index)
+    wm.bname_edge_select_edge = -1
+    wm.bname_edge_select_vertex = -1
+
+
+def _panel_bounds_mm(poly: list[tuple[float, float]]) -> tuple[float, float, float, float] | None:
+    if len(poly) < 3:
+        return None
+    xs = [p[0] for p in poly]
+    ys = [p[1] for p in poly]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _split_polygon_grid(
+    poly: list[tuple[float, float]],
+    rows: int,
+    cols: int,
+    gap_v: float,
+    gap_h: float,
+) -> tuple[list[list[list[tuple[float, float]]]], float, float] | None:
+    bounds = _panel_bounds_mm(poly)
+    if bounds is None:
+        return None
+    min_x, min_y, max_x, max_y = bounds
+    total_gap_w = gap_h * (cols - 1)
+    total_gap_h = gap_v * (rows - 1)
+    width = max_x - min_x
+    height = max_y - min_y
+    cell_w = (width - total_gap_w) / cols
+    cell_h = (height - total_gap_h) / rows
+    if cell_w <= 0.0 or cell_h <= 0.0:
+        return None
+
+    columns: list[list[tuple[float, float]]] = []
+    remaining = list(poly)
+    for c in range(cols - 1):
+        x_cut = min_x + (c + 1) * cell_w + (c + 0.5) * gap_h
+        split = _split_convex_polygon_by_line(
+            remaining,
+            (x_cut, min_y - 1.0),
+            (x_cut, max_y + 1.0),
+            gap_mm=gap_h,
+        )
+        if split is None:
+            return None
+        right_poly, left_poly = split
+        if _polygon_area(left_poly) < 0.01 or _polygon_area(right_poly) < 0.01:
+            return None
+        columns.append(left_poly)
+        remaining = right_poly
+    columns.append(remaining)
+
+    grid: list[list[list[tuple[float, float]]]] = []
+    for col_poly in columns:
+        bottoms: list[list[tuple[float, float]]] = []
+        remaining_col = col_poly
+        for r in range(rows - 1):
+            y_cut = min_y + (r + 1) * cell_h + (r + 0.5) * gap_v
+            split = _split_convex_polygon_by_line(
+                remaining_col,
+                (min_x - 1.0, y_cut),
+                (max_x + 1.0, y_cut),
+                gap_mm=gap_v,
+            )
+            if split is None:
+                return None
+            bottom_poly, top_poly = split
+            if _polygon_area(bottom_poly) < 0.01 or _polygon_area(top_poly) < 0.01:
+                return None
+            bottoms.append(bottom_poly)
+            remaining_col = top_poly
+        grid.append([remaining_col] + list(reversed(bottoms)))
+    return grid, cell_w, cell_h
 
 
 # ---------- コマ生成ヘルパ (page_op などから再利用) ----------
@@ -378,7 +497,7 @@ class BNAME_OT_panel_z_order(Operator):
 
 
 class BNAME_OT_panel_split_template(Operator):
-    """基本枠を縦 / 横に均等分割してコマを一括生成."""
+    """選択中コマを縦横に均等分割して置き換える."""
 
     bl_idname = "bname.panel_split_template"
     bl_label = "分割テンプレートで一括生成"
@@ -387,67 +506,143 @@ class BNAME_OT_panel_split_template(Operator):
     rows: IntProperty(name="行数", default=3, min=1, soft_max=10)  # type: ignore[valid-type]
     cols: IntProperty(name="列数", default=2, min=1, soft_max=10)  # type: ignore[valid-type]
     clear_existing: BoolProperty(  # type: ignore[valid-type]
-        name="既存コマを削除",
-        description="ON で現在のページのコマを全削除してから生成",
-        default=False,
+        name="元コマを削除",
+        description="ON で選択中コマを削除してから分割結果に置き換える",
+        default=True,
     )
+    target_page_id: StringProperty(default="", options={"HIDDEN"})  # type: ignore[valid-type]
+    target_panel_index: IntProperty(default=-1, options={"HIDDEN"})  # type: ignore[valid-type]
+    target_from_edge_selection: BoolProperty(default=False, options={"HIDDEN"})  # type: ignore[valid-type]
 
     @classmethod
     def poll(cls, context):
-        return get_active_page(context) is not None
+        work = get_work(context)
+        if work is None or not work.loaded:
+            return False
+        if _selected_edge_panel_target(context) is not None:
+            return True
+        page = get_active_page(context)
+        return page is not None and 0 <= page.active_panel_index < len(page.panels)
 
     def invoke(self, context, event):
+        target = _require_target_panel(self, context)
+        if target is None:
+            return {"CANCELLED"}
+        work, page_index, page, panel_index, panel, from_edge = target
+        if panel.shape_type not in {"rect", "polygon"}:
+            self.report({"WARNING"}, "矩形または多角形コマを選択してください")
+            return {"CANCELLED"}
+        self.target_page_id = page.id
+        self.target_panel_index = panel_index
+        self.target_from_edge_selection = from_edge
+        work.active_page_index = page_index
+        page.active_panel_index = panel_index
+        panel_modal_state.finish_active("knife_cut", context, keep_selection=False)
+        panel_modal_state.finish_active("edge_move", context, keep_selection=True)
         return context.window_manager.invoke_props_dialog(self)
 
     def execute(self, context):
-        work, page = _require_active_page(self, context)
+        work = get_work(context)
+        if work is None or not work.loaded:
+            return {"CANCELLED"}
+        page = None
+        page_index = -1
+        for i, page_entry in enumerate(work.pages):
+            if page_entry.id == self.target_page_id:
+                page = page_entry
+                page_index = i
+                break
         if page is None:
+            target = _require_target_panel(self, context)
+            if target is None:
+                return {"CANCELLED"}
+            work, page_index, page, self.target_panel_index, _panel, self.target_from_edge_selection = target
+            self.target_page_id = page.id
+        if not (0 <= self.target_panel_index < len(page.panels)):
+            self.report({"ERROR"}, "分割対象のコマが見つかりません")
+            return {"CANCELLED"}
+        src = page.panels[self.target_panel_index]
+        if src.shape_type not in {"rect", "polygon"}:
+            self.report({"WARNING"}, "矩形または多角形コマを選択してください")
             return {"CANCELLED"}
         work_dir = Path(work.work_dir)
-        p = work.paper
-        # 基本枠の矩形
-        inner_x = (p.canvas_width_mm - p.inner_frame_width_mm) / 2.0 + p.inner_frame_offset_x_mm
-        inner_y = (p.canvas_height_mm - p.inner_frame_height_mm) / 2.0 + p.inner_frame_offset_y_mm
+        panel_modal_state.finish_active("knife_cut", context, keep_selection=False)
+        panel_modal_state.finish_active("edge_move", context, keep_selection=True)
         gap_v = work.panel_gap.vertical_mm
         gap_h = work.panel_gap.horizontal_mm
         rows, cols = self.rows, self.cols
-        # 枠内有効幅/高さから gap を引いて分割
-        total_gap_w = gap_h * (cols - 1)
-        total_gap_h = gap_v * (rows - 1)
-        cell_w = (p.inner_frame_width_mm - total_gap_w) / cols
-        cell_h = (p.inner_frame_height_mm - total_gap_h) / rows
+        src_title = src.title
+        src_z = int(src.z_order)
+        src_template = schema.panel_entry_to_dict(src)
+        insert_z_base = src_z if self.clear_existing else (
+            max((p.z_order for p in page.panels), default=-1) + 1
+        )
+        src_poly = _panel_polygon(src)
+        if src.shape_type == "rect":
+            total_gap_w = gap_h * (cols - 1)
+            total_gap_h = gap_v * (rows - 1)
+            cell_w = (float(src.rect_width_mm) - total_gap_w) / cols
+            cell_h = (float(src.rect_height_mm) - total_gap_h) / rows
+            if cell_w <= 0.0 or cell_h <= 0.0:
+                self.report({"ERROR"}, "コマが小さすぎるため、この分割数では作成できません")
+                return {"CANCELLED"}
+            inner_x = float(src.rect_x_mm)
+            inner_y = float(src.rect_y_mm)
+            split_grid = None
+        else:
+            split_result = _split_polygon_grid(src_poly, rows, cols, gap_v, gap_h)
+            if split_result is None:
+                self.report({"ERROR"}, "この多角形コマは均等分割できません")
+                return {"CANCELLED"}
+            split_grid, cell_w, cell_h = split_result
 
         try:
             if self.clear_existing:
-                # 既存コマとファイルを削除
-                for entry in list(page.panels):
-                    panel_io.remove_panel_files(work_dir, page.id, entry.panel_stem)
-                page.panels.clear()
-                page.active_panel_index = -1
+                panel_io.remove_panel_files(work_dir, page.id, src.panel_stem)
+                page.panels.remove(self.target_panel_index)
+                if len(page.panels) == 0:
+                    page.active_panel_index = -1
+                elif self.target_panel_index >= len(page.panels):
+                    page.active_panel_index = len(page.panels) - 1
 
+            first_new_index = len(page.panels)
             # 行は上から下へ (漫画は右→左の読み順だが、ここでは配列順のみ)
             for r in range(rows):
                 for c in range(cols):
                     stem = panel_io.allocate_new_panel_stem(work_dir, page.id)
                     entry = page.panels.add()
+                    schema.panel_entry_from_dict(entry, src_template)
                     entry.panel_stem = stem
                     entry.id = stem.split("_", 1)[1]
-                    entry.title = f"{r + 1}-{c + 1}"
-                    entry.shape_type = "rect"
-                    entry.rect_x_mm = inner_x + c * (cell_w + gap_h)
-                    entry.rect_y_mm = (
-                        inner_y + (rows - 1 - r) * (cell_h + gap_v)
-                    )
-                    entry.rect_width_mm = cell_w
-                    entry.rect_height_mm = cell_h
-                    entry.z_order = r * cols + c
+                    entry.title = f"{src_title} {r + 1}-{c + 1}"
+                    if split_grid is None:
+                        entry.shape_type = "rect"
+                        entry.vertices.clear()
+                        entry.rect_x_mm = inner_x + c * (cell_w + gap_h)
+                        entry.rect_y_mm = (
+                            inner_y + (rows - 1 - r) * (cell_h + gap_v)
+                        )
+                        entry.rect_width_mm = cell_w
+                        entry.rect_height_mm = cell_h
+                    else:
+                        _set_panel_polygon(entry, split_grid[c][r])
+                        entry.edge_styles.clear()
+                    entry.z_order = insert_z_base + r * cols + c
                     panel_io.save_panel_meta(work_dir, page.id, entry)
-            page.active_panel_index = 0 if len(page.panels) else -1
+            page.active_panel_index = first_new_index if len(page.panels) > first_new_index else -1
+            work.active_page_index = page_index
             _save_page_and_pages(work, page, work_dir)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("panel_split_template failed")
             self.report({"ERROR"}, f"分割失敗: {exc}")
             return {"CANCELLED"}
+        if self.target_from_edge_selection and page.active_panel_index >= 0:
+            _set_edge_selection(
+                context,
+                kind="border",
+                page_index=page_index,
+                panel_index=page.active_panel_index,
+            )
         self.report({"INFO"}, f"分割: {rows}×{cols} = {rows * cols} コマ")
         return {"FINISHED"}
 

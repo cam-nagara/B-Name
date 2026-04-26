@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from ..ui import overlay_shared
-from ..utils import log
+from ..utils import border_geom, log, panel_preview
 from ..utils.geom import Rect, m_to_mm, mm_to_px, q_to_mm
 
 _logger = log.get_logger(__name__)
@@ -403,29 +403,7 @@ def _panel_content_group_path(entry) -> tuple[str, ...]:
 
 
 def _panel_preview_source(work_dir: Path, page_id: str, entry) -> Path | None:
-    from ..utils import paths as paths_mod
-
-    panel_index = None
-    stem = getattr(entry, "panel_stem", "")
-    if isinstance(stem, str) and stem.startswith("panel_"):
-        try:
-            panel_index = int(stem.split("_", 1)[1])
-        except (ValueError, IndexError):
-            panel_index = None
-    if panel_index is None:
-        try:
-            panel_index = int(entry.id)
-        except Exception:  # noqa: BLE001
-            panel_index = None
-    if panel_index is None:
-        return None
-    preview = paths_mod.panel_preview_path(work_dir, page_id, panel_index)
-    if preview.is_file():
-        return preview
-    thumb = paths_mod.panel_thumb_path(work_dir, page_id, panel_index)
-    if thumb.is_file():
-        return thumb
-    return None
+    return panel_preview.panel_preview_source_path(work_dir, page_id, entry)
 
 
 def _safe_load_image(path: Path) -> Any | None:
@@ -549,13 +527,36 @@ def _draw_panel_border_layer(entry, canvas_height_px: int, dpi: int) -> ExportLa
     if canvas is None:
         return None
     draw = ImageDraw.Draw(canvas.image)
-    poly_px = canvas.points_px(poly_mm)
     base_color = _rgb255(border.color)
     base_width = max(1, int(round(mm_to_px(float(border.width_mm), dpi))))
     override_map = {int(style.edge_index): style for style in entry.edge_styles}
     edge_overrides = []
     if entry.shape_type == "rect":
         edge_overrides = [border.edge_bottom, border.edge_right, border.edge_top, border.edge_left]
+    rect_edge_override = any(getattr(ov, "use_override", False) for ov in edge_overrides)
+    if (
+        len(entry.edge_styles) == 0
+        and not rect_edge_override
+        and getattr(border, "style", "solid") == "solid"
+    ):
+        path_mm = border_geom.styled_closed_path_mm(
+            poly_mm,
+            getattr(border, "corner_type", "square"),
+            float(getattr(border, "corner_radius_mm", 0.0)),
+        )
+        loops = border_geom.stroke_loops_mm(path_mm, float(border.width_mm))
+        if loops is not None:
+            outer_px = canvas.points_px(loops[0])
+            inner_px = canvas.points_px(loops[1])
+            for i in range(len(outer_px)):
+                j = (i + 1) % len(outer_px)
+                draw.polygon(
+                    [outer_px[i], outer_px[j], inner_px[j], inner_px[i]],
+                    fill=base_color,
+                )
+            return ExportLayer("border", canvas.image, canvas.left, canvas.top)
+
+    poly_px = canvas.points_px(poly_mm)
     for i in range(len(poly_px)):
         style_name = getattr(border, "style", "solid")
         color = base_color
@@ -1308,9 +1309,22 @@ def _render_gp_object_layers(
     layers = getattr(data, "layers", None)
     if layers is None:
         return out
+    try:
+        from ..utils import gpencil as gp_utils
+    except Exception:  # pragma: no cover - bpy unavailable outside Blender
+        gp_utils = None
     for layer in layers:
-        if bool(getattr(layer, "hide", False)):
-            continue
+        try:
+            hidden = (
+                gp_utils.layer_effectively_hidden(layer)
+                if gp_utils is not None
+                else bool(getattr(layer, "hide", False))
+            )
+            if hidden:
+                continue
+        except Exception:  # noqa: BLE001
+            if bool(getattr(layer, "hide", False)):
+                continue
         frame = _gp_layer_frame(layer)
         drawing = getattr(frame, "drawing", None) if frame is not None else None
         strokes = list(getattr(drawing, "strokes", [])) if drawing is not None else []

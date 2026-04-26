@@ -37,6 +37,13 @@ def _selected_panel_context(context):
     return (wm, kind, page_index, panel_index, page, panel_entry)
 
 
+def get_selected_panel_entry(context):
+    selected = _selected_panel_context(context)
+    if selected is None:
+        return None
+    return selected[5]
+
+
 def draw_selected_edge_style_box(layout, context) -> bool:
     selected = _selected_panel_context(context)
     if selected is None:

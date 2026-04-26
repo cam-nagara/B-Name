@@ -33,11 +33,12 @@ except ImportError:  # pragma: no cover - 古い Blender
     gpu_texture = None  # type: ignore
     _HAS_GPU_TEXTURE = False
 
-from ..core.mode import MODE_PAGE, get_mode
+from ..core.mode import MODE_PAGE, MODE_PANEL, get_mode
 from ..core.work import get_active_page, get_work
-from ..utils import log
+from ..utils import border_geom, log
 from ..utils.geom import Rect, bleed_rect, mm_to_m
 from . import overlay_shared
+from . import panel_preview_overlay
 
 _logger = log.get_logger(__name__)
 
@@ -731,6 +732,27 @@ def _draw_polygon_fill(pts: list[tuple[float, float]], color) -> None:
     batch.draw(shader)
 
 
+def _draw_stroke_band_fill(
+    outer_pts: list[tuple[float, float]],
+    inner_pts: list[tuple[float, float]],
+    color,
+) -> None:
+    if len(outer_pts) < 3 or len(inner_pts) != len(outer_pts):
+        return
+    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    verts = [(mm_to_m(x), mm_to_m(y), 0.0) for x, y in outer_pts + inner_pts]
+    n = len(outer_pts)
+    indices: list[tuple[int, int, int]] = []
+    for i in range(n):
+        j = (i + 1) % n
+        indices.append((i, j, n + j))
+        indices.append((i, n + j, n + i))
+    batch = batch_for_shader(shader, "TRIS", {"pos": verts}, indices=indices)
+    shader.bind()
+    shader.uniform_float("color", color)
+    batch.draw(shader)
+
+
 def _draw_polyline_loop(pts: list[tuple[float, float]], color, line_width: float = 1.0) -> None:
     if len(pts) < 2:
         return
@@ -900,7 +922,14 @@ def _draw_text_in_rect(context, rect, text: str, color=(0, 0, 0, 1)) -> None:
     blf.draw(font_id, text)
 
 
-def _draw_panels(page, ox_mm: float = 0.0, oy_mm: float = 0.0) -> None:
+def _draw_panels(
+    work,
+    page,
+    ox_mm: float = 0.0,
+    oy_mm: float = 0.0,
+    *,
+    skip_preview_stem: str = "",
+) -> None:
     """ページ内のコマ枠・白フチを Z 順に従って描画.
 
     Z順序昇順 (背面→手前) で描画することで重なり時も正しく表示される。
@@ -925,6 +954,10 @@ def _draw_panels(page, ox_mm: float = 0.0, oy_mm: float = 0.0) -> None:
         # ページオフセットを加算
         if ox_mm != 0.0 or oy_mm != 0.0:
             poly = [(x + ox_mm, y + oy_mm) for x, y in poly]
+        if getattr(entry, "panel_stem", "") != skip_preview_stem:
+            panel_preview_overlay.draw_panel_preview(
+                work, page, entry, ox_mm=ox_mm, oy_mm=oy_mm
+            )
         # 白フチ (枠線の外側) — 矩形のみ簡易対応 (polygon は外接矩形で近似)
         wm = entry.white_margin
         if wm.enabled and wm.width_mm > 0.0:
@@ -949,6 +982,27 @@ def _draw_panels(page, ox_mm: float = 0.0, oy_mm: float = 0.0) -> None:
                 float(b.color[2]), float(b.color[3]),
             )
             base_width = max(0.1, float(b.width_mm))
+            rect_edge_override = (
+                getattr(b.edge_top, "use_override", False)
+                or getattr(b.edge_right, "use_override", False)
+                or getattr(b.edge_bottom, "use_override", False)
+                or getattr(b.edge_left, "use_override", False)
+            )
+            if (
+                len(entry.edge_styles) == 0
+                and not rect_edge_override
+                and getattr(b, "style", "solid") == "solid"
+            ):
+                path = border_geom.styled_closed_path_mm(
+                    poly,
+                    getattr(b, "corner_type", "square"),
+                    float(getattr(b, "corner_radius_mm", 0.0)),
+                )
+                loops = border_geom.stroke_loops_mm(path, base_width)
+                if loops is not None:
+                    outer_loop, inner_loop = loops
+                    _draw_stroke_band_fill(outer_loop, inner_loop, base_color)
+                    continue
             # edge_styles を index 辞書化
             override_map = {int(s.edge_index): s for s in entry.edge_styles}
             n = len(poly)
@@ -1058,9 +1112,12 @@ def _draw_page_overlay(
     if mode == MODE_PAGE and draw_image_layers:
         _draw_image_layers(context.scene)
 
-    # コマ枠 / フキダシ / テキスト (紙面編集モード時のみ)
-    if mode == MODE_PAGE and page is not None:
-        _draw_panels(page, ox_mm=ox_mm, oy_mm=oy_mm)
+    # コマ枠 / フキダシ / テキスト。panel モードでは参照表示として描く。
+    if mode in (MODE_PAGE, MODE_PANEL) and page is not None:
+        skip_stem = ""
+        if mode == MODE_PANEL:
+            skip_stem = getattr(context.scene, "bname_current_panel_stem", "")
+        _draw_panels(work, page, ox_mm=ox_mm, oy_mm=oy_mm, skip_preview_stem=skip_stem)
         _draw_balloons(page, ox_mm=ox_mm, oy_mm=oy_mm)
         _draw_texts(page, ox_mm=ox_mm, oy_mm=oy_mm, context=context)
 
@@ -1251,11 +1308,12 @@ def _draw_callback() -> None:
     rects = overlay_shared.compute_paper_rects(paper)
     mode = get_mode(context)
     scene = context.scene
+    if mode == MODE_PANEL and bool(scene.get("_bname_suppress_panel_reference_overlay", False)):
+        return
 
     gpu.state.blend_set("ALPHA")
     try:
-        # panel モード中は overview を描かず、単ページの 2D 表示のみ
-        # (計画書 3. Phase 1 — overlay は panel 編集モード時は従来動作)
+        # panel モード中も、構図合わせ用にページ群を参照表示する。
         if (
             mode == MODE_PAGE
             and getattr(scene, "bname_overview_mode", False)
@@ -1288,6 +1346,33 @@ def _draw_callback() -> None:
                     is_left_half=left_half,
                 )
                 # アクティブページにハイライト枠 (ズーム連動)
+                if i == active_idx:
+                    canvas_r = _translate_rect(rects.canvas, ox, oy)
+                    highlight = canvas_r.inset(-5.0)
+                    _draw_rect_outline(highlight, (1.0, 0.85, 0.0, 0.9), width_mm=1.00)
+        elif mode == MODE_PANEL and len(work.pages) > 0:
+            from ..utils.page_grid import (
+                is_left_half_page as _is_left_half,
+                page_grid_offset_mm as _pg_offset,
+            )
+
+            cols = max(2, int(getattr(scene, "bname_overview_cols", 4)))
+            gap = float(getattr(scene, "bname_overview_gap_mm", 30.0))
+            cw = paper.canvas_width_mm
+            ch = paper.canvas_height_mm
+            start_side = getattr(paper, "start_side", "left")
+            read_direction = getattr(paper, "read_direction", "left")
+            active_idx = work.active_page_index
+            for i, page in enumerate(work.pages):
+                ox, oy = _pg_offset(
+                    i, cols, gap, cw, ch, start_side, read_direction
+                )
+                left_half = _is_left_half(i, start_side, read_direction)
+                _draw_page_overlay(
+                    context, work, paper, rects, page, mode,
+                    ox_mm=ox, oy_mm=oy, draw_image_layers=False,
+                    is_left_half=left_half,
+                )
                 if i == active_idx:
                     canvas_r = _translate_rect(rects.canvas, ox, oy)
                     highlight = canvas_r.inset(-5.0)
