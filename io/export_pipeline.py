@@ -143,6 +143,13 @@ def _canvas_size_px(paper, options: ExportOptions) -> tuple[int, int]:
     return (w, h)
 
 
+def _page_canvas_size_px(work, page, options: ExportOptions) -> tuple[int, int]:
+    w, h = _canvas_size_px(work.paper, options)
+    if bool(getattr(page, "spread", False)):
+        return (w * 2, h)
+    return (w, h)
+
+
 def _area_rect_px(paper, options: ExportOptions, *, is_left_half: bool = False) -> tuple[int, int, int, int]:
     dpi = _dpi(paper, options)
     rects = overlay_shared.compute_paper_rects(paper, is_left_half=is_left_half)
@@ -639,6 +646,22 @@ def _draw_panel_white_margin_layer(entry, canvas_height_px: int, dpi: int) -> Ex
     if right_w_px > 0:
         draw.rectangle((right_px, top_px, right_px + right_w_px, bottom_px), fill=color)
     return ExportLayer("white_margin", canvas.image, canvas.left, canvas.top)
+
+
+def _draw_panel_background_layer(entry, canvas_height_px: int, dpi: int) -> ExportLayer | None:
+    color_src = getattr(entry, "background_color", (1.0, 1.0, 1.0, 0.0))
+    color = _rgb255(color_src)
+    if color[3] <= 0:
+        return None
+    poly_mm = _panel_polygon_mm(entry)
+    bbox = _points_bbox(poly_mm)
+    if bbox is None or len(poly_mm) < 3:
+        return None
+    canvas = _canvas_for_bbox(bbox, canvas_height_px, dpi)
+    if canvas is None:
+        return None
+    ImageDraw.Draw(canvas.image).polygon(canvas.points_px(poly_mm), fill=color)
+    return ExportLayer("background", canvas.image, canvas.left, canvas.top)
 
 
 def _render_panel_preview_layer(work, page, entry, canvas_size: tuple[int, int], dpi: int) -> ExportLayer | None:
@@ -1425,7 +1448,7 @@ def build_page_layers(work, page, options: ExportOptions) -> list[ExportLayer]:
         return []
     paper = work.paper
     dpi = _dpi(paper, options)
-    canvas_size = _canvas_size_px(paper, options)
+    canvas_size = _page_canvas_size_px(work, page, options)
     layers: list[ExportLayer] = []
     if options.include_paper_color:
         layers.append(
@@ -1461,6 +1484,9 @@ def build_page_layers(work, page, options: ExportOptions) -> list[ExportLayer]:
             wm_layer = _draw_panel_white_margin_layer(panel, canvas_size[1], dpi)
             if wm_layer is not None:
                 layers.append(replace(wm_layer, group_path=panel_group))
+        bg_layer = _draw_panel_background_layer(panel, canvas_size[1], dpi)
+        if bg_layer is not None:
+            layers.append(replace(bg_layer, group_path=content_group))
         render_layer = _render_panel_preview_layer(work, page, panel, canvas_size, dpi)
         if render_layer is not None:
             layers.append(replace(render_layer, group_path=content_group))
@@ -1528,7 +1554,7 @@ def _crop_layers(
 
 def _panel_group_masks(work, page, options: ExportOptions) -> dict[tuple[str, ...], ExportMask]:
     dpi = _dpi(work.paper, options)
-    canvas_size = _canvas_size_px(work.paper, options)
+    canvas_size = _page_canvas_size_px(work, page, options)
     masks: dict[tuple[str, ...], ExportMask] = {}
     for panel in sorted(page.panels, key=lambda candidate: int(getattr(candidate, "z_order", 0))):
         mask = _render_panel_mask(panel, canvas_size[1], dpi)
@@ -1646,7 +1672,7 @@ def render_page(work, page, options: ExportOptions) -> Any:
     if options.area != "canvas":
         layers, size = _crop_layers(layers, crop_box)
     else:
-        size = _canvas_size_px(work.paper, options)
+        size = _page_canvas_size_px(work, page, options)
     image = _flatten_layers(layers, size)
     return _convert_flatten_mode(image, options)
 
@@ -1768,7 +1794,7 @@ def save_page_as_psd(work, page, options: ExportOptions, out_path: Path) -> bool
         layers, size = _crop_layers(layers, crop_box)
         group_masks = _crop_group_masks(group_masks, crop_box)
     else:
-        size = _canvas_size_px(work.paper, options)
+        size = _page_canvas_size_px(work, page, options)
     if not layers:
         layers = [ExportLayer("empty", _empty_rgba(size), 0, 0)]
     ok = _save_layers_as_psd(layers, size, out_path, group_masks=group_masks)

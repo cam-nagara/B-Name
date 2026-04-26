@@ -482,8 +482,27 @@ def _draw_layer_stack_box(layout, context) -> None:
     _draw_layer_add_buttons(box)
 
 
+class BNAME_PT_layer_stack(Panel):
+    """統合レイヤーリスト。画像/GP/フキダシ/テキスト/効果線をここに集約する."""
+
+    bl_idname = "BNAME_PT_layer_stack"
+    bl_label = "レイヤー"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = B_NAME_CATEGORY
+    bl_order = 12
+
+    def draw(self, context):
+        layout = self.layout
+        work = get_work(context)
+        if work is None or not work.loaded:
+            layout.label(text="作品を開いてください", icon="INFO")
+            return
+        _draw_layer_stack_box(layout, context)
+
+
 class BNAME_PT_gpencil(Panel):
-    """master GP のレイヤー / モード / 描画色管理 UI."""
+    """master GP のモード / 描画色管理 UI."""
 
     bl_idname = "BNAME_PT_gpencil"
     bl_label = "Grease Pencil"
@@ -520,7 +539,6 @@ class BNAME_PT_gpencil(Panel):
         obj = _master_gp_object()
         if obj is None:
             layout.label(text="(マスター GP が未生成です)", icon="INFO")
-            _draw_layer_stack_box(layout, context)
             return
 
         row = layout.row(align=True)
@@ -543,8 +561,6 @@ class BNAME_PT_gpencil(Panel):
             text="編集", depress=(obj.mode == _GP_EDIT_MODE),
         )
         op.mode = _GP_EDIT_MODE
-
-        _draw_layer_stack_box(layout, context)
 
         # ブラシ (描画モード時のみ)
         if obj.mode == _GP_PAINT_MODE:
@@ -639,6 +655,7 @@ class BNAME_OT_gpencil_master_mode_set(bpy.types.Operator):
 
 _CLASSES = (
     BNAME_UL_layer_stack,
+    BNAME_PT_layer_stack,
     BNAME_OT_gpencil_master_ensure,
     BNAME_OT_gpencil_master_mode_set,
     BNAME_PT_gpencil,

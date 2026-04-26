@@ -15,6 +15,7 @@ from bpy.props import (
     CollectionProperty,
     EnumProperty,
     FloatProperty,
+    FloatVectorProperty,
     IntProperty,
     PointerProperty,
     StringProperty,
@@ -36,6 +37,30 @@ _SHAPE_TYPE_ITEMS = (
     ("bezier", "曲線", ""),
     ("freeform", "フリーフォーム", ""),
 )
+
+
+def _tag_view3d_redraw(context) -> None:
+    screen = getattr(context, "screen", None) if context is not None else None
+    if screen is None:
+        return
+    for area in screen.areas:
+        if area.type == "VIEW_3D":
+            area.tag_redraw()
+
+
+def _on_panel_background_color_changed(self, context) -> None:
+    try:
+        from ..core.mode import MODE_PANEL, get_mode
+        from ..utils import panel_camera
+
+        scene = getattr(context, "scene", None)
+        if scene is not None and get_mode(context) == MODE_PANEL:
+            stem = str(getattr(scene, "bname_current_panel_stem", "") or "")
+            if stem == str(getattr(self, "panel_stem", "") or ""):
+                panel_camera.sync_world_background_color(context, panel=self)
+    except Exception:  # noqa: BLE001
+        pass
+    _tag_view3d_redraw(context)
 
 
 class BNamePanelVertex(bpy.types.PropertyGroup):
@@ -94,6 +119,16 @@ class BNamePanelEntry(bpy.types.PropertyGroup):
         name="自動くり抜き",
         description="手前コマが重なる範囲を自動的にくり抜く",
         default=True,
+    )
+    background_color: FloatVectorProperty(  # type: ignore[valid-type]
+        name="背景色",
+        description="コマ内側に敷く背景色。アルファ0で透明",
+        subtype="COLOR",
+        size=4,
+        default=(1.0, 1.0, 1.0, 0.0),
+        min=0.0,
+        max=1.0,
+        update=_on_panel_background_color_changed,
     )
 
     # --- 枠線・白フチ ---

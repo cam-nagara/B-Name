@@ -18,6 +18,7 @@ _PAGE_COLLECTION_RE = re.compile(r"^page_\d{4}(?:-\d{4})?$")
 _PAGE_HELPER_OBJECT_RE = re.compile(
     r"^page_\d{4}(?:-\d{4})?_(?:paper|sketch(?:_R)?)$"
 )
+_PAGE_OBJECT_RE = re.compile(r"^page_\d{4}(?:-\d{4})?_.+")
 _PAGE_HELPER_DATA_RE = re.compile(
     r"^page_\d{4}(?:-\d{4})?_(?:paper_data|sketch_data(?:_R)?)$"
 )
@@ -72,11 +73,12 @@ def prepare_panel_blend_scene(context) -> None:
 
     roots = _panel_cleanup_roots(scene)
     for root in roots:
-        _rehome_non_internal_objects(scene, root)
+        _remove_collection_tree_objects(root)
     _remove_internal_bname_objects()
     for root in roots:
         _remove_collection_tree(scene, root)
     _purge_internal_bname_data()
+    _purge_generic_orphan_data()
 
 
 def _resolve_scene(context):
@@ -166,30 +168,13 @@ def _reset_current_mainfile_to_empty(scene) -> None:
     _purge_generic_orphan_data()
 
 
-def _rehome_non_internal_objects(scene, root) -> None:
-    target = scene.collection
+def _remove_collection_tree_objects(root) -> None:
     for coll in _collection_tree(root):
-        for child in tuple(coll.children):
-            if _is_internal_bname_collection(child):
-                continue
-            if child.name in target.children:
-                continue
-            try:
-                target.children.link(child)
-            except Exception:  # noqa: BLE001
-                _logger.exception(
-                    "prepare_panel_blend_scene: rehome child collection failed: %s",
-                    child.name,
-                )
         for obj in tuple(coll.objects):
-            if _is_internal_bname_object(obj):
-                continue
-            if obj.name in target.objects:
-                continue
             try:
-                target.objects.link(obj)
+                bpy.data.objects.remove(obj, do_unlink=True)
             except Exception:  # noqa: BLE001
-                _logger.exception("prepare_panel_blend_scene: rehome failed: %s", obj.name)
+                _logger.exception("prepare_panel_blend_scene: remove collection object failed: %s", obj.name)
 
 
 def _remove_internal_bname_objects() -> None:
@@ -204,8 +189,6 @@ def _remove_internal_bname_objects() -> None:
 
 def _remove_collection_tree(scene, root) -> None:
     for coll in reversed(tuple(_collection_tree(root))):
-        if not _is_internal_bname_collection(coll):
-            continue
         _unlink_collection_from_all_parents(scene, coll)
         if coll.users == 0:
             try:
@@ -315,7 +298,7 @@ def _is_internal_bname_collection(coll) -> bool:
 def _is_internal_bname_object(obj) -> bool:
     if obj.name == gp_utils.MASTER_GP_OBJECT_NAME:
         return True
-    return bool(_PAGE_HELPER_OBJECT_RE.match(obj.name))
+    return bool(_PAGE_HELPER_OBJECT_RE.match(obj.name) or _PAGE_OBJECT_RE.match(obj.name))
 
 
 def _is_internal_bname_gp_data_name(name: str) -> bool:

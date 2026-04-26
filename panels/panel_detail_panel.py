@@ -74,6 +74,7 @@ class BNAME_PT_panel_shape(Panel):
             row.operator("bname.panel_to_rect", text="矩形化 (外接)", icon="MESH_PLANE")
 
         layout.prop(entry, "overlap_clipping")
+        layout.prop(entry, "background_color")
         row = layout.row(align=True)
         row.prop(entry, "panel_gap_vertical_mm", text="上下 (個別)")
         row.prop(entry, "panel_gap_horizontal_mm", text="左右 (個別)")

@@ -465,6 +465,8 @@ def panel_entry_to_dict(entry) -> dict[str, Any]:
         },
         "zOrder": int(entry.z_order),
         "overlapClipping": bool(entry.overlap_clipping),
+        "backgroundColor": color_to_hex(entry.background_color),
+        "backgroundColorAlpha": round(entry.background_color[3], 3),
         "border": panel_border_to_dict(entry.border),
         "whiteMargin": panel_white_margin_to_dict(entry.white_margin),
         "edgeStyles": [
@@ -504,6 +506,8 @@ def panel_entry_from_dict(entry, data: dict[str, Any]) -> None:
         v.y_mm = float(pair[1]) if len(pair) > 1 else 0.0
     entry.z_order = int(data.get("zOrder", 0))
     entry.overlap_clipping = bool(data.get("overlapClipping", True))
+    bg_alpha = float(data.get("backgroundColorAlpha", 0.0))
+    entry.background_color = hex_to_rgba(data.get("backgroundColor", "#FFFFFF"), bg_alpha)
     panel_border_from_dict(entry.border, data.get("border", {}))
     panel_white_margin_from_dict(entry.white_margin, data.get("whiteMargin", {}))
     entry.edge_styles.clear()
