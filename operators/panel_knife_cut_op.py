@@ -382,6 +382,9 @@ def _find_panel_at_world(
         ox, oy = page_grid.page_grid_offset_mm(
             i, cols, gap, cw, ch, start_side, read_direction
         )
+        add_x, add_y = page_grid.page_manual_offset_mm(page)
+        ox += add_x
+        oy += add_y
         local_x = x_mm - ox
         local_y = y_mm - oy
         if not (0.0 <= local_x <= cw and 0.0 <= local_y <= ch):
@@ -682,6 +685,9 @@ class BNAME_OT_panel_knife_cut(Operator):
         ox, oy = page_grid.page_grid_offset_mm(
             page_idx, cols, gap, cw, ch, start_side, read_direction
         )
+        add_x, add_y = page_grid.page_manual_offset_mm(page)
+        ox += add_x
+        oy += add_y
         A_local = (xa - ox, ya - oy)
         B_local = (xb - ox, yb - oy)
 

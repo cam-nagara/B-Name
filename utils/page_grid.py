@@ -110,6 +110,37 @@ def page_grid_offset_mm(
     return (ox, oy)
 
 
+def page_manual_offset_mm(page_entry) -> tuple[float, float]:
+    """ページエントリに保存された手動移動量 (mm) を返す."""
+    if page_entry is None:
+        return 0.0, 0.0
+    try:
+        return (
+            float(getattr(page_entry, "offset_x_mm", 0.0)),
+            float(getattr(page_entry, "offset_y_mm", 0.0)),
+        )
+    except Exception:  # noqa: BLE001
+        return 0.0, 0.0
+
+
+def page_total_offset_mm(
+    work,
+    scene,
+    page_index: int,
+) -> tuple[float, float]:
+    """grid 配置とページ手動移動量を合成した offset (mm) を返す."""
+    if work is None or scene is None or not (0 <= page_index < len(work.pages)):
+        return 0.0, 0.0
+    cols, gap, cw, ch = _resolve_overview_params(scene, work)
+    start_side = getattr(work.paper, "start_side", "right")
+    read_direction = getattr(work.paper, "read_direction", "left")
+    ox_mm, oy_mm = page_grid_offset_mm(
+        page_index, cols, gap, cw, ch, start_side, read_direction
+    )
+    add_x, add_y = page_manual_offset_mm(work.pages[page_index])
+    return ox_mm + add_x, oy_mm + add_y
+
+
 def _resolve_overview_params(scene, work) -> tuple[int, float, float, float]:
     cols = max(1, int(getattr(scene, "bname_overview_cols", 4)))
     gap = float(getattr(scene, "bname_overview_gap_mm", 30.0))
@@ -171,6 +202,9 @@ def apply_page_collection_transforms(context, work) -> int:
         ox_mm, oy_mm = page_grid_offset_mm(
             i, cols, gap, cw, ch, start_side, read_direction
         )
+        add_x, add_y = page_manual_offset_mm(page_entry)
+        ox_mm += add_x
+        oy_mm += add_y
         for obj in coll.objects:
             sub_x, sub_y = _obj_subpage_offset_mm(obj)
             # GP は用紙 (z=0) より手前に持ち上げる
@@ -205,6 +239,9 @@ def page_index_at_world_mm(
         ox_mm, oy_mm = page_grid_offset_mm(
             i, cols, gap, cw, ch, start_side, read_direction
         )
+        add_x, add_y = page_manual_offset_mm(work.pages[i])
+        ox_mm += add_x
+        oy_mm += add_y
         if ox_mm <= x_mm <= ox_mm + cw and oy_mm <= y_mm <= oy_mm + ch:
             return i
     return None

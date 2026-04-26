@@ -45,6 +45,8 @@ def _indent(row, depth: int) -> None:
 
 def _kind_icon(kind: str) -> str:
     return {
+        "page": "FILE_IMAGE",
+        "panel": "IMAGE_DATA",
         "gp": "OUTLINER_OB_GREASEPENCIL",
         "gp_folder": "FILE_FOLDER",
         "image": "IMAGE_DATA",
@@ -88,6 +90,39 @@ def _draw_stack_gp_row(row, item, resolved) -> None:
             emboss=False,
             icon="LOCKED" if target.lock else "UNLOCKED",
         )
+
+
+def _draw_stack_page_row(row, item, resolved) -> None:
+    target = resolved.get("target") if resolved is not None else None
+    if target is None:
+        row.label(text=item.label, icon="FILE_IMAGE")
+        return
+    expanded = bool(getattr(target, "stack_expanded", True))
+    row.prop(
+        target,
+        "stack_expanded",
+        text="",
+        emboss=False,
+        icon="TRIA_DOWN" if expanded else "TRIA_RIGHT",
+    )
+    row.label(text=getattr(target, "id", ""), icon="IMGDISPLAY" if target.spread else "FILE_IMAGE")
+    row.prop(target, "title", text="")
+
+
+def _draw_stack_panel_row(row, item, resolved, index: int) -> None:
+    target = resolved.get("target") if resolved is not None else None
+    if target is None:
+        row.label(text=item.label, icon="IMAGE_DATA")
+        return
+    row.label(text=getattr(target, "panel_stem", ""), icon="IMAGE_DATA")
+    row.prop(target, "title", text="")
+    op = row.operator(
+        "bname.layer_stack_enter_panel",
+        text="",
+        icon="PLAY",
+        emboss=False,
+    )
+    op.stack_index = index
 
 
 def _draw_stack_data_row(row, item, resolved) -> None:
@@ -144,7 +179,11 @@ class BNAME_UL_layer_stack(UIList):
         )
         op.index = index
         resolved = layer_stack_utils.resolve_stack_item(context, item)
-        if item.kind in {"gp", "gp_folder", "effect"}:
+        if item.kind == "page":
+            _draw_stack_page_row(row, item, resolved)
+        elif item.kind == "panel":
+            _draw_stack_panel_row(row, item, resolved, index)
+        elif item.kind in {"gp", "gp_folder", "effect"}:
             _draw_stack_gp_row(row, item, resolved)
         else:
             _draw_stack_data_row(row, item, resolved)
@@ -400,6 +439,28 @@ def _draw_effect_selected_settings(box, context, obj, active_layer) -> None:
     box.operator("bname.effect_line_generate", text="効果線を追加", icon="STROKE")
 
 
+def _draw_page_selected_settings(box, context, entry) -> None:
+    settings = box.column(align=True)
+    settings.label(text=f"選択中: {entry.id} (ページ)", icon="FILE_IMAGE")
+    settings.prop(entry, "title", text="表示名")
+    row = settings.row(align=True)
+    row.prop(entry, "offset_x_mm", text="表示X")
+    row.prop(entry, "offset_y_mm", text="表示Y")
+
+
+def _draw_panel_selected_settings(box, context, entry) -> None:
+    settings = box.column(align=True)
+    settings.label(text=f"選択中: {entry.panel_stem} (コマ)", icon="IMAGE_DATA")
+    settings.prop(entry, "title", text="表示名")
+    row = settings.row(align=True)
+    row.prop(entry, "rect_x_mm", text="X")
+    row.prop(entry, "rect_y_mm", text="Y")
+    row = settings.row(align=True)
+    row.prop(entry, "rect_width_mm", text="幅")
+    row.prop(entry, "rect_height_mm", text="高さ")
+    box.operator("bname.enter_panel_mode", text="コマ編集へ", icon="PLAY")
+
+
 def _draw_selected_stack_settings(box, context) -> None:
     item = layer_stack_utils.active_stack_item(context)
     if item is None:
@@ -410,7 +471,13 @@ def _draw_selected_stack_settings(box, context) -> None:
     kind = item.kind
     target = resolved["target"]
     obj = resolved.get("object")
-    if kind == "gp":
+    if kind == "page":
+        _draw_page_selected_settings(box, context, target)
+        box.separator()
+    elif kind == "panel":
+        _draw_panel_selected_settings(box, context, target)
+        box.separator()
+    elif kind == "gp":
         _draw_gp_selected_settings(box, obj, target)
         box.separator()
     elif kind == "image":
@@ -435,6 +502,20 @@ def _draw_selected_stack_settings(box, context) -> None:
 
 
 def _draw_layer_add_buttons(box) -> None:
+    page_row = box.row(align=True)
+    page_row.operator("bname.page_add", text="", icon="ADD")
+    page_row.operator("bname.page_remove", text="", icon="REMOVE")
+    page_row.operator("bname.page_duplicate", text="", icon="DUPLICATE")
+    page_row.separator()
+    page_row.operator("bname.pages_merge_spread", text="", icon="ARROW_LEFTRIGHT")
+    page_row.operator("bname.pages_split_spread", text="", icon="UNLINKED")
+
+    panel_row = box.row(align=True)
+    panel_row.operator("bname.panel_add", text="", icon="ADD")
+    panel_row.operator("bname.panel_remove", text="", icon="REMOVE")
+    panel_row.operator("bname.panel_duplicate", text="", icon="DUPLICATE")
+    panel_row.operator("bname.panel_move_to_page", text="", icon="FORWARD")
+
     row = box.row(align=True)
     row.operator("bname.gpencil_layer_add", text="GP", icon="OUTLINER_OB_GREASEPENCIL")
     row.operator("bname.image_layer_add", text="画像", icon="IMAGE_DATA")
@@ -543,24 +624,6 @@ class BNAME_PT_gpencil(Panel):
 
         row = layout.row(align=True)
         row.label(text=obj.name, icon="OUTLINER_OB_GREASEPENCIL")
-
-        # モード切替 (3 ボタン) — wrapper 経由で必ず master GP を active 化
-        row = layout.row(align=True)
-        op = row.operator(
-            "bname.gpencil_master_mode_set",
-            text="オブジェクト", depress=(obj.mode == _GP_OBJECT_MODE),
-        )
-        op.mode = _GP_OBJECT_MODE
-        op = row.operator(
-            "bname.gpencil_master_mode_set",
-            text="描画", depress=(obj.mode == _GP_PAINT_MODE),
-        )
-        op.mode = _GP_PAINT_MODE
-        op = row.operator(
-            "bname.gpencil_master_mode_set",
-            text="編集", depress=(obj.mode == _GP_EDIT_MODE),
-        )
-        op.mode = _GP_EDIT_MODE
 
         # ブラシ (描画モード時のみ)
         if obj.mode == _GP_PAINT_MODE:

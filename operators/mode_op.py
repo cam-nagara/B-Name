@@ -219,6 +219,8 @@ class BNAME_OT_enter_panel_mode(Operator):
                     set_mode(MODE_PANEL, bpy.context)
                     bpy.context.scene.bname_current_panel_stem = stem
                     bpy.context.scene.bname_current_panel_page_id = page_id
+                    if hasattr(bpy.context.scene, "bname_active_layer_kind"):
+                        bpy.context.scene.bname_active_layer_kind = "panel"
                     _overlay.reset_viewport_background_to_theme(bpy.context)
                     _overlay.apply_bname_shading_mode(bpy.context)
                 except Exception:  # noqa: BLE001
@@ -233,6 +235,8 @@ class BNAME_OT_enter_panel_mode(Operator):
         set_mode(MODE_PANEL, ctx)
         ctx.scene.bname_current_panel_stem = stem
         ctx.scene.bname_current_panel_page_id = page_id
+        if hasattr(ctx.scene, "bname_active_layer_kind"):
+            ctx.scene.bname_active_layer_kind = "panel"
         try:
             from ..utils import panel_camera
 
@@ -244,6 +248,12 @@ class BNAME_OT_enter_panel_mode(Operator):
             )
         except Exception:  # noqa: BLE001
             _logger.exception("enter_panel_mode: final panel camera setup failed")
+        try:
+            from ..ui import sidebar as _sidebar
+
+            _sidebar.schedule_open_bname_sidebar()
+        except Exception:  # noqa: BLE001
+            _logger.exception("enter_panel_mode: B-Name sidebar open failed")
         self.report({"INFO"}, f"コマ編集モード: {stem}")
         return {"FINISHED"}
 

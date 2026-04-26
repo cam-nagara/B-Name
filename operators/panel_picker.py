@@ -9,6 +9,8 @@ overview モード中は全ページが grid 配置で描画されているた�
 
 from __future__ import annotations
 
+from typing import Sequence
+
 import bpy
 
 from ..utils import geom, log, page_grid
@@ -16,11 +18,51 @@ from ..utils import geom, log, page_grid
 _logger = log.get_logger(__name__)
 
 
+def _point_on_segment(
+    p: tuple[float, float],
+    a: tuple[float, float],
+    b: tuple[float, float],
+    tolerance: float = 1.0e-4,
+) -> bool:
+    cross = (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
+    if abs(cross) > tolerance:
+        return False
+    return (
+        min(a[0], b[0]) - tolerance <= p[0] <= max(a[0], b[0]) + tolerance
+        and min(a[1], b[1]) - tolerance <= p[1] <= max(a[1], b[1]) + tolerance
+    )
+
+
+def _point_in_polygon(
+    p: tuple[float, float],
+    poly: Sequence[tuple[float, float]],
+) -> bool:
+    """ray casting で点 p が多角形 poly の内側か辺上にあるかを返す."""
+    x, y = p
+    n = len(poly)
+    if n < 3:
+        return False
+    for i in range(n):
+        if _point_on_segment(p, poly[i], poly[(i + 1) % n]):
+            return True
+    inside = False
+    j = n - 1
+    for i in range(n):
+        xi, yi = poly[i]
+        xj, yj = poly[j]
+        if (yi > y) != (yj > y):
+            x_cross = (xj - xi) * (y - yi) / (yj - yi + 1.0e-30) + xi
+            if x < x_cross:
+                inside = not inside
+        j = i
+    return inside
+
+
 def _hit_test_panel(entry, x_mm: float, y_mm: float) -> bool:
-    """``entry`` のヒット判定。polygon は外接矩形で近似.
+    """``entry`` のヒット判定。
 
     rect: 矩形内であれば True。
-    polygon: 外接矩形 (bounding box) 内であれば True。
+    polygon: 多角形内部または辺上であれば True。
     その他 (curve / freeform 等) は現段階では未対応 (False)。
     """
     shape = entry.shape_type
@@ -33,9 +75,12 @@ def _hit_test_panel(entry, x_mm: float, y_mm: float) -> bool:
         verts = entry.vertices
         if len(verts) < 3:
             return False
-        xs = [v.x_mm for v in verts]
-        ys = [v.y_mm for v in verts]
-        return min(xs) <= x_mm <= max(xs) and min(ys) <= y_mm <= max(ys)
+        poly = [(v.x_mm, v.y_mm) for v in verts]
+        xs = [p[0] for p in poly]
+        ys = [p[1] for p in poly]
+        if not (min(xs) <= x_mm <= max(xs) and min(ys) <= y_mm <= max(ys)):
+            return False
+        return _point_in_polygon((x_mm, y_mm), poly)
     return False
 
 
@@ -90,6 +135,9 @@ def find_panel_at_world_mm(
         ox, oy = page_grid.page_grid_offset_mm(
             idx, cols, gap, cw, ch, start_side, read_direction
         )
+        add_x, add_y = page_grid.page_manual_offset_mm(page)
+        ox += add_x
+        oy += add_y
         hit = _hit_test_page(page, x_mm - ox, y_mm - oy)
         return (idx, hit) if hit is not None else None
 
@@ -103,6 +151,9 @@ def find_panel_at_world_mm(
         ox, oy = page_grid.page_grid_offset_mm(
             i, cols, gap, cw, ch, start_side, read_direction
         )
+        add_x, add_y = page_grid.page_manual_offset_mm(page)
+        ox += add_x
+        oy += add_y
         local_x = x_mm - ox
         local_y = y_mm - oy
         # キャンバス矩形の外は早期スキップ (パフォーマンス最適化)
@@ -112,6 +163,23 @@ def find_panel_at_world_mm(
         if hit is not None:
             return (i, hit)
     return None
+
+
+def find_panel_at_event(context, event) -> tuple[int, int] | None:
+    """VIEW_3D のマウスイベントから (page_index, panel_index) を解決."""
+    work = None
+    try:
+        from ..core.work import get_work
+
+        work = get_work(context)
+    except Exception:  # noqa: BLE001
+        work = None
+    if work is None or not getattr(work, "loaded", False):
+        return None
+    coords = _event_world_mm(context, event)
+    if coords is None:
+        return None
+    return find_panel_at_world_mm(work, coords[0], coords[1])
 
 
 def find_page_at_world_mm(work, x_mm: float, y_mm: float) -> int | None:
@@ -136,12 +204,18 @@ def find_page_at_world_mm(work, x_mm: float, y_mm: float) -> int | None:
         ox, oy = page_grid.page_grid_offset_mm(
             idx, cols, gap, cw, ch, start_side, read_direction
         )
+        add_x, add_y = page_grid.page_manual_offset_mm(work.pages[idx])
+        ox += add_x
+        oy += add_y
         return idx if _hit_test_canvas(x_mm - ox, y_mm - oy, cw, ch) else None
 
     for i, _page in enumerate(work.pages):
         ox, oy = page_grid.page_grid_offset_mm(
             i, cols, gap, cw, ch, start_side, read_direction
         )
+        add_x, add_y = page_grid.page_manual_offset_mm(_page)
+        ox += add_x
+        oy += add_y
         if _hit_test_canvas(x_mm - ox, y_mm - oy, cw, ch):
             return i
     return None

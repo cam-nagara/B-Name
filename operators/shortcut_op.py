@@ -113,6 +113,11 @@ def _focus_view_to_page(context, work, page_index: int) -> None:
     ox_mm, oy_mm = page_grid_offset_mm(
         page_index, cols, gap, cw, ch, start_side, read_direction
     )
+    if 0 <= page_index < len(work.pages):
+        add_x = float(getattr(work.pages[page_index], "offset_x_mm", 0.0))
+        add_y = float(getattr(work.pages[page_index], "offset_y_mm", 0.0))
+        ox_mm += add_x
+        oy_mm += add_y
     cx = mm_to_m(ox_mm + cw / 2.0)
     cy = mm_to_m(oy_mm + ch / 2.0)
 

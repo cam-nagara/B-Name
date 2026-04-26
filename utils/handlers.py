@@ -59,6 +59,12 @@ def _sync_active_from_blend_path(
     if len(parts) == 1 and parts[0] == paths.WORK_BLEND_NAME:
         scene.bname_current_panel_stem = ""
         scene.bname_current_panel_page_id = ""
+        try:
+            scene.bname_overview_mode = True
+        except Exception:  # noqa: BLE001
+            pass
+        if hasattr(scene, "bname_active_layer_kind"):
+            scene.bname_active_layer_kind = "page"
         set_mode(MODE_PAGE, bpy.context)
         return
 
@@ -78,6 +84,8 @@ def _sync_active_from_blend_path(
                     break
             scene.bname_current_panel_stem = stem
             scene.bname_current_panel_page_id = page_id
+            if hasattr(scene, "bname_active_layer_kind"):
+                scene.bname_active_layer_kind = "panel"
             set_mode(MODE_PANEL, bpy.context)
             return
 
@@ -240,6 +248,12 @@ def _bname_on_load_post(filepath_arg) -> None:  # signature: (str,) in Blender h
                 _overlay.reset_viewport_background_to_theme(bpy.context)
                 _overlay.apply_bname_shading_mode(bpy.context)
                 panel_camera.schedule_panel_view_camera()
+                try:
+                    from ..ui import sidebar as _sidebar
+
+                    _sidebar.schedule_open_bname_sidebar()
+                except Exception:  # noqa: BLE001
+                    _logger.exception("load_post: B-Name sidebar open failed")
         except ValueError:
             pass
         _logger.info("B-Name: load_post synced for %s", blend_path)

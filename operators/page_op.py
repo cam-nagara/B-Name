@@ -60,6 +60,8 @@ class BNAME_OT_page_add(Operator):
             # 全ページの Collection transform を grid 位置に再配置
             page_grid.apply_page_collection_transforms(context, work)
             page_io.save_pages_json(work_dir, work)
+            if hasattr(context.scene, "bname_active_layer_kind"):
+                context.scene.bname_active_layer_kind = "page"
         except Exception as exc:  # noqa: BLE001
             _logger.exception("page_add failed")
             self.report({"ERROR"}, f"ページ追加失敗: {exc}")
@@ -110,6 +112,8 @@ class BNAME_OT_page_remove(Operator):
             # 残りページの Collection transform を再計算 (index が詰まるため)
             page_grid.apply_page_collection_transforms(context, work)
             page_io.save_pages_json(work_dir, work)
+            if hasattr(context.scene, "bname_active_layer_kind"):
+                context.scene.bname_active_layer_kind = "page"
         except Exception as exc:  # noqa: BLE001
             _logger.exception("page_remove failed")
             self.report({"ERROR"}, f"ページ削除失敗: {exc}")
@@ -165,6 +169,8 @@ class BNAME_OT_page_duplicate(Operator):
             gp_utils.ensure_page_gpencil(context.scene, new_id)
             page_grid.apply_page_collection_transforms(context, work)
             page_io.save_pages_json(work_dir, work)
+            if hasattr(context.scene, "bname_active_layer_kind"):
+                context.scene.bname_active_layer_kind = "page"
         except Exception as exc:  # noqa: BLE001
             _logger.exception("page_duplicate failed")
             self.report({"ERROR"}, f"ページ複製失敗: {exc}")
@@ -208,6 +214,8 @@ class BNAME_OT_page_move(Operator):
             # 順序が変わったので Collection transform を再計算
             page_grid.apply_page_collection_transforms(context, work)
             page_io.save_pages_json(work_dir, work)
+            if hasattr(context.scene, "bname_active_layer_kind"):
+                context.scene.bname_active_layer_kind = "page"
         except Exception as exc:  # noqa: BLE001
             _logger.exception("page_move failed")
             self.report({"ERROR"}, f"ページ移動失敗: {exc}")
@@ -225,10 +233,19 @@ def _switch_to_page(context, work, work_dir: Path, new_index: int) -> bool:
     if not (0 <= new_index < len(work.pages)):
         return False
     work.active_page_index = new_index
+    context.scene.bname_overview_mode = True
     set_mode(MODE_PAGE, context)
     context.scene.bname_current_panel_stem = ""
     context.scene.bname_current_panel_page_id = ""
     return True
+
+
+def _tag_screen_redraw(context) -> None:
+    screen = getattr(context, "screen", None)
+    if screen is None:
+        return
+    for area in screen.areas:
+        area.tag_redraw()
 
 
 class BNAME_OT_page_select(Operator):
@@ -252,6 +269,11 @@ class BNAME_OT_page_select(Operator):
         if not (0 <= self.index < len(work.pages)):
             return {"CANCELLED"}
         if self.index == work.active_page_index:
+            if not bool(getattr(context.scene, "bname_overview_mode", True)):
+                context.scene.bname_overview_mode = True
+                _tag_screen_redraw(context)
+            if hasattr(context.scene, "bname_active_layer_kind"):
+                context.scene.bname_active_layer_kind = "page"
             return {"FINISHED"}
         try:
             _switch_to_page(context, work, Path(work.work_dir), self.index)
@@ -259,6 +281,8 @@ class BNAME_OT_page_select(Operator):
             _logger.exception("page_select failed")
             self.report({"ERROR"}, f"ページ切替失敗: {exc}")
             return {"CANCELLED"}
+        if hasattr(context.scene, "bname_active_layer_kind"):
+            context.scene.bname_active_layer_kind = "page"
         return {"FINISHED"}
 
 
@@ -297,18 +321,36 @@ class BNAME_OT_page_pick_viewport(Operator):
         try:
             from . import panel_picker
 
-            page_index = panel_picker.find_page_at_event(context, event)
+            panel_hit = panel_picker.find_panel_at_event(context, event)
+            if panel_hit is not None:
+                page_index, panel_index = panel_hit
+            else:
+                page_index = panel_picker.find_page_at_event(context, event)
+                panel_index = None
         except Exception:  # noqa: BLE001
             _logger.exception("page_pick_viewport failed")
             return {"PASS_THROUGH"}
         if page_index is None or not (0 <= page_index < len(work.pages)):
             return {"PASS_THROUGH"}
+        changed = False
+        if not bool(getattr(context.scene, "bname_overview_mode", True)):
+            context.scene.bname_overview_mode = True
+            changed = True
         if page_index != work.active_page_index:
             _switch_to_page(context, work, Path(work.work_dir), page_index)
-            screen = getattr(context, "screen", None)
-            for area in getattr(screen, "areas", []):
-                if area.type == "VIEW_3D":
-                    area.tag_redraw()
+            changed = True
+        if panel_index is not None:
+            page = work.pages[page_index]
+            if 0 <= panel_index < len(page.panels):
+                if page.active_panel_index != panel_index:
+                    page.active_panel_index = panel_index
+                    changed = True
+                if hasattr(context.scene, "bname_active_layer_kind"):
+                    context.scene.bname_active_layer_kind = "panel"
+        elif hasattr(context.scene, "bname_active_layer_kind"):
+            context.scene.bname_active_layer_kind = "page"
+        if changed:
+            _tag_screen_redraw(context)
         # Blender標準のオブジェクト選択は妨げない。
         return {"PASS_THROUGH"}
 

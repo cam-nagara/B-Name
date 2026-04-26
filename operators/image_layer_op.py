@@ -78,6 +78,29 @@ class BNAME_OT_image_layer_add(Operator, ImportHelper):
             entry.height_mm = max(1.0, img.size[1] / 6.0)
         except Exception as exc:  # noqa: BLE001
             _logger.warning("failed to load image: %s", exc)
+        try:
+            from ..core.work import get_active_page
+            from .balloon_op import _creation_violates_layer_scope
+
+            page = get_active_page(context)
+            blocked = (
+                page is not None
+                and _creation_violates_layer_scope(
+                    context,
+                    page,
+                    entry.x_mm,
+                    entry.y_mm,
+                    entry.width_mm,
+                    entry.height_mm,
+                )
+            )
+        except Exception:  # noqa: BLE001
+            blocked = False
+        if blocked:
+            coll.remove(len(coll) - 1)
+            context.scene.bname_active_image_layer_index = len(coll) - 1 if len(coll) else -1
+            self.report({"ERROR"}, "このモードではその位置に画像レイヤーを作成できません")
+            return {"CANCELLED"}
 
         self.report({"INFO"}, f"画像レイヤー追加: {entry.title}")
         return {"FINISHED"}

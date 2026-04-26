@@ -131,6 +131,8 @@ def _set_panel_scene_state(context, work, page_id: str, panel_stem: str) -> bool
     page.active_panel_index = active_panel_index
     scene.bname_current_panel_stem = panel_stem
     scene.bname_current_panel_page_id = page_id
+    if hasattr(scene, "bname_active_layer_kind"):
+        scene.bname_active_layer_kind = "panel"
     set_mode(MODE_PANEL, context)
     return True
 

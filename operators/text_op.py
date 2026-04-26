@@ -92,6 +92,17 @@ class BNAME_OT_text_add(Operator):
         if page is None:
             self.report({"ERROR"}, "ページが選択されていません")
             return {"CANCELLED"}
+        try:
+            from .balloon_op import _creation_violates_layer_scope
+
+            blocked = _creation_violates_layer_scope(
+                context, page, self.x_mm, self.y_mm, self.width_mm, self.height_mm
+            )
+        except Exception:  # noqa: BLE001
+            blocked = False
+        if blocked:
+            self.report({"ERROR"}, "このモードではその位置にテキストを作成できません")
+            return {"CANCELLED"}
         entry = page.texts.add()
         entry.id = _allocate_text_id(page)
         entry.body = self.body

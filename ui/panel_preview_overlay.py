@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import tempfile
 from pathlib import Path
 
 import bpy
 import gpu
 from gpu_extras.batch import batch_for_shader
 
+from ..utils import image_transparency
 from ..utils import panel_preview
 from ..utils.geom import mm_to_m
 
@@ -22,6 +25,7 @@ def draw_panel_preview(work, page, entry, ox_mm: float = 0.0, oy_mm: float = 0.0
     source = panel_preview.panel_preview_source_path(Path(work.work_dir), page.id, entry)
     if source is None:
         return False
+    source = _display_source_for_panel(source, entry)
     img = _ensure_bpy_image_current(source)
     if img is None:
         return False
@@ -65,6 +69,41 @@ def draw_panel_preview(work, page, entry, ox_mm: float = 0.0, oy_mm: float = 0.0
     gpu.state.blend_set("ALPHA")
     batch.draw(shader)
     return True
+
+
+def _display_source_for_panel(source: Path, entry) -> Path:
+    if not image_transparency.panel_background_is_transparent(entry):
+        return source
+    from ..io import export_pipeline
+
+    Image = export_pipeline.Image
+    if Image is None:
+        return source
+    try:
+        source_mtime = source.stat().st_mtime
+    except OSError:
+        return source
+    cache_path = _transparent_cache_path(source)
+    try:
+        cache_mtime = cache_path.stat().st_mtime
+    except OSError:
+        cache_mtime = -1.0
+    if cache_path.is_file() and cache_mtime >= source_mtime:
+        return cache_path
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        with Image.open(str(source)) as opened:
+            image = image_transparency.make_background_transparent(opened)
+            image.save(str(cache_path))
+        return cache_path
+    except Exception:  # noqa: BLE001
+        return source
+
+
+def _transparent_cache_path(source: Path) -> Path:
+    resolved = str(Path(source).resolve())
+    digest = hashlib.sha1(resolved.encode("utf-8")).hexdigest()[:16]
+    return Path(tempfile.gettempdir()) / "bname_panel_preview_alpha" / f"{digest}.png"
 
 
 def _panel_polygon_mm(entry) -> list[tuple[float, float]]:

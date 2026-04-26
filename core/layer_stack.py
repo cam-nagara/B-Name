@@ -10,6 +10,8 @@ from ..utils import log
 _logger = log.get_logger(__name__)
 
 LAYER_KIND_ITEMS = (
+    ("page", "ページ", ""),
+    ("panel", "コマ", ""),
     ("gp", "グリースペンシル", ""),
     ("gp_folder", "フォルダ", ""),
     ("image", "画像", ""),
@@ -19,6 +21,8 @@ LAYER_KIND_ITEMS = (
 )
 
 ACTIVE_LAYER_KIND_ITEMS = (
+    ("page", "ページ", ""),
+    ("panel", "コマ", ""),
     ("gp", "グリースペンシル", ""),
     ("gp_folder", "フォルダ", ""),
     ("image", "画像", ""),

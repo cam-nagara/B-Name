@@ -158,6 +158,9 @@ class BNAME_OT_work_new(Operator, ExportHelper):
             set_mode(MODE_PAGE, context)
             context.scene.bname_current_panel_stem = ""
             context.scene.bname_current_panel_page_id = ""
+            context.scene.bname_overview_mode = True
+            if hasattr(context.scene, "bname_active_layer_kind"):
+                context.scene.bname_active_layer_kind = "page"
             try:
                 from ..utils import display_settings
 
@@ -250,6 +253,9 @@ class BNAME_OT_work_open(Operator, ImportHelper):
             set_mode(MODE_PAGE, context)
             context.scene.bname_current_panel_stem = ""
             context.scene.bname_current_panel_page_id = ""
+            context.scene.bname_overview_mode = True
+            if hasattr(context.scene, "bname_active_layer_kind"):
+                context.scene.bname_active_layer_kind = "page"
             try:
                 from ..utils import display_settings
 

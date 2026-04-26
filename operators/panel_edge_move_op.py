@@ -26,7 +26,7 @@ from gpu_extras.batch import batch_for_shader
 from ..core.work import get_work
 from ..io import page_io, panel_io
 from . import panel_edge_style_op, panel_modal_state
-from ..utils import geom, log, page_grid, polygon_geom
+from ..utils import geom, log, page_grid, panel_edge_adjacency, polygon_geom
 
 _logger = log.get_logger(__name__)
 
@@ -285,6 +285,9 @@ def _all_panel_edges_world(work) -> list[tuple[int, int, int, tuple[float, float
         ox, oy = page_grid.page_grid_offset_mm(
             pi, cols, gap, cw, ch, start_side, read_direction
         )
+        add_x, add_y = page_grid.page_manual_offset_mm(page)
+        ox += add_x
+        oy += add_y
         for panel_i, panel in enumerate(page.panels):
             poly = _panel_polygon(panel)
             if len(poly) < 2:
@@ -304,9 +307,14 @@ def _page_offset(work, page_idx: int) -> tuple[float, float]:
     ch = work.paper.canvas_height_mm
     start_side = getattr(work.paper, "start_side", "right")
     read_direction = getattr(work.paper, "read_direction", "left")
-    return page_grid.page_grid_offset_mm(
+    ox, oy = page_grid.page_grid_offset_mm(
         page_idx, cols, gap, cw, ch, start_side, read_direction
     )
+    if 0 <= page_idx < len(work.pages):
+        add_x, add_y = page_grid.page_manual_offset_mm(work.pages[page_idx])
+        ox += add_x
+        oy += add_y
+    return ox, oy
 
 
 def _gap_for_edge(work, panel, edge: tuple[tuple[float, float], tuple[float, float]]) -> float:
@@ -890,6 +898,21 @@ class BNAME_OT_panel_edge_move(Operator):
             poly = _panel_polygon(panel)
             v_world = (poly[vi][0] + ox, poly[vi][1] + oy)
             snapshot["v_world"] = v_world
+            snapshot["vertex_adjacent_edges"] = (
+                panel_edge_adjacency.capture_vertex_adjacent_edge_states(
+                    self._work,
+                    sel["page"],
+                    sel["panel"],
+                    vi,
+                    poly,
+                    page_offset_fn=_page_offset,
+                    panel_polygon_fn=_panel_polygon,
+                    find_adjacent_edges_fn=_find_adjacent_edges,
+                    find_overlapping_edges_fn=_find_overlapping_panel_edges,
+                    adjacency_gap_tolerance_mm=ADJACENCY_GAP_TOLERANCE_MM,
+                    adjacency_overlap_ratio=ADJACENCY_OVERLAP_RATIO,
+                )
+            )
             shared = []
             for pi, page2 in enumerate(self._work.pages):
                 ox2, oy2 = _page_offset(self._work, pi)
@@ -991,20 +1014,60 @@ class BNAME_OT_panel_edge_move(Operator):
             new_poly[vi] = (orig_poly[vi][0] + dx, orig_poly[vi][1] + dy)
             if not _is_valid_panel_polygon(new_poly, reference_poly=orig_poly):
                 return
-            shared_updates = []
+            panel_updates: dict[tuple[int, int], list[tuple[float, float]]] = {}
+            updated_vertices: set[tuple[int, int, int]] = set()
+            sel_ox, sel_oy = _page_offset(self._work, sel["page"])
+            for adj_st in self._original_geometry.get("vertex_adjacent_edges", []):
+                selected_edge = adj_st["selected_edge"]
+                sel_a_world = (
+                    new_poly[selected_edge][0] + sel_ox,
+                    new_poly[selected_edge][1] + sel_oy,
+                )
+                sel_b_world = (
+                    new_poly[(selected_edge + 1) % len(new_poly)][0] + sel_ox,
+                    new_poly[(selected_edge + 1) % len(new_poly)][1] + sel_oy,
+                )
+                adj_line = panel_edge_adjacency.line_from_projection_params(
+                    sel_a_world, sel_b_world, adj_st["params"]
+                )
+                if adj_line is None:
+                    return
+                page_i2 = adj_st["page"]
+                panel_i2 = adj_st["panel"]
+                key = (page_i2, panel_i2)
+                base_poly = panel_updates.get(key, adj_st["poly"])
+                ox2, oy2 = _page_offset(self._work, page_i2)
+                a2_local = (adj_line[0][0] - ox2, adj_line[0][1] - oy2)
+                b2_local = (adj_line[1][0] - ox2, adj_line[1][1] - oy2)
+                np2 = _build_shifted_edge_polygon(
+                    base_poly, adj_st["edge"], a2_local, b2_local
+                )
+                if np2 is None or not _is_valid_panel_polygon(
+                    np2, reference_poly=adj_st["poly"]
+                ):
+                    return
+                panel_updates[key] = np2
+                updated_vertices.add((page_i2, panel_i2, adj_st["edge"]))
+                updated_vertices.add(
+                    (page_i2, panel_i2, (adj_st["edge"] + 1) % len(np2))
+                )
             page = self._work.pages[sel["page"]]
             panel = page.panels[sel["panel"]]
-            # 共有頂点を同量シフト
+            # edge 連動対象外の共有頂点は従来通り同量シフトする。
             for sh in self._original_geometry.get("shared_vertices", []):
+                key = (sh["page"], sh["panel"])
+                vertex_key = (sh["page"], sh["panel"], sh["vertex"])
+                if vertex_key in updated_vertices:
+                    continue
                 op2 = sh["poly"]
                 vi2 = sh["vertex"]
-                np2 = list(op2)
+                np2 = list(panel_updates.get(key, op2))
                 np2[vi2] = (op2[vi2][0] + dx, op2[vi2][1] + dy)
                 if not _is_valid_panel_polygon(np2, reference_poly=op2):
                     return
-                shared_updates.append((sh["page"], sh["panel"], np2))
+                panel_updates[key] = np2
             _set_panel_polygon(panel, new_poly)
-            for page_i2, panel_i2, poly2 in shared_updates:
+            for (page_i2, panel_i2), poly2 in panel_updates.items():
                 p2 = self._work.pages[page_i2].panels[panel_i2]
                 _set_panel_polygon(p2, poly2)
 
@@ -1247,6 +1310,8 @@ class BNAME_OT_panel_edge_move(Operator):
         if sel is not None:
             affected_pages.add(sel["page"])
             for st in self._original_geometry.get("adjacent_edges", []) if self._original_geometry else []:
+                affected_pages.add(st["page"])
+            for st in self._original_geometry.get("vertex_adjacent_edges", []) if self._original_geometry else []:
                 affected_pages.add(st["page"])
             for st in self._original_geometry.get("shared_vertices", []) if self._original_geometry else []:
                 affected_pages.add(st["page"])

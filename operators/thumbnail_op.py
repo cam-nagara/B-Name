@@ -16,7 +16,7 @@ from bpy.types import Operator
 
 from ..core.mode import MODE_PANEL, get_mode
 from ..core.work import get_active_page, get_work
-from ..utils import log, paths
+from ..utils import image_transparency, log, paths
 
 _logger = log.get_logger(__name__)
 
@@ -106,7 +106,7 @@ def render_panel_camera_crop(context, out_path: Path, *, resolution_percentage: 
             scene.render.filepath = str(full_path)
             scene.render.image_settings.file_format = "PNG"
             scene.render.resolution_percentage = max(1, min(100, int(resolution_percentage)))
-            scene.render.film_transparent = False
+            scene.render.film_transparent = image_transparency.panel_background_is_transparent(entry)
             scene.render.use_border = False
             if hasattr(scene.render, "use_crop_to_border"):
                 scene.render.use_crop_to_border = False
@@ -264,7 +264,10 @@ def _crop_render_to_panel(source: Path, out_path: Path, work, page, entry) -> bo
     right = max(left + 1, min(image.width, right))
     top = max(0, min(image.height - 1, top))
     bottom = max(top + 1, min(image.height, bottom))
-    image.crop((left, top, right, bottom)).save(str(out_path))
+    cropped = image.crop((left, top, right, bottom))
+    if image_transparency.panel_background_is_transparent(entry):
+        cropped = image_transparency.make_background_transparent(cropped)
+    cropped.save(str(out_path))
     return True
 
 

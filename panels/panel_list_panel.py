@@ -7,7 +7,6 @@ from bpy.types import Panel, UIList
 
 from ..core.mode import MODE_PAGE, MODE_PANEL, get_mode
 from ..core.work import get_active_page
-from .edge_style_ui import draw_selected_edge_style_box
 
 B_NAME_CATEGORY = "B-Name"
 
@@ -128,30 +127,6 @@ class BNAME_PT_panels(Panel):
         op.direction = "FORWARD"
         op = row.operator("bname.panel_z_order", text="最前面", icon="TRIA_UP_BAR")
         op.direction = "FRONT"
-
-        # 枠線系ツール
-        box = layout.box()
-        box.label(text="枠線ツール")
-        box.operator("bname.panel_split_template", text="縦横均等分割", icon="GRID")
-        box.operator(
-            "bname.panel_knife_cut",
-            text="枠線カットツール (F)",
-            icon="SCULPTMODE_HLT",
-        )
-        # 枠線選択ツール (シングル=辺、ダブル=枠線全体)
-        box.operator(
-            "bname.panel_edge_move",
-            text="枠線選択ツール (G)",
-            icon="EMPTY_ARROWS",
-        )
-
-        # 選択中の辺/枠線のスタイル編集
-        _draw_edge_style_box(layout, context)
-
-
-def _draw_edge_style_box(layout, context) -> None:
-    """枠線選択ツールで選択中の辺/枠線/頂点の color/width を編集する UI."""
-    draw_selected_edge_style_box(layout, context)
 
 
 _CLASSES = (

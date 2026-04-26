@@ -84,6 +84,21 @@ class BNamePageEntry(bpy.types.PropertyGroup):
         default=0,
         min=0,
     )
+    stack_expanded: BoolProperty(  # type: ignore[valid-type]
+        name="展開",
+        description="統合レイヤーリストでこのページ配下を表示する",
+        default=True,
+    )
+    offset_x_mm: FloatProperty(  # type: ignore[valid-type]
+        name="表示X",
+        description="全ページ一覧上での手動移動量 X (mm)",
+        default=0.0,
+    )
+    offset_y_mm: FloatProperty(  # type: ignore[valid-type]
+        name="表示Y",
+        description="全ページ一覧上での手動移動量 Y (mm)",
+        default=0.0,
+    )
 
     # --- コマ一覧 ---
     panels: CollectionProperty(type=BNamePanelEntry)  # type: ignore[valid-type]

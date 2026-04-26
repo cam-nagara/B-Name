@@ -1,8 +1,7 @@
 """ビューポート視点制御オペレータ.
 
-- bname.view_fit_page: アクティブページを画面にフィット (トップ+正投影)
+- bname.view_fit_page: 全ページ一覧モードのままアクティブページへフォーカス
 - bname.view_fit_all: 全ページ一覧モードを ON にして全ページを収める
-- bname.view_overview_toggle: 全ページ一覧モードの ON/OFF 切替
 
 全ページ一覧モードでは、ui/overlay.py 側で ``scene.bname_overview_mode``
 を参照し、全ページを grid レイアウトで並べて描画する。
@@ -134,14 +133,19 @@ def _overview_layout_bbox(work) -> tuple[float, float, float, float] | None:
     ch = work.paper.canvas_height_mm
     start_side = getattr(work.paper, "start_side", "right")
     read_direction = getattr(work.paper, "read_direction", "left")
-    from ..utils.page_grid import page_grid_offset_mm as _pg_offset
+    from ..utils import page_grid
 
     min_x = None
     min_y = None
     max_x = None
     max_y = None
     for i in range(n):
-        ox, oy = _pg_offset(i, cols, gap, cw, ch, start_side, read_direction)
+        ox, oy = page_grid.page_grid_offset_mm(
+            i, cols, gap, cw, ch, start_side, read_direction
+        )
+        add_x, add_y = page_grid.page_manual_offset_mm(work.pages[i])
+        ox += add_x
+        oy += add_y
         x0 = ox
         y0 = oy
         x1 = ox + cw
@@ -159,7 +163,7 @@ def _overview_layout_bbox(work) -> tuple[float, float, float, float] | None:
 
 
 class BNAME_OT_view_fit_page(Operator):
-    """アクティブページを画面にフィット (トップ+正投影)."""
+    """全ページ一覧モードのままアクティブページを画面にフィット."""
 
     bl_idname = "bname.view_fit_page"
     bl_label = "ページに合わせる"
@@ -168,16 +172,24 @@ class BNAME_OT_view_fit_page(Operator):
     @classmethod
     def poll(cls, context):
         work = get_work(context)
-        return work is not None and work.loaded and get_mode(context) == MODE_PAGE
+        return (
+            work is not None
+            and work.loaded
+            and len(work.pages) > 0
+            and 0 <= int(getattr(work, "active_page_index", -1)) < len(work.pages)
+            and get_mode(context) == MODE_PAGE
+        )
 
     def execute(self, context):
         work = get_work(context)
-        if work is None:
+        if (
+            work is None
+            or len(work.pages) == 0
+            or not (0 <= int(getattr(work, "active_page_index", -1)) < len(work.pages))
+        ):
             return {"CANCELLED"}
-        # overview_mode を OFF にする (真正面に戻す意図と合致)
         scene = context.scene
-        if getattr(scene, "bname_overview_mode", False):
-            scene.bname_overview_mode = False
+        scene.bname_overview_mode = True
         info = _find_view3d_region(context)
         if info is None:
             self.report({"ERROR"}, "3D ビューポートが見つかりません")
@@ -186,17 +198,20 @@ class BNAME_OT_view_fit_page(Operator):
         p = work.paper
         # アクティブページの grid 上の実位置にフィットする (master GP / 見開きペア
         # 配置で active page の world 座標は (0,0) とは限らないため)。
-        from ..utils.page_grid import page_grid_offset_mm as _pg_offset
+        from ..utils import page_grid
 
         cols = max(2, int(getattr(scene, "bname_overview_cols", 4)))
         gap = float(getattr(scene, "bname_overview_gap_mm", 30.0))
         start_side = getattr(p, "start_side", "right")
         read_direction = getattr(p, "read_direction", "left")
         idx = max(0, work.active_page_index) if len(work.pages) > 0 else 0
-        ox, oy = _pg_offset(
+        ox, oy = page_grid.page_grid_offset_mm(
             idx, cols, gap, p.canvas_width_mm, p.canvas_height_mm,
             start_side, read_direction,
         )
+        add_x, add_y = page_grid.page_manual_offset_mm(work.pages[idx])
+        ox += add_x
+        oy += add_y
         ok = _fit_view_to_rect_mm(
             context, area, region, ox, oy, p.canvas_width_mm, p.canvas_height_mm
         )
@@ -256,10 +271,10 @@ class BNAME_OT_view_fit_all(Operator):
 
 
 class BNAME_OT_view_overview_toggle(Operator):
-    """全ページ一覧モードの ON/OFF 切替."""
+    """互換用: 全ページ一覧モードを ON に戻す."""
 
     bl_idname = "bname.view_overview_toggle"
-    bl_label = "一覧モード切替"
+    bl_label = "一覧モードに戻す"
     bl_options = {"REGISTER"}
 
     @classmethod
@@ -269,8 +284,7 @@ class BNAME_OT_view_overview_toggle(Operator):
 
     def execute(self, context):
         scene = context.scene
-        cur = getattr(scene, "bname_overview_mode", False)
-        scene.bname_overview_mode = not cur
+        scene.bname_overview_mode = True
         for a in context.screen.areas:
             if a.type == "VIEW_3D":
                 a.tag_redraw()

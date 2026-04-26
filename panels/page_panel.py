@@ -104,24 +104,6 @@ class BNAME_PT_pages(Panel):
             if entry.spread:
                 box.label(text=f"見開き: 間隔 {entry.tombo_gap_mm:.2f}mm")
 
-        # ビュー操作 (真正面表示 / 全ページ一覧)
-        scene = context.scene
-        box = layout.box()
-        box.enabled = not is_panel_mode
-        box.label(text="ビュー", icon="VIEW_CAMERA")
-        row = box.row(align=True)
-        row.operator("bname.view_fit_page", text="ページに合わせる", icon="ZOOM_SELECTED")
-        row.operator("bname.view_fit_all", text="全ページを一覧", icon="IMGDISPLAY")
-        if getattr(scene, "bname_overview_mode", False):
-            row = box.row(align=True)
-            row.prop(scene, "bname_overview_cols", text="列数")
-            row.prop(scene, "bname_overview_gap_mm", text="間隔mm")
-            box.operator(
-                "bname.view_overview_toggle",
-                text="一覧モードを終了",
-                icon="CANCEL",
-            )
-
 
 _CLASSES = (
     BNAME_UL_pages,

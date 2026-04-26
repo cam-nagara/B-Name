@@ -318,6 +318,8 @@ def page_entry_to_dict(entry) -> dict[str, Any]:
         "title": entry.title,
         "dir": entry.dir_rel,
         "spread": bool(entry.spread),
+        "offsetXMm": round(float(getattr(entry, "offset_x_mm", 0.0)), 3),
+        "offsetYMm": round(float(getattr(entry, "offset_y_mm", 0.0)), 3),
     }
     if entry.spread:
         d["originalPages"] = [ref.page_id for ref in entry.original_pages]
@@ -338,6 +340,8 @@ def page_entry_from_dict(entry, data: dict[str, Any]) -> None:
     entry.title = data.get("title", "")
     entry.dir_rel = data.get("dir", "")
     entry.spread = bool(data.get("spread", False))
+    entry.offset_x_mm = float(data.get("offsetXMm", 0.0))
+    entry.offset_y_mm = float(data.get("offsetYMm", 0.0))
     entry.original_pages.clear()
     for ref_id in data.get("originalPages", []):
         ref = entry.original_pages.add()
@@ -676,6 +680,8 @@ def page_to_dict(page_entry) -> dict[str, Any]:
         "id": page_entry.id,
         "title": page_entry.title,
         "spread": bool(page_entry.spread),
+        "offsetXMm": round(float(getattr(page_entry, "offset_x_mm", 0.0)), 3),
+        "offsetYMm": round(float(getattr(page_entry, "offset_y_mm", 0.0)), 3),
         "activePanelIndex": int(page_entry.active_panel_index),
         "activeBalloonIndex": int(page_entry.active_balloon_index),
         "activeTextIndex": int(page_entry.active_text_index),
@@ -690,6 +696,8 @@ def page_from_dict(page_entry, data: dict[str, Any]) -> None:
     page_entry.id = data.get("id", page_entry.id)
     if "title" in data:
         page_entry.title = data["title"]
+    page_entry.offset_x_mm = float(data.get("offsetXMm", getattr(page_entry, "offset_x_mm", 0.0)))
+    page_entry.offset_y_mm = float(data.get("offsetYMm", getattr(page_entry, "offset_y_mm", 0.0)))
     page_entry.panels.clear()
     for panel_data in data.get("panels", []):
         entry = page_entry.panels.add()

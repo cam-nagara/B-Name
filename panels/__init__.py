@@ -10,20 +10,23 @@ from . import (
     export_panel,
     gpencil_panel,
     layer_panel as _legacy_layer_panel,
-    page_panel,
+    page_panel as _legacy_page_panel,
     panel_camera_panel,
     panel_detail_panel,
-    panel_list_panel,
+    panel_list_panel as _legacy_panel_list_panel,
+    panel_tools_panel as _legacy_panel_tools_panel,
     paper_panel,
+    tool_panel,
+    view_panel,
     work_panel,
 )
 
 _MODULES = (
     work_panel,
     paper_panel,
-    page_panel,
+    tool_panel,
+    view_panel,
     panel_camera_panel,
-    panel_list_panel,
     panel_detail_panel,
     gpencil_panel,
     export_panel,
@@ -48,7 +51,13 @@ def _unregister_legacy_image_layer_panel() -> None:
 
 def _unregister_legacy_tool_panels() -> None:
     """旧独立セクションを Reload Addons 後も残さない."""
-    for module in (_legacy_balloon_panel, _legacy_effect_line_panel):
+    for module in (
+        _legacy_balloon_panel,
+        _legacy_effect_line_panel,
+        _legacy_page_panel,
+        _legacy_panel_list_panel,
+        _legacy_panel_tools_panel,
+    ):
         try:
             module.unregister()
         except Exception:
@@ -59,6 +68,12 @@ def _unregister_legacy_tool_panels() -> None:
         "BNAME_PT_balloons",
         "BNAME_PT_texts",
         "BNAME_PT_effect_line",
+        "BNAME_UL_pages",
+        "BNAME_PT_pages",
+        "BNAME_OT_panel_enter_from_list",
+        "BNAME_UL_panels",
+        "BNAME_PT_panels",
+        "BNAME_PT_panel_tools",
     ):
         cls = getattr(bpy.types, class_name, None)
         if cls is None:

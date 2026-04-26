@@ -95,6 +95,9 @@ def _resolve_page_from_event(context, event):
                 ox, oy = page_grid.page_grid_offset_mm(
                     page_idx, cols, gap, cw, ch, start_side, read_direction
                 )
+                add_x, add_y = page_grid.page_manual_offset_mm(page)
+                ox += add_x
+                oy += add_y
                 return work, page, x_mm - ox, y_mm - oy
             return work, page, None, None
     return work, page, None, None
@@ -109,6 +112,28 @@ def _default_position_for(work, page, local_x_mm: float | None, local_y_mm: floa
         return local_x_mm, local_y_mm
     paper = work.paper
     return paper.canvas_width_mm / 2.0, paper.canvas_height_mm / 2.0
+
+
+def _creation_violates_layer_scope(context, page, x_mm: float, y_mm: float, width_mm: float, height_mm: float) -> bool:
+    from ..core.mode import MODE_PANEL, MODE_PAGE, get_mode
+    from ..utils import layer_stack
+
+    cx = x_mm + width_mm * 0.5
+    cy = y_mm + height_mm * 0.5
+    mode = get_mode(context)
+    if mode == MODE_PAGE:
+        return layer_stack.panel_containing_point(page, cx, cy) is not None
+    if mode == MODE_PANEL:
+        idx = int(getattr(page, "active_panel_index", -1))
+        if not (0 <= idx < len(page.panels)):
+            return False
+        hit = layer_stack.panel_containing_point(page, cx, cy)
+        return (
+            hit is None
+            or str(getattr(hit, "panel_stem", "") or "")
+            != str(getattr(page.panels[idx], "panel_stem", "") or "")
+        )
+    return False
 
 
 class BNAME_OT_balloon_add(Operator):
@@ -146,6 +171,11 @@ class BNAME_OT_balloon_add(Operator):
         page = get_active_page(context)
         if page is None:
             self.report({"ERROR"}, "ページが選択されていません")
+            return {"CANCELLED"}
+        if _creation_violates_layer_scope(
+            context, page, self.x_mm, self.y_mm, self.width_mm, self.height_mm
+        ):
+            self.report({"ERROR"}, "このモードではその位置にフキダシを作成できません")
             return {"CANCELLED"}
         entry = page.balloons.add()
         entry.id = _allocate_balloon_id(page)

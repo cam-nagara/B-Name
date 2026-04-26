@@ -1,0 +1,272 @@
+"""ビューポート上で統合レイヤー行をドラッグ移動するツール."""
+
+from __future__ import annotations
+
+import bpy
+from bpy.types import Operator
+
+from ..core.mode import MODE_PANEL, MODE_PAGE, get_mode
+from ..core.work import get_active_page, get_work
+from ..utils import geom, layer_stack as layer_stack_utils, page_grid
+from . import panel_picker
+
+
+def _move_panel(panel, dx_mm: float, dy_mm: float) -> None:
+    if getattr(panel, "shape_type", "") == "rect":
+        panel.rect_x_mm += dx_mm
+        panel.rect_y_mm += dy_mm
+        return
+    for vertex in getattr(panel, "vertices", []):
+        vertex.x_mm += dx_mm
+        vertex.y_mm += dy_mm
+
+
+def _move_balloon(page, balloon, dx_mm: float, dy_mm: float) -> None:
+    balloon.x_mm += dx_mm
+    balloon.y_mm += dy_mm
+    bid = str(getattr(balloon, "id", "") or "")
+    if not bid:
+        return
+    for text in getattr(page, "texts", []):
+        if getattr(text, "parent_balloon_id", "") == bid:
+            text.x_mm += dx_mm
+            text.y_mm += dy_mm
+
+
+def _entry_center(entry) -> tuple[float, float]:
+    return (
+        float(getattr(entry, "x_mm", 0.0)) + float(getattr(entry, "width_mm", 0.0)) * 0.5,
+        float(getattr(entry, "y_mm", 0.0)) + float(getattr(entry, "height_mm", 0.0)) * 0.5,
+    )
+
+
+def _panel_children(page, panel):
+    balloons = []
+    texts = []
+    target_stem = str(getattr(panel, "panel_stem", "") or "")
+    for balloon in getattr(page, "balloons", []):
+        hit = layer_stack_utils.panel_containing_point(page, *_entry_center(balloon))
+        if hit is not None and str(getattr(hit, "panel_stem", "") or "") == target_stem:
+            balloons.append(balloon)
+    attached_texts = {
+        getattr(text, "id", "")
+        for balloon in balloons
+        for text in getattr(page, "texts", [])
+        if getattr(text, "parent_balloon_id", "") == getattr(balloon, "id", "")
+    }
+    for text in getattr(page, "texts", []):
+        if getattr(text, "id", "") in attached_texts:
+            continue
+        hit = layer_stack_utils.panel_containing_point(page, *_entry_center(text))
+        if hit is not None and str(getattr(hit, "panel_stem", "") or "") == target_stem:
+            texts.append(text)
+    return balloons, texts
+
+
+def _snapshot_panel(panel):
+    return {
+        "shape": getattr(panel, "shape_type", ""),
+        "rect": (
+            float(getattr(panel, "rect_x_mm", 0.0)),
+            float(getattr(panel, "rect_y_mm", 0.0)),
+        ),
+        "verts": [(float(v.x_mm), float(v.y_mm)) for v in getattr(panel, "vertices", [])],
+    }
+
+
+def _restore_panel(panel, snapshot) -> None:
+    if snapshot["shape"] == "rect":
+        panel.rect_x_mm, panel.rect_y_mm = snapshot["rect"]
+        return
+    for vertex, (x_mm, y_mm) in zip(getattr(panel, "vertices", []), snapshot["verts"], strict=False):
+        vertex.x_mm = x_mm
+        vertex.y_mm = y_mm
+
+
+def _point_inside_active_panel(context, x_mm: float, y_mm: float) -> bool:
+    work = get_work(context)
+    page = get_active_page(context)
+    if work is None or page is None:
+        return True
+    idx = int(getattr(page, "active_panel_index", -1))
+    if not (0 <= idx < len(page.panels)):
+        return True
+    hit = layer_stack_utils.panel_containing_point(page, x_mm, y_mm)
+    return (
+        hit is not None
+        and str(getattr(hit, "panel_stem", "") or "")
+        == str(getattr(page.panels[idx], "panel_stem", "") or "")
+    )
+
+
+def _move_would_violate_layer_scope(context, page, entry, dx_mm: float, dy_mm: float) -> bool:
+    kind = get_mode(context)
+    cx, cy = _entry_center(entry)
+    nx, ny = cx + dx_mm, cy + dy_mm
+    if kind == MODE_PAGE:
+        return layer_stack_utils.panel_containing_point(page, nx, ny) is not None
+    if kind == MODE_PANEL:
+        return not _point_inside_active_panel(context, nx, ny)
+    return False
+
+
+class BNAME_OT_layer_move_tool(Operator):
+    bl_idname = "bname.layer_move_tool"
+    bl_label = "レイヤー移動ツール"
+    bl_options = {"REGISTER", "UNDO", "BLOCKING"}
+
+    _last_world: tuple[float, float] | None
+    _target: dict | None
+    _snapshots: list[tuple[str, object, object]]
+    _dragging: bool
+
+    @classmethod
+    def poll(cls, context):
+        work = get_work(context)
+        return bool(work and work.loaded and getattr(context.scene, "bname_layer_stack", None) is not None)
+
+    def invoke(self, context, event):
+        item = layer_stack_utils.active_stack_item(context)
+        resolved = layer_stack_utils.resolve_stack_item(context, item)
+        if item is None or resolved is None or resolved.get("target") is None:
+            self.report({"WARNING"}, "移動するレイヤーを選択してください")
+            return {"CANCELLED"}
+        coords = panel_picker._event_world_mm(context, event)
+        self._last_world = coords
+        self._target = resolved
+        self._snapshots = []
+        self._dragging = coords is not None and event.type == "LEFTMOUSE"
+        self._capture_snapshot(item.kind, resolved)
+        context.window_manager.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
+
+    def modal(self, context, event):
+        if event.type in {"ESC", "RIGHTMOUSE"}:
+            self._restore_snapshots(context)
+            layer_stack_utils.tag_view3d_redraw(context)
+            return {"CANCELLED"}
+        if event.type == "LEFTMOUSE" and event.value == "PRESS":
+            coords = panel_picker._event_world_mm(context, event)
+            if coords is not None:
+                self._last_world = coords
+                self._dragging = True
+            return {"RUNNING_MODAL"}
+        if event.type == "LEFTMOUSE" and event.value == "RELEASE":
+            if self._dragging:
+                layer_stack_utils.sync_layer_stack(context)
+                return {"FINISHED"}
+            return {"RUNNING_MODAL"}
+        if event.type != "MOUSEMOVE":
+            return {"RUNNING_MODAL"}
+        coords = panel_picker._event_world_mm(context, event)
+        if coords is None or self._last_world is None or not self._dragging:
+            return {"RUNNING_MODAL"}
+        dx = coords[0] - self._last_world[0]
+        dy = coords[1] - self._last_world[1]
+        if dx == 0.0 and dy == 0.0:
+            return {"RUNNING_MODAL"}
+        if self._apply_delta(context, dx, dy):
+            self._last_world = coords
+            layer_stack_utils.apply_stack_order(context)
+            page_grid.apply_page_collection_transforms(context, get_work(context))
+            layer_stack_utils.tag_view3d_redraw(context)
+        return {"RUNNING_MODAL"}
+
+    def _capture_snapshot(self, kind: str, resolved: dict) -> None:
+        target = resolved.get("target")
+        page = resolved.get("page")
+        if kind == "page":
+            self._snapshots.append(("page", target, (target.offset_x_mm, target.offset_y_mm)))
+        elif kind == "panel":
+            self._snapshots.append(("panel", target, _snapshot_panel(target)))
+            if page is not None:
+                balloons, texts = _panel_children(page, target)
+                attached_text_ids: set[str] = set()
+                for balloon in balloons:
+                    self._snapshots.append(("balloon", balloon, (balloon.x_mm, balloon.y_mm)))
+                    bid = str(getattr(balloon, "id", "") or "")
+                    for text in getattr(page, "texts", []):
+                        if getattr(text, "parent_balloon_id", "") == bid:
+                            attached_text_ids.add(str(getattr(text, "id", "") or ""))
+                            self._snapshots.append(("attached_text", text, (text.x_mm, text.y_mm)))
+                for text in texts:
+                    if str(getattr(text, "id", "") or "") in attached_text_ids:
+                        continue
+                    self._snapshots.append(("text", text, (text.x_mm, text.y_mm)))
+        elif kind in {"balloon", "text", "image"}:
+            self._snapshots.append((kind, target, (target.x_mm, target.y_mm)))
+            if kind == "balloon" and page is not None:
+                bid = str(getattr(target, "id", "") or "")
+                for text in getattr(page, "texts", []):
+                    if getattr(text, "parent_balloon_id", "") == bid:
+                        self._snapshots.append(("attached_text", text, (text.x_mm, text.y_mm)))
+
+    def _restore_snapshots(self, context) -> None:
+        for kind, target, data in self._snapshots:
+            if kind == "page":
+                target.offset_x_mm, target.offset_y_mm = data
+            elif kind == "panel":
+                _restore_panel(target, data)
+            elif kind in {"balloon", "text", "attached_text", "image"}:
+                target.x_mm, target.y_mm = data
+        page_grid.apply_page_collection_transforms(context, get_work(context))
+
+    def _apply_delta(self, context, dx_mm: float, dy_mm: float) -> bool:
+        if self._target is None:
+            return False
+        kind = self._target.get("kind")
+        target = self._target.get("target")
+        page = self._target.get("page") or get_active_page(context)
+        if kind == "page":
+            target.offset_x_mm += dx_mm
+            target.offset_y_mm += dy_mm
+            return True
+        if kind == "panel":
+            _move_panel(target, dx_mm, dy_mm)
+            for child_kind, child, _data in self._snapshots:
+                if child_kind == "balloon":
+                    _move_balloon(page, child, dx_mm, dy_mm)
+                elif child_kind == "text":
+                    child.x_mm += dx_mm
+                    child.y_mm += dy_mm
+            return True
+        if kind == "balloon" and page is not None:
+            if _move_would_violate_layer_scope(context, page, target, dx_mm, dy_mm):
+                return False
+            _move_balloon(page, target, dx_mm, dy_mm)
+            return True
+        if kind == "text" and page is not None:
+            if _move_would_violate_layer_scope(context, page, target, dx_mm, dy_mm):
+                return False
+            target.x_mm += dx_mm
+            target.y_mm += dy_mm
+            return True
+        if kind == "image":
+            page = get_active_page(context)
+            if page is not None and _move_would_violate_layer_scope(context, page, target, dx_mm, dy_mm):
+                return False
+            target.x_mm += dx_mm
+            target.y_mm += dy_mm
+            return True
+        obj = self._target.get("object")
+        if obj is not None:
+            obj.location.x += geom.mm_to_m(dx_mm)
+            obj.location.y += geom.mm_to_m(dy_mm)
+            return True
+        return False
+
+
+_CLASSES = (BNAME_OT_layer_move_tool,)
+
+
+def register() -> None:
+    for cls in _CLASSES:
+        bpy.utils.register_class(cls)
+
+
+def unregister() -> None:
+    for cls in reversed(_CLASSES):
+        try:
+            bpy.utils.unregister_class(cls)
+        except RuntimeError:
+            pass

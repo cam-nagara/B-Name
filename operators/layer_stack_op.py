@@ -86,10 +86,31 @@ class BNAME_OT_layer_stack_delete(Operator):
         return {"FINISHED"}
 
 
+class BNAME_OT_layer_stack_enter_panel(Operator):
+    bl_idname = "bname.layer_stack_enter_panel"
+    bl_label = "コマ編集へ"
+    bl_options = {"REGISTER"}
+
+    stack_index: IntProperty(default=-1)  # type: ignore[valid-type]
+
+    @classmethod
+    def poll(cls, context):
+        return getattr(context.scene, "bname_layer_stack", None) is not None
+
+    def execute(self, context):
+        if not layer_stack_utils.select_stack_index(context, self.stack_index):
+            return {"CANCELLED"}
+        item = layer_stack_utils.active_stack_item(context)
+        if item is None or item.kind != "panel":
+            return {"CANCELLED"}
+        return bpy.ops.bname.enter_panel_mode("EXEC_DEFAULT")
+
+
 _CLASSES = (
     BNAME_OT_layer_stack_select,
     BNAME_OT_layer_stack_move,
     BNAME_OT_layer_stack_delete,
+    BNAME_OT_layer_stack_enter_panel,
 )
 
 

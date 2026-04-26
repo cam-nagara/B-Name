@@ -191,7 +191,7 @@ def _resolve_page_offset_mm(work, page) -> tuple[float, float]:
     try:
         import bpy
 
-        from ..utils.page_grid import page_grid_offset_mm
+        from ..utils.page_grid import page_grid_offset_mm, page_manual_offset_mm
     except Exception:  # pragma: no cover - bpy unavailable outside Blender
         return (0.0, 0.0)
     scene = getattr(bpy.context, "scene", None)
@@ -201,7 +201,7 @@ def _resolve_page_offset_mm(work, page) -> tuple[float, float]:
     gap = float(getattr(scene, "bname_overview_gap_mm", 30.0))
     index = _resolve_page_index(work, page)
     paper = work.paper
-    return page_grid_offset_mm(
+    ox, oy = page_grid_offset_mm(
         index,
         cols,
         gap,
@@ -210,6 +210,8 @@ def _resolve_page_offset_mm(work, page) -> tuple[float, float]:
         getattr(paper, "start_side", "right"),
         getattr(paper, "read_direction", "left"),
     )
+    add_x, add_y = page_manual_offset_mm(page)
+    return ox + add_x, oy + add_y
 
 
 def _is_left_half_page(work, page) -> bool:

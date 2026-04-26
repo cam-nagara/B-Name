@@ -34,7 +34,7 @@ class BNAME_PT_panel_shape(Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = B_NAME_CATEGORY
-    bl_order = 7
+    bl_order = 8
     bl_options = {"DEFAULT_CLOSED"}
 
     @classmethod
@@ -87,7 +87,7 @@ class BNAME_PT_panel_border(Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = B_NAME_CATEGORY
-    bl_order = 8
+    bl_order = 9
     bl_options = {"DEFAULT_CLOSED"}
 
     @classmethod
@@ -141,7 +141,7 @@ class BNAME_PT_panel_white_margin(Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = B_NAME_CATEGORY
-    bl_order = 9
+    bl_order = 10
     bl_options = {"DEFAULT_CLOSED"}
 
     @classmethod

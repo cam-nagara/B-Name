@@ -6,9 +6,18 @@ from dataclasses import dataclass
 
 import bpy
 
-from ..core.work import get_active_page
+from ..core.work import get_active_page, get_work
 from . import gpencil as gp_utils
 from . import log
+from .layer_hierarchy import (
+    PAGE_KIND,
+    PANEL_KIND,
+    entry_center,
+    page_stack_key,
+    panel_containing_point,
+    panel_stack_key,
+    split_child_key,
+)
 
 _logger = log.get_logger(__name__)
 
@@ -120,23 +129,92 @@ def _iter_gp_node_targets(nodes, *, kind: str, depth: int, parent_key: str, used
             yield LayerTarget(kind, key, node.name, parent_key, depth)
 
 
+def _collect_page_layer_targets(
+    page,
+    panels_by_key: dict[str, object],
+    *,
+    include_page_children: bool = True,
+) -> list[LayerTarget]:
+    targets: list[LayerTarget] = []
+    used_text: set[str] = set()
+    used_balloon: set[str] = set()
+    page_key = page_stack_key(page)
+    panel_children: dict[str, list[LayerTarget]] = {}
+    page_children: list[LayerTarget] = []
+
+    for entry in reversed(list(getattr(page, "balloons", []))):
+        bid = _ensure_unique_id(entry, used_balloon, "balloon")
+        panel = panel_containing_point(page, *entry_center(entry))
+        if panel is not None:
+            parent = panel_stack_key(page, panel)
+            depth = 2
+        else:
+            parent = page_key
+            depth = 1
+        target = LayerTarget("balloon", f"{page_key}:{bid}", bid, parent, depth)
+        if depth == 2:
+            panel_children.setdefault(parent, []).append(target)
+        else:
+            page_children.append(target)
+
+    for entry in reversed(list(getattr(page, "texts", []))):
+        tid = _ensure_unique_id(entry, used_text, "text")
+        label = getattr(entry, "body", "") or tid
+        center = entry_center(entry)
+        panel = panel_containing_point(page, *center)
+        if panel is not None:
+            parent = panel_stack_key(page, panel)
+            depth = 2
+        else:
+            parent = page_key
+            depth = 1
+        target = LayerTarget("text", f"{page_key}:{tid}", label, parent, depth)
+        if depth == 2:
+            panel_children.setdefault(parent, []).append(target)
+        else:
+            page_children.append(target)
+
+    for panel_key in panels_by_key:
+        targets.extend(panel_children.get(panel_key, []))
+    if include_page_children:
+        targets.extend(page_children)
+    return targets
+
+
 def collect_targets(context) -> list[LayerTarget]:
-    """現在のページ/シーンから、前面→背面の統合レイヤー候補を返す."""
+    """現在の作品/シーンから、前面→背面の統合レイヤー候補を返す."""
     scene = context.scene
-    page = get_active_page(context)
+    work = get_work(context)
     targets: list[LayerTarget] = []
 
-    if page is not None:
-        used_text: set[str] = set()
-        for entry in reversed(list(getattr(page, "texts", []))):
-            key = _ensure_unique_id(entry, used_text, "text")
-            label = getattr(entry, "body", "") or key
-            targets.append(LayerTarget("text", key, label))
-
-        used_balloon: set[str] = set()
-        for entry in reversed(list(getattr(page, "balloons", []))):
-            key = _ensure_unique_id(entry, used_balloon, "balloon")
-            targets.append(LayerTarget("balloon", key, key))
+    if work is not None and getattr(work, "loaded", False):
+        for page in work.pages:
+            page_key = page_stack_key(page)
+            label = getattr(page, "title", "") or page_key
+            targets.append(LayerTarget(PAGE_KIND, page_key, label))
+            if not bool(getattr(page, "stack_expanded", True)):
+                continue
+            panels = sorted(
+                list(getattr(page, "panels", [])),
+                key=lambda p: int(getattr(p, "z_order", 0)),
+                reverse=True,
+            )
+            panels_by_key: dict[str, object] = {}
+            for panel in panels:
+                key = panel_stack_key(page, panel)
+                panels_by_key[key] = panel
+                panel_label = getattr(panel, "title", "") or getattr(panel, "panel_stem", "") or key
+                targets.append(LayerTarget(PANEL_KIND, key, panel_label, page_key, 1))
+                targets.extend(
+                    _collect_page_layer_targets(
+                        page, {key: panel}, include_page_children=False
+                    )
+                )
+            # コマ外のページ直下レイヤーは、すべてのコマ行の後にまとめて表示する。
+            all_page_layers = _collect_page_layer_targets(page, panels_by_key)
+            for target in all_page_layers:
+                if target.parent_key == page_key:
+                    targets.append(target)
 
     effect_obj = get_effect_gp_object()
     if effect_obj is not None:
@@ -165,6 +243,75 @@ def _set_item_from_target(item, target: LayerTarget) -> None:
     item.depth = target.depth
 
 
+def _find_insert_index_for_target(stack, target: LayerTarget) -> int:
+    if target.parent_key:
+        parent_idx = -1
+        last_child_idx = -1
+        for i, item in enumerate(stack):
+            if item.key == target.parent_key and item.kind in {PAGE_KIND, PANEL_KIND, "gp_folder"}:
+                parent_idx = i
+                last_child_idx = max(last_child_idx, i)
+            elif getattr(item, "parent_key", "") == target.parent_key:
+                last_child_idx = i
+        if last_child_idx >= 0:
+            return last_child_idx + 1
+        if parent_idx >= 0:
+            return parent_idx + 1
+    if target.kind == PAGE_KIND:
+        last_page = -1
+        for i, item in enumerate(stack):
+            if item.kind == PAGE_KIND:
+                last_page = i
+        return last_page + 1
+    return len(stack)
+
+
+def _add_target_to_stack(stack, target: LayerTarget) -> None:
+    item = stack.add()
+    _set_item_from_target(item, target)
+    from_index = len(stack) - 1
+    to_index = max(0, min(_find_insert_index_for_target(stack, target), from_index))
+    if to_index != from_index:
+        stack.move(from_index, to_index)
+
+
+def _normalize_tree_order(stack) -> None:
+    """ページ/コマを常にツリー構造へ戻す。
+
+    UIList のD&Dは親子制約を知らないため、ページが子階層へ落ちたり
+    コマが別コマ配下へ落ちたように見える並びを、次の描画で正規化する。
+    """
+    current = [stack_item_uid(item) for item in stack]
+    desired: list[str] = []
+
+    page_items = [item for item in stack if item.kind == PAGE_KIND]
+    for page_item in page_items:
+        page_uid = stack_item_uid(page_item)
+        desired.append(page_uid)
+        page_key = page_item.key
+        panel_items = [
+            item
+            for item in stack
+            if item.kind == PANEL_KIND and split_child_key(item.key)[0] == page_key
+        ]
+        for panel_item in panel_items:
+            panel_uid = stack_item_uid(panel_item)
+            desired.append(panel_uid)
+            for child in stack:
+                if getattr(child, "parent_key", "") == panel_item.key:
+                    desired.append(stack_item_uid(child))
+        for child in stack:
+            if getattr(child, "parent_key", "") == page_key and child.kind != PANEL_KIND:
+                desired.append(stack_item_uid(child))
+
+    used = set(desired)
+    desired.extend(uid for uid in current if uid not in used)
+    for target_index, uid in enumerate(desired):
+        current_index = next((i for i, item in enumerate(stack) if stack_item_uid(item) == uid), -1)
+        if current_index >= 0 and current_index != target_index:
+            stack.move(current_index, target_index)
+
+
 def sync_layer_stack(context, *, preserve_active_index: bool = False):
     """統合レイヤーリストを実データに同期する。
 
@@ -176,6 +323,9 @@ def sync_layer_stack(context, *, preserve_active_index: bool = False):
     if stack is None:
         return None
     old_active_index = int(getattr(scene, "bname_active_layer_stack_index", -1))
+    old_active_uid = ""
+    if 0 <= old_active_index < len(stack):
+        old_active_uid = stack_item_uid(stack[old_active_index])
 
     targets = collect_targets(context)
     target_by_uid = {target.uid: target for target in targets}
@@ -191,12 +341,18 @@ def sync_layer_stack(context, *, preserve_active_index: bool = False):
             _set_item_from_target(item, target)
 
     missing = [target for target in targets if target.uid not in existing]
-    for target in reversed(missing):
-        item = stack.add()
-        _set_item_from_target(item, target)
-        stack.move(len(stack) - 1, 0)
+    for target in missing:
+        _add_target_to_stack(stack, target)
+    _normalize_tree_order(stack)
 
-    if preserve_active_index and 0 <= old_active_index < len(stack):
+    if preserve_active_index and old_active_uid:
+        for i, item in enumerate(stack):
+            if stack_item_uid(item) == old_active_uid:
+                scene.bname_active_layer_stack_index = i
+                break
+        else:
+            _sync_active_stack_index(context)
+    elif preserve_active_index and 0 <= old_active_index < len(stack):
         scene.bname_active_layer_stack_index = old_active_index
     else:
         _sync_active_stack_index(context)
@@ -206,8 +362,17 @@ def sync_layer_stack(context, *, preserve_active_index: bool = False):
 def _active_key_from_scene(context) -> tuple[str, str] | None:
     scene = context.scene
     kind = getattr(scene, "bname_active_layer_kind", "gp")
+    work = get_work(context)
     page = get_active_page(context)
 
+    if kind == PAGE_KIND and work is not None:
+        idx = int(getattr(work, "active_page_index", -1))
+        if 0 <= idx < len(work.pages):
+            return PAGE_KIND, page_stack_key(work.pages[idx])
+    if kind == PANEL_KIND and page is not None:
+        idx = int(getattr(page, "active_panel_index", -1))
+        if 0 <= idx < len(page.panels):
+            return PANEL_KIND, panel_stack_key(page, page.panels[idx])
     if kind == "gp_folder":
         key = str(getattr(scene, "bname_active_gp_folder_key", "") or "")
         obj = gp_utils.get_master_gpencil()
@@ -225,11 +390,11 @@ def _active_key_from_scene(context) -> tuple[str, str] | None:
     if kind == "balloon" and page is not None:
         idx = int(getattr(page, "active_balloon_index", -1))
         if 0 <= idx < len(page.balloons):
-            return "balloon", getattr(page.balloons[idx], "id", "")
+            return "balloon", f"{page_stack_key(page)}:{getattr(page.balloons[idx], 'id', '')}"
     if kind == "text" and page is not None:
         idx = int(getattr(page, "active_text_index", -1))
         if 0 <= idx < len(page.texts):
-            return "text", getattr(page.texts[idx], "id", "")
+            return "text", f"{page_stack_key(page)}:{getattr(page.texts[idx], 'id', '')}"
     if kind == "effect":
         key = str(getattr(scene, "bname_active_effect_layer_name", "") or "")
         obj = get_effect_gp_object()
@@ -299,8 +464,33 @@ def resolve_stack_item(context, item):
     kind = getattr(item, "kind", "")
     key = getattr(item, "key", "")
     scene = context.scene
+    work = get_work(context)
     page = get_active_page(context)
 
+    if kind == PAGE_KIND:
+        if work is None:
+            return None
+        idx, entry = _find_by_id(work.pages, key)
+        return {"kind": kind, "target": entry, "object": None, "index": idx}
+    if kind == PANEL_KIND:
+        if work is None:
+            return None
+        page_id, stem = split_child_key(key)
+        page_idx, target_page = _find_by_id(work.pages, page_id)
+        if target_page is None:
+            return None
+        for panel_idx, panel in enumerate(target_page.panels):
+            if getattr(panel, "panel_stem", "") == stem or getattr(panel, "id", "") == stem:
+                return {
+                    "kind": kind,
+                    "target": panel,
+                    "object": None,
+                    "index": panel_idx,
+                    "page": target_page,
+                    "page_index": page_idx,
+                }
+        return {"kind": kind, "target": None, "object": None, "index": -1,
+                "page": target_page, "page_index": page_idx}
     if kind == "gp":
         obj = gp_utils.get_master_gpencil()
         layer = getattr(getattr(obj, "data", None), "layers", None)
@@ -317,12 +507,40 @@ def resolve_stack_item(context, item):
             return None
         idx, entry = _find_by_id(coll, key)
         return {"kind": kind, "target": entry, "object": None, "index": idx}
-    if kind == "balloon" and page is not None:
-        idx, entry = _find_by_id(page.balloons, key)
-        return {"kind": kind, "target": entry, "object": None, "index": idx}
-    if kind == "text" and page is not None:
-        idx, entry = _find_by_id(page.texts, key)
-        return {"kind": kind, "target": entry, "object": None, "index": idx}
+    if kind == "balloon":
+        page_id, child_id = split_child_key(key)
+        target_page = page
+        page_idx = int(getattr(work, "active_page_index", -1)) if work is not None else -1
+        if page_id and work is not None:
+            page_idx, target_page = _find_by_id(work.pages, page_id)
+        if target_page is None:
+            return None
+        idx, entry = _find_by_id(target_page.balloons, child_id or key)
+        return {
+            "kind": kind,
+            "target": entry,
+            "object": None,
+            "index": idx,
+            "page": target_page,
+            "page_index": page_idx,
+        }
+    if kind == "text":
+        page_id, child_id = split_child_key(key)
+        target_page = page
+        page_idx = int(getattr(work, "active_page_index", -1)) if work is not None else -1
+        if page_id and work is not None:
+            page_idx, target_page = _find_by_id(work.pages, page_id)
+        if target_page is None:
+            return None
+        idx, entry = _find_by_id(target_page.texts, child_id or key)
+        return {
+            "kind": kind,
+            "target": entry,
+            "object": None,
+            "index": idx,
+            "page": target_page,
+            "page_index": page_idx,
+        }
     if kind == "effect":
         obj = get_effect_gp_object()
         layers = getattr(getattr(obj, "data", None), "layers", None)
@@ -364,7 +582,47 @@ def select_stack_index(context, index: int) -> bool:
     kind = item.kind
     scene = context.scene
     page = get_active_page(context)
-    if kind == "gp":
+    if kind == PAGE_KIND:
+        work = get_work(context)
+        idx = int(resolved.get("index", -1))
+        if work is None or not (0 <= idx < len(work.pages)):
+            return False
+        work.active_page_index = idx
+        try:
+            from ..core.mode import MODE_PAGE, set_mode
+
+            set_mode(MODE_PAGE, context)
+            scene.bname_overview_mode = True
+            scene.bname_current_panel_stem = ""
+            scene.bname_current_panel_page_id = ""
+        except Exception:  # noqa: BLE001
+            pass
+        scene.bname_active_gp_folder_key = ""
+        scene.bname_active_layer_kind = PAGE_KIND
+    elif kind == PANEL_KIND:
+        work = get_work(context)
+        page_idx = int(resolved.get("page_index", -1))
+        panel_idx = int(resolved.get("index", -1))
+        target_page = resolved.get("page")
+        if (
+            work is None
+            or target_page is None
+            or not (0 <= page_idx < len(work.pages))
+            or not (0 <= panel_idx < len(target_page.panels))
+        ):
+            return False
+        work.active_page_index = page_idx
+        target_page.active_panel_index = panel_idx
+        try:
+            from ..core.mode import MODE_PAGE, set_mode
+
+            set_mode(MODE_PAGE, context)
+            scene.bname_overview_mode = True
+        except Exception:  # noqa: BLE001
+            pass
+        scene.bname_active_gp_folder_key = ""
+        scene.bname_active_layer_kind = PANEL_KIND
+    elif kind == "gp":
         obj = resolved.get("object")
         layer = resolved.get("target")
         _set_active_object(context, obj)
@@ -384,12 +642,26 @@ def select_stack_index(context, index: int) -> bool:
         scene.bname_active_image_layer_index = int(resolved.get("index", -1))
         scene.bname_active_gp_folder_key = ""
         scene.bname_active_layer_kind = "image"
-    elif kind == "balloon" and page is not None:
-        page.active_balloon_index = int(resolved.get("index", -1))
+    elif kind == "balloon":
+        target_page = resolved.get("page") or page
+        if target_page is None:
+            return False
+        work = get_work(context)
+        page_idx = int(resolved.get("page_index", -1))
+        if work is not None and 0 <= page_idx < len(work.pages):
+            work.active_page_index = page_idx
+        target_page.active_balloon_index = int(resolved.get("index", -1))
         scene.bname_active_gp_folder_key = ""
         scene.bname_active_layer_kind = "balloon"
-    elif kind == "text" and page is not None:
-        page.active_text_index = int(resolved.get("index", -1))
+    elif kind == "text":
+        target_page = resolved.get("page") or page
+        if target_page is None:
+            return False
+        work = get_work(context)
+        page_idx = int(resolved.get("page_index", -1))
+        if work is not None and 0 <= page_idx < len(work.pages):
+            work.active_page_index = page_idx
+        target_page.active_text_index = int(resolved.get("index", -1))
         scene.bname_active_gp_folder_key = ""
         scene.bname_active_layer_kind = "text"
     elif kind == "effect":
@@ -414,10 +686,15 @@ def move_stack_item(context, from_index: int, to_index: int) -> bool:
     to_index = max(0, min(to_index, len(stack) - 1))
     if not (0 <= from_index < len(stack)) or from_index == to_index:
         return False
+    moved_uid = stack_item_uid(stack[from_index])
     stack.move(from_index, to_index)
     context.scene.bname_active_layer_stack_index = to_index
     apply_stack_order(context)
-    select_stack_index(context, to_index)
+    sync_layer_stack(context, preserve_active_index=True)
+    for i, item in enumerate(context.scene.bname_layer_stack):
+        if stack_item_uid(item) == moved_uid:
+            select_stack_index(context, i)
+            break
     return True
 
 
@@ -442,6 +719,60 @@ def _restore_active_collection_index(owner, prop_name: str, coll, active_key: st
     setattr(owner, prop_name, 0 if len(coll) > 0 else -1)
 
 
+def _restore_active_page_panel(work, active_page_key: str, active_panel_key: str) -> None:
+    if work is None:
+        return
+    work.active_page_index = -1
+    for i, page in enumerate(work.pages):
+        if page_stack_key(page) == active_page_key:
+            work.active_page_index = i
+            break
+    if work.active_page_index < 0 and len(work.pages) > 0:
+        work.active_page_index = 0
+    for page in work.pages:
+        if int(getattr(page, "active_panel_index", -1)) >= len(page.panels):
+            page.active_panel_index = len(page.panels) - 1 if len(page.panels) else -1
+        if not active_panel_key:
+            continue
+        for j, panel in enumerate(page.panels):
+            if panel_stack_key(page, panel) == active_panel_key:
+                page.active_panel_index = j
+                break
+
+
+def _apply_page_panel_orders(context, stack) -> None:
+    work = get_work(context)
+    if work is None or not getattr(work, "loaded", False):
+        return
+    active_page_key = ""
+    active_panel_key = ""
+    active_idx = int(getattr(work, "active_page_index", -1))
+    if 0 <= active_idx < len(work.pages):
+        active_page = work.pages[active_idx]
+        active_page_key = page_stack_key(active_page)
+        panel_idx = int(getattr(active_page, "active_panel_index", -1))
+        if 0 <= panel_idx < len(active_page.panels):
+            active_panel_key = panel_stack_key(active_page, active_page.panels[panel_idx])
+
+    page_keys = [item.key for item in stack if item.kind == PAGE_KIND]
+    _reorder_collection(work.pages, page_keys, page_stack_key)
+
+    for page in work.pages:
+        page_key = page_stack_key(page)
+        panel_keys = [
+            item.key
+            for item in stack
+            if item.kind == PANEL_KIND and split_child_key(item.key)[0] == page_key
+        ]
+        _reorder_collection(page.panels, panel_keys, lambda panel: panel_stack_key(page, panel))
+        count = len(page.panels)
+        for i, panel in enumerate(page.panels):
+            panel.z_order = count - i - 1
+        page.panel_count = count
+
+    _restore_active_page_panel(work, active_page_key, active_panel_key)
+
+
 def _apply_simple_collection_orders(context, stack) -> None:
     scene = context.scene
     image_layers = getattr(scene, "bname_image_layers", None)
@@ -457,24 +788,36 @@ def _apply_simple_collection_orders(context, stack) -> None:
                 scene, "bname_active_image_layer_index", image_layers, active_key
             )
 
-    page = get_active_page(context)
-    if page is None:
+    work = get_work(context)
+    if work is None:
         return
-    active_balloon = ""
-    if 0 <= page.active_balloon_index < len(page.balloons):
-        active_balloon = page.balloons[page.active_balloon_index].id
-    front = [item.key for item in stack if item.kind == "balloon"]
-    _reorder_collection(page.balloons, list(reversed(front)), lambda entry: entry.id)
-    if active_balloon:
-        _restore_active_collection_index(page, "active_balloon_index", page.balloons, active_balloon)
+    for page in work.pages:
+        page_key = page_stack_key(page)
+        active_balloon = ""
+        if 0 <= page.active_balloon_index < len(page.balloons):
+            active_balloon = page.balloons[page.active_balloon_index].id
+        front = [
+            split_child_key(item.key)[1]
+            for item in stack
+            if item.kind == "balloon" and split_child_key(item.key)[0] == page_key
+        ]
+        _reorder_collection(page.balloons, list(reversed(front)), lambda entry: entry.id)
+        if active_balloon:
+            _restore_active_collection_index(
+                page, "active_balloon_index", page.balloons, active_balloon
+            )
 
-    active_text = ""
-    if 0 <= page.active_text_index < len(page.texts):
-        active_text = page.texts[page.active_text_index].id
-    front = [item.key for item in stack if item.kind == "text"]
-    _reorder_collection(page.texts, list(reversed(front)), lambda entry: entry.id)
-    if active_text:
-        _restore_active_collection_index(page, "active_text_index", page.texts, active_text)
+        active_text = ""
+        if 0 <= page.active_text_index < len(page.texts):
+            active_text = page.texts[page.active_text_index].id
+        front = [
+            split_child_key(item.key)[1]
+            for item in stack
+            if item.kind == "text" and split_child_key(item.key)[0] == page_key
+        ]
+        _reorder_collection(page.texts, list(reversed(front)), lambda entry: entry.id)
+        if active_text:
+            _restore_active_collection_index(page, "active_text_index", page.texts, active_text)
 
 
 def _node_uid_for_stack(node, *, effect: bool) -> str:
@@ -546,6 +889,7 @@ def apply_stack_order(context) -> None:
     stack = getattr(context.scene, "bname_layer_stack", None)
     if stack is None:
         return
+    _apply_page_panel_orders(context, stack)
     _apply_simple_collection_orders(context, stack)
     gp_obj = gp_utils.get_master_gpencil()
     if gp_obj is not None:
@@ -569,6 +913,22 @@ def delete_stack_index(context, index: int) -> bool:
     scene = context.scene
     page = get_active_page(context)
 
+    if kind == PAGE_KIND:
+        if not select_stack_index(context, index):
+            return False
+        try:
+            return "FINISHED" in bpy.ops.bname.page_remove("EXEC_DEFAULT")
+        except Exception:  # noqa: BLE001
+            _logger.exception("delete page from layer stack failed")
+            return False
+    if kind == PANEL_KIND:
+        if not select_stack_index(context, index):
+            return False
+        try:
+            return "FINISHED" in bpy.ops.bname.panel_remove("EXEC_DEFAULT")
+        except Exception:  # noqa: BLE001
+            _logger.exception("delete panel from layer stack failed")
+            return False
     if kind == "gp":
         obj = resolved.get("object")
         try:

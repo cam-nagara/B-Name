@@ -611,6 +611,10 @@ def _draw_panels(
     rect / polygon の両形状をサポート (枠線カット後は polygon になる)。
     自動くり抜きは Phase 2 段階では未実装。
     """
+    active_stem = ""
+    active_idx = int(getattr(page, "active_panel_index", -1))
+    if 0 <= active_idx < len(page.panels):
+        active_stem = str(getattr(page.panels[active_idx], "panel_stem", "") or "")
     sorted_panels = sorted(page.panels, key=lambda p: p.z_order)
     for entry in sorted_panels:
         # ポリゴン頂点リスト (mm) を取得 — rect なら 4 隅、polygon なら vertices
@@ -654,6 +658,10 @@ def _draw_panels(
                 float(wm.color[2]), float(wm.color[3]),
             )
             _draw_rect_fill(outer, color)
+        is_active_panel = (
+            bool(active_stem)
+            and str(getattr(entry, "panel_stem", "") or "") == active_stem
+        )
         # 枠線 (mm 単位の太さ = ズーム連動、紙に追従)
         # 辺ごとに描画 (edge_styles に個別 override があればそれを優先)
         b = entry.border
@@ -683,6 +691,12 @@ def _draw_panels(
                 if loops is not None:
                     outer_loop, inner_loop = loops
                     _draw_stroke_band_fill(outer_loop, inner_loop, base_color)
+                    if is_active_panel:
+                        segs = [
+                            (poly[i], poly[(i + 1) % len(poly)])
+                            for i in range(len(poly))
+                        ]
+                        _draw_segments_mm(segs, (1.0, 0.7, 0.0, 1.0), width_mm=1.20)
                     continue
             # edge_styles を index 辞書化
             override_map = {int(s.edge_index): s for s in entry.edge_styles}
@@ -700,6 +714,12 @@ def _draw_panels(
                     color = base_color
                     w = base_width
                 _draw_segments_mm([seg], color, width_mm=w)
+        if is_active_panel:
+            segs = [
+                (poly[i], poly[(i + 1) % len(poly)])
+                for i in range(len(poly))
+            ]
+            _draw_segments_mm(segs, (1.0, 0.7, 0.0, 1.0), width_mm=1.20)
 
 
 def _translate_rect(r: Rect, ox_mm: float, oy_mm: float) -> Rect:
@@ -828,9 +848,21 @@ def _resolve_page_index(work, ox_mm: float, oy_mm: float) -> int:
         ox_i, oy_i = _pg_offset(
             i, cols, gap, cw, ch, start_side, read_direction
         )
+        ox_i, oy_i = _with_page_manual_offset(work, i, ox_i, oy_i)
         if abs(ox_i - ox_mm) < eps and abs(oy_i - oy_mm) < eps:
             return i
     return -1
+
+
+def _with_page_manual_offset(work, page_index: int, ox_mm: float, oy_mm: float):
+    try:
+        from ..utils import page_grid
+
+        page = work.pages[page_index] if 0 <= page_index < len(work.pages) else None
+        add_x, add_y = page_grid.page_manual_offset_mm(page)
+        return ox_mm + add_x, oy_mm + add_y
+    except Exception:  # noqa: BLE001
+        return ox_mm, oy_mm
 
 
 def _draw_work_info_texts(
@@ -1105,6 +1137,7 @@ def _draw_callback() -> None:
                 ox, oy = _pg_offset(
                     i, cols, gap, cw, ch, start_side, read_direction
                 )
+                ox, oy = _with_page_manual_offset(work, i, ox, oy)
                 left_half = _is_left_half(i, start_side, read_direction)
                 _draw_page_overlay(
                     context, work, paper, rects, page, mode,
@@ -1133,6 +1166,7 @@ def _draw_callback() -> None:
                 ox, oy = _pg_offset(
                     i, cols, gap, cw, ch, start_side, read_direction
                 )
+                ox, oy = _with_page_manual_offset(work, i, ox, oy)
                 left_half = _is_left_half(i, start_side, read_direction)
                 _draw_page_overlay(
                     context, work, paper, rects, page, mode,
@@ -1161,6 +1195,7 @@ def _draw_callback() -> None:
             ox, oy = _pg_offset(
                 max(0, idx), cols, gap, cw, ch, start_side, read_direction
             )
+            ox, oy = _with_page_manual_offset(work, max(0, idx), ox, oy)
             left_half = _is_left_half(max(0, idx), start_side, read_direction)
             _draw_page_overlay(
                 context, work, paper, rects, page, mode,
@@ -1290,6 +1325,7 @@ def _draw_callback_pixel() -> None:
         read_direction = getattr(paper, "read_direction", "left")
         for i, page in enumerate(work.pages):
             ox, oy = _pg_offset(i, cols, gap, cw, ch, start_side, read_direction)
+            ox, oy = _with_page_manual_offset(work, i, ox, oy)
             left_half = _is_left_half(i, start_side, read_direction)
             inner = bleed_rect(paper)
             _draw_page_header_number_pixel(context, paper, i, ox, oy)
@@ -1311,6 +1347,7 @@ def _draw_callback_pixel() -> None:
         read_direction = getattr(paper, "read_direction", "left")
         idx = max(0, work.active_page_index) if len(work.pages) > 0 else 0
         ox, oy = _pg_offset(idx, cols, gap, cw, ch, start_side, read_direction)
+        ox, oy = _with_page_manual_offset(work, idx, ox, oy)
         left_half = _is_left_half(idx, start_side, read_direction)
         inner = bleed_rect(paper)
         _draw_page_header_number_pixel(context, paper, idx, ox, oy)

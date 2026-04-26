@@ -236,6 +236,8 @@ class BNAME_OT_panel_add(Operator):
             entry = create_rect_panel(work, page, work_dir, x_mm, y_mm, 60.0, 40.0)
             stem = entry.panel_stem
             page_io.save_pages_json(work_dir, work)
+            if hasattr(context.scene, "bname_active_layer_kind"):
+                context.scene.bname_active_layer_kind = "panel"
         except Exception as exc:  # noqa: BLE001
             _logger.exception("panel_add failed")
             self.report({"ERROR"}, f"コマ追加失敗: {exc}")
@@ -321,6 +323,8 @@ class BNAME_OT_panel_duplicate(Operator):
             if new_index != idx + 1:
                 page.panels.move(new_index, idx + 1)
             page.active_panel_index = idx + 1
+            if hasattr(context.scene, "bname_active_layer_kind"):
+                context.scene.bname_active_layer_kind = "panel"
             panel_io.save_panel_meta(work_dir, page.id, new_entry)
             _save_page_and_pages(work, page, work_dir)
         except Exception as exc:  # noqa: BLE001
