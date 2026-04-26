@@ -598,7 +598,12 @@ class BNAME_OT_pages_merge_spread(Operator):
         b = work.pages[left + 1]
         col = layout.column()
         col.label(text=f"{a.title} と {b.title} を見開きに統合します")
-        col.label(text=f"コマ: {len(a.panels) + len(b.panels)} / フキダシ: {len(a.balloons) + len(b.balloons)} / テキスト: {len(a.texts) + len(b.texts)} を保持", icon="INFO")
+        summary = (
+            f"コマ: {len(a.panels) + len(b.panels)} / "
+            f"フキダシ: {len(a.balloons) + len(b.balloons)} / "
+            f"テキスト: {len(a.texts) + len(b.texts)} を保持"
+        )
+        col.label(text=summary, icon="INFO")
         col.separator()
         col.label(
             text="右ページの内容は X 座標が +W シフトされ見開き右半分に配置されます",

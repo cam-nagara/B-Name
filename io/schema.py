@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..utils import color_space
+
 # ファイルフォーマットのバージョン (破壊的変更があったら繰り上げる)
 WORK_SCHEMA_VERSION = 1
 PAGES_SCHEMA_VERSION = 1
@@ -220,11 +222,16 @@ def nombre_from_dict(n, data: dict[str, Any]) -> None:
 
 def safe_area_to_dict(sa) -> dict[str, Any]:
     # opacity / blend_mode は仕様変更で常に 1.0 / multiply 固定 (PG から削除)
-    color = tuple(float(c) for c in sa.color[:3])
-    if all(abs(c - 0.7) < 1e-4 for c in color):
+    raw_color = tuple(float(c) for c in sa.color[:3])
+    color = color_space.linear_to_srgb_rgb(raw_color)
+    if all(abs(c - 0.7) < 1e-4 for c in raw_color):
+        # 旧実装は COLOR プロパティに 0.7 を直接入れていたため、
+        # UI上では約 0.854 に見える。未変更の旧既定は現行既定として保存する。
+        color_hex = "#B3B3B3"
+    elif all(abs(c - 0.7) < 1e-4 for c in color):
         color_hex = "#B3B3B3"
     else:
-        color_hex = color_to_hex(sa.color)
+        color_hex = color_to_hex(color)
     return {
         "enabled": bool(sa.enabled),
         "color": color_hex,
@@ -245,13 +252,15 @@ def safe_area_from_dict(sa, data: dict[str, Any]) -> None:
             "#7F7F7F", "7F7F7F",
             "#B2B2B2", "B2B2B2",
             "#B3B3B3", "B3B3B3",
+            "#D9D9D9", "D9D9D9",
+            "#DADADA", "DADADA",
         }:
-            sa.color = (0.7, 0.7, 0.7)
+            sa.color = color_space.srgb_to_linear_rgb((0.7, 0.7, 0.7))
         else:
             rgba = hex_to_rgba(color_code)
-            sa.color = (float(rgba[0]), float(rgba[1]), float(rgba[2]))
+            sa.color = color_space.srgb_to_linear_rgb(rgba[:3])
     else:
-        sa.color = (0.7, 0.7, 0.7)
+        sa.color = color_space.srgb_to_linear_rgb((0.7, 0.7, 0.7))
     # 旧 opacity / blendMode フィールドが残っていても無視 (互換読込)
 
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import bpy
 
-from ..utils import log, page_grid
+from ..utils import geom, log, page_grid
 
 _logger = log.get_logger(__name__)
 
@@ -111,4 +111,90 @@ def find_panel_at_world_mm(
         hit = _hit_test_page(page, local_x, local_y)
         if hit is not None:
             return (i, hit)
+    return None
+
+
+def find_page_at_world_mm(work, x_mm: float, y_mm: float) -> int | None:
+    """ワールド (mm) 座標から page_index を解決."""
+    if work is None or len(work.pages) == 0:
+        return None
+    scene = bpy.context.scene
+    if scene is None:
+        return None
+    overview = bool(getattr(scene, "bname_overview_mode", False))
+    cols = max(1, int(getattr(scene, "bname_overview_cols", 4)))
+    gap = float(getattr(scene, "bname_overview_gap_mm", 30.0))
+    cw = float(work.paper.canvas_width_mm)
+    ch = float(work.paper.canvas_height_mm)
+    start_side = getattr(work.paper, "start_side", "right")
+    read_direction = getattr(work.paper, "read_direction", "left")
+
+    if not overview:
+        idx = int(getattr(work, "active_page_index", -1))
+        if not (0 <= idx < len(work.pages)):
+            return None
+        ox, oy = page_grid.page_grid_offset_mm(
+            idx, cols, gap, cw, ch, start_side, read_direction
+        )
+        return idx if _hit_test_canvas(x_mm - ox, y_mm - oy, cw, ch) else None
+
+    for i, _page in enumerate(work.pages):
+        ox, oy = page_grid.page_grid_offset_mm(
+            i, cols, gap, cw, ch, start_side, read_direction
+        )
+        if _hit_test_canvas(x_mm - ox, y_mm - oy, cw, ch):
+            return i
+    return None
+
+
+def find_page_at_event(context, event) -> int | None:
+    """VIEW_3D のマウスイベントから page_index を解決."""
+    work = None
+    try:
+        from ..core.work import get_work
+
+        work = get_work(context)
+    except Exception:  # noqa: BLE001
+        work = None
+    if work is None or not getattr(work, "loaded", False):
+        return None
+    coords = _event_world_mm(context, event)
+    if coords is None:
+        return None
+    return find_page_at_world_mm(work, coords[0], coords[1])
+
+
+def _hit_test_canvas(x_mm: float, y_mm: float, width_mm: float, height_mm: float) -> bool:
+    return 0.0 <= x_mm <= width_mm and 0.0 <= y_mm <= height_mm
+
+
+def _event_world_mm(context, event) -> tuple[float, float] | None:
+    try:
+        from bpy_extras.view3d_utils import region_2d_to_location_3d
+    except Exception:  # noqa: BLE001
+        return None
+    screen = getattr(context, "screen", None)
+    if screen is None:
+        return None
+    for area in screen.areas:
+        if area.type != "VIEW_3D":
+            continue
+        for region in area.regions:
+            if region.type != "WINDOW":
+                continue
+            if not (
+                region.x <= event.mouse_x < region.x + region.width
+                and region.y <= event.mouse_y < region.y + region.height
+            ):
+                continue
+            space = area.spaces.active
+            rv3d = getattr(space, "region_3d", None)
+            if rv3d is None:
+                continue
+            mx = event.mouse_x - region.x
+            my = event.mouse_y - region.y
+            loc = region_2d_to_location_3d(region, rv3d, (mx, my), (0.0, 0.0, 0.0))
+            if loc is None:
+                return None
+            return geom.m_to_mm(loc.x), geom.m_to_mm(loc.y)
     return None

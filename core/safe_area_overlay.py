@@ -16,13 +16,15 @@ from __future__ import annotations
 import bpy
 from bpy.props import BoolProperty, FloatVectorProperty
 
+from ..utils import color_space
 from ..utils import log
 
 _logger = log.get_logger(__name__)
 
-# 黒 30 % のグレー = 紙の白に乗算するとビューポート上で 70% の明度になる.
-# RGB 0.7 を 3 成分で指定 (alpha チャネルは持たない)。
-_DEFAULT_COLOR = (0.7, 0.7, 0.7)
+# Blender の COLOR プロパティは scene-linear 値を保持し、UIでは sRGB
+# 相当に変換して表示される。UI上の明度 0.7 は linear 約 0.448。
+_DEFAULT_DISPLAY_COLOR = (0.7, 0.7, 0.7)
+_DEFAULT_COLOR = color_space.srgb_to_linear_rgb(_DEFAULT_DISPLAY_COLOR)
 
 
 class BNameSafeAreaOverlay(bpy.types.PropertyGroup):

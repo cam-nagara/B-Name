@@ -363,6 +363,9 @@ class KeymapState:
 
         # Ctrl+Shift+クリック → レイヤー選択 (固定)
         _add("bname.view_layer_pick", "LEFTMOUSE", ctrl=True, shift=True)
+        # オブジェクトモードのクリック → ページをアクティブ化。
+        # operator 側で PASS_THROUGH し、Blender 標準のオブジェクト選択は妨げない。
+        _add("bname.page_pick_viewport", "LEFTMOUSE")
         # ダブルクリック → コマ編集モードへ (固定)
         _add("bname.enter_panel_mode", "LEFTMOUSE", value="DOUBLE_CLICK")
 

@@ -3,6 +3,24 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-27 — ページクリック選択 / UI色変換補正 / リファクタリング
+
+### 追加
+- **ページクリック選択** — Object モード時にビューポート上のページを左クリックすると、そのページをアクティブ化。通常の Blender オブジェクト選択を妨げないよう `PASS_THROUGH` で処理
+- **Blender UI色値変換ヘルパ** — `utils/color_space.py` を追加し、ユーザー指定の UI 表示値 (sRGB) と Blender 内部の scene-linear 値の相互変換を共通化
+
+### 変更
+- セーフライン外塗りつぶし色の初期値を、Blender UI 表示上の明度 0.7 と一致するよう内部値を scene-linear に変換して保存・描画
+- 既存作品/旧JSONのセーフライン色 `#808080` / `#B3B3B3` / `#DADADA` などを、UI 表示上の明度 0.7 として読み込む互換処理を追加
+- `utils/panel_camera.py` からカメラ参照画像生成/同期処理を `utils/panel_camera_refs.py`、定数を `utils/panel_camera_constants.py` に分離
+- `ui/overlay.py` からフキダシオーバーレイ描画を `ui/overlay_balloon.py` に分離
+- `io/export_pipeline.py` からフキダシ書き出しを `io/export_balloon.py`、PSD保存処理を `io/export_psd.py` に分離
+- `operators/panel_edge_move_op.py` から枠線スタイル編集OperatorとWindowManagerプロパティを `operators/panel_edge_style_op.py` に分離
+
+### 修正
+- セーフライン外塗りつぶし色で、コード上の 0.7 が Blender UI 上では約 0.854 と表示されていた sRGB/linear 変換のズレを修正
+- 全体リファクタリングで 1500 行超えだった主要ファイルを 1500 行未満に整理
+
 ## 2026-04-26 — コマ編集カメラ / 下絵生成 / Pillow 同梱
 
 ### 追加

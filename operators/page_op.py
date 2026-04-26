@@ -262,12 +262,67 @@ class BNAME_OT_page_select(Operator):
         return {"FINISHED"}
 
 
+class BNAME_OT_page_pick_viewport(Operator):
+    """オブジェクトモードのビューポートクリックでページをアクティブ化."""
+
+    bl_idname = "bname.page_pick_viewport"
+    bl_label = "ビューポートページ選択"
+    bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, context):
+        work = get_work(context)
+        return bool(
+            work is not None
+            and work.loaded
+            and get_mode(context) == MODE_PAGE
+            and getattr(context, "mode", "") == "OBJECT"
+    )
+
+    def invoke(self, context, event):
+        if (
+            event.value != "PRESS"
+            or bool(getattr(event, "shift", False))
+            or bool(getattr(event, "ctrl", False))
+            or bool(getattr(event, "alt", False))
+            or bool(getattr(event, "oskey", False))
+        ):
+            return {"PASS_THROUGH"}
+        area = getattr(context, "area", None)
+        if area is None or area.type != "VIEW_3D":
+            return {"PASS_THROUGH"}
+        work = get_work(context)
+        if work is None or not work.loaded:
+            return {"PASS_THROUGH"}
+        try:
+            from . import panel_picker
+
+            page_index = panel_picker.find_page_at_event(context, event)
+        except Exception:  # noqa: BLE001
+            _logger.exception("page_pick_viewport failed")
+            return {"PASS_THROUGH"}
+        if page_index is None or not (0 <= page_index < len(work.pages)):
+            return {"PASS_THROUGH"}
+        if page_index != work.active_page_index:
+            _switch_to_page(context, work, Path(work.work_dir), page_index)
+            screen = getattr(context, "screen", None)
+            for area in getattr(screen, "areas", []):
+                if area.type == "VIEW_3D":
+                    area.tag_redraw()
+        # Blender標準のオブジェクト選択は妨げない。
+        return {"PASS_THROUGH"}
+
+    def execute(self, context):
+        return {"CANCELLED"}
+
+
 _CLASSES = (
     BNAME_OT_page_add,
     BNAME_OT_page_remove,
     BNAME_OT_page_duplicate,
     BNAME_OT_page_move,
     BNAME_OT_page_select,
+    BNAME_OT_page_pick_viewport,
 )
 
 
