@@ -15,6 +15,7 @@ import re
 import bpy
 from bpy.types import Panel, UIList
 
+from ..core.mode import MODE_PANEL, get_mode
 from ..core.work import get_active_page, get_work
 from ..utils import gpencil as gp_utils
 from ..utils import layer_stack as layer_stack_utils
@@ -773,6 +774,11 @@ class BNAME_PT_layer_stack(Panel):
     bl_category = B_NAME_CATEGORY
     bl_order = 12
 
+    @classmethod
+    def poll(cls, context):
+        work = get_work(context)
+        return bool(work and work.loaded and get_mode(context) != MODE_PANEL)
+
     def draw(self, context):
         layout = self.layout
         work = get_work(context)
@@ -792,6 +798,10 @@ class BNAME_PT_gpencil(Panel):
     bl_category = B_NAME_CATEGORY
     bl_order = 13
     bl_options = {"DEFAULT_CLOSED"}
+
+    @classmethod
+    def poll(cls, context):
+        return get_mode(context) != MODE_PANEL
 
     def draw(self, context):
         layout = self.layout

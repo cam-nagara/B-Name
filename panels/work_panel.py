@@ -19,25 +19,24 @@ class BNAME_PT_work(Panel):
     bl_category = B_NAME_CATEGORY
     bl_order = 0
 
+    @classmethod
+    def poll(cls, context):
+        return get_mode(context) != MODE_PANEL
+
     def draw(self, context):
         layout = self.layout
         work = get_work(context)
 
-        # ツールバー: 新規 / 開く / 保存 / 閉じる
+        # ツールバー: 新規 / 開く
         row = layout.row(align=True)
         row.operator("bname.work_new", text="新規", icon="FILE_NEW")
         row.operator("bname.work_open", text="開く", icon="FILE_FOLDER")
-        row.operator("bname.work_save", text="保存", icon="FILE_TICK")
-        row.operator("bname.work_close", text="閉じる", icon="X")
 
         if work is None or not work.loaded:
             layout.label(text="作品が開かれていません", icon="INFO")
             return
 
         mode = get_mode(context)
-        if mode == MODE_PANEL:
-            row = layout.row()
-            row.operator("bname.exit_panel_mode", text="ページ一覧へ戻る", icon="BACK")
 
         box = layout.box()
         box.label(text="作品情報", icon="WORDWRAP_ON")
@@ -53,8 +52,27 @@ class BNAME_PT_work(Panel):
         row.prop(info, "page_number_end", text="終了")
 
 
+class BNAME_PT_panel_return(Panel):
+    bl_idname = "BNAME_PT_panel_return"
+    bl_label = "ページ一覧に戻る"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = B_NAME_CATEGORY
+    bl_order = 0
+
+    @classmethod
+    def poll(cls, context):
+        work = get_work(context)
+        return bool(work and work.loaded and get_mode(context) == MODE_PANEL)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.operator("bname.exit_panel_mode", text="ページ一覧に戻る", icon="BACK")
+
+
 _CLASSES = (
     BNAME_PT_work,
+    BNAME_PT_panel_return,
 )
 
 

@@ -134,8 +134,7 @@ class BNAME_PT_panel_camera(Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = B_NAME_CATEGORY
-    bl_order = 6
-    bl_options = {"DEFAULT_CLOSED"}
+    bl_order = 1
 
     @classmethod
     def poll(cls, context):

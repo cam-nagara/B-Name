@@ -22,7 +22,7 @@ class BNAME_PT_view(Panel):
     @classmethod
     def poll(cls, context):
         w = get_work(context)
-        return bool(w and w.loaded)
+        return bool(w and w.loaded and get_mode(context) != MODE_PANEL)
 
     def draw(self, context):
         layout = self.layout

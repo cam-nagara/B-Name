@@ -5,6 +5,7 @@ from __future__ import annotations
 import bpy
 from bpy.types import Panel
 
+from ..core.mode import MODE_PANEL, get_mode
 from ..core.work import get_work
 
 B_NAME_CATEGORY = "B-Name"
@@ -22,7 +23,7 @@ class BNAME_PT_paper(Panel):
     @classmethod
     def poll(cls, context):
         w = get_work(context)
-        return bool(w and w.loaded)
+        return bool(w and w.loaded and get_mode(context) != MODE_PANEL)
 
     def draw(self, context):
         layout = self.layout

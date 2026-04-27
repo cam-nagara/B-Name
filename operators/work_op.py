@@ -10,7 +10,7 @@ from bpy.types import Operator
 from bpy_extras.io_utils import ImportHelper, ExportHelper
 
 from ..core.mode import MODE_PAGE, MODE_PANEL, get_mode, set_mode
-from ..core.work import find_page_by_id, get_active_page, get_work
+from ..core.work import get_work
 from ..io import blend_io, page_io, presets, work_io
 from ..utils import color_space
 from ..utils import gpencil as gp_utils
@@ -347,16 +347,12 @@ class BNAME_OT_work_save(Operator):
             return {"CANCELLED"}
         try:
             # 1) JSON メタ保存
-            work_io.save_work_json(work_dir, work)
-            page_io.save_pages_json(work_dir, work)
+            from ..utils import handlers as _handlers
+
+            if not _handlers.save_scene_work_to_disk(context, reason="work_save"):
+                self.report({"ERROR"}, "作品メタデータの保存に失敗しました")
+                return {"CANCELLED"}
             mode = get_mode(context)
-            if mode == MODE_PANEL:
-                page_id = getattr(context.scene, "bname_current_panel_page_id", "")
-                page = find_page_by_id(work, page_id)
-            else:
-                page = get_active_page(context)
-            if page is not None:
-                page_io.save_page_json(work_dir, page)
             if mode != MODE_PANEL:
                 _disable_work_viewport_overlays(context)
 

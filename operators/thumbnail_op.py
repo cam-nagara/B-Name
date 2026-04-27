@@ -32,7 +32,7 @@ def take_area_screenshot(context, out_path: Path) -> bool:
     OpenGL/Workbench ソリッド画像を出し、対象コマbboxだけを切る。
     これによりビューポート操作状態に依存せず、紙面座標と一致する。
     """
-    return render_panel_camera_crop(context, out_path, resolution_percentage=25)
+    return render_panel_camera_crop(context, out_path, resolution_percentage=100)
 
 
 def render_panel_camera_crop(context, out_path: Path, *, resolution_percentage: int = 100) -> bool:

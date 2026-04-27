@@ -20,8 +20,8 @@ from . import log, paths
 
 _logger = log.get_logger(__name__)
 
-_HANDLER_NAME = "_bname_on_load_post"
 _current_file_sync_generation = 0
+_saving_work_metadata = False
 
 
 def _find_work_root(blend_path: Path) -> Path | None:
@@ -133,6 +133,48 @@ def sync_scene_work_from_disk(context, work_dir: Path):
     work.work_dir = str(Path(work_dir).resolve())
     work.loaded = True
     return work
+
+
+def save_scene_work_to_disk(context, *, reason: str = "") -> bool:
+    """現在 scene の B-Name JSON メタデータを disk へ保存する.
+
+    通常の .blend 保存フックからも呼ぶため、ここでは .blend 保存は行わない。
+    """
+    global _saving_work_metadata
+    if _saving_work_metadata:
+        return False
+    try:
+        from ..core.work import get_work
+        from ..io import page_io, work_io
+    except Exception:  # noqa: BLE001
+        return False
+
+    work = get_work(context)
+    if (
+        work is None
+        or not getattr(work, "loaded", False)
+        or not getattr(work, "work_dir", "")
+    ):
+        return False
+    work_dir = Path(str(getattr(work, "work_dir", "") or ""))
+    if not work_dir.is_dir():
+        return False
+
+    _saving_work_metadata = True
+    try:
+        work_io.save_work_json(work_dir, work)
+        page_io.save_pages_json(work_dir, work)
+        for page in getattr(work, "pages", []):
+            if not getattr(page, "id", ""):
+                continue
+            page_io.save_page_json(work_dir, page)
+        _logger.info("B-Name metadata saved%s", f" ({reason})" if reason else "")
+        return True
+    except Exception:  # noqa: BLE001
+        _logger.exception("B-Name metadata save failed%s", f" ({reason})" if reason else "")
+        return False
+    finally:
+        _saving_work_metadata = False
 
 
 def _reconcile_gpencil_collections(context, work) -> None:
@@ -271,16 +313,31 @@ def _bname_on_load_post(filepath_arg) -> None:  # signature: (str,) in Blender h
         _logger.exception("B-Name load_post handler failed")
 
 
+@persistent
+def _bname_on_save_pre(filepath_arg) -> None:  # signature: (str,) in Blender handlers
+    """通常の .blend 保存前に B-Name の JSON メタデータも同期する."""
+    try:
+        save_scene_work_to_disk(bpy.context, reason="save_pre")
+    except Exception:  # noqa: BLE001
+        _logger.exception("B-Name save_pre handler failed")
+
+
+def _remove_named_handler(handler_list, name: str) -> None:
+    for h in list(handler_list):
+        if getattr(h, "__name__", "") == name:
+            try:
+                handler_list.remove(h)
+            except ValueError:
+                pass
+
+
 def register() -> None:
     """ハンドラを重複なく登録."""
     # 既存の同名ハンドラを除去 (reload 対策)
-    for h in list(bpy.app.handlers.load_post):
-        if getattr(h, "__name__", "") == _bname_on_load_post.__name__:
-            try:
-                bpy.app.handlers.load_post.remove(h)
-            except ValueError:
-                pass
+    _remove_named_handler(bpy.app.handlers.load_post, _bname_on_load_post.__name__)
+    _remove_named_handler(bpy.app.handlers.save_pre, _bname_on_save_pre.__name__)
     bpy.app.handlers.load_post.append(_bname_on_load_post)
+    bpy.app.handlers.save_pre.append(_bname_on_save_pre)
     _logger.debug("handlers registered")
 
 
@@ -310,10 +367,6 @@ def schedule_current_file_sync(retries: int = 3, interval: float = 0.15) -> None
 def unregister() -> None:
     global _current_file_sync_generation
     _current_file_sync_generation += 1
-    for h in list(bpy.app.handlers.load_post):
-        if getattr(h, "__name__", "") == _bname_on_load_post.__name__:
-            try:
-                bpy.app.handlers.load_post.remove(h)
-            except ValueError:
-                pass
+    _remove_named_handler(bpy.app.handlers.load_post, _bname_on_load_post.__name__)
+    _remove_named_handler(bpy.app.handlers.save_pre, _bname_on_save_pre.__name__)
     _logger.debug("handlers unregistered")

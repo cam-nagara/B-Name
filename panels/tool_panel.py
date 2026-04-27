@@ -5,6 +5,7 @@ from __future__ import annotations
 import bpy
 from bpy.types import Panel
 
+from ..core.mode import MODE_PANEL, get_mode
 from ..core.work import get_work
 from ..operators import panel_modal_state
 
@@ -22,7 +23,7 @@ class BNAME_PT_tools(Panel):
     @classmethod
     def poll(cls, context):
         work = get_work(context)
-        return bool(work and work.loaded)
+        return bool(work and work.loaded and get_mode(context) != MODE_PANEL)
 
     def draw(self, context):
         layout = self.layout
