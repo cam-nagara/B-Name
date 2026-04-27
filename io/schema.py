@@ -629,13 +629,18 @@ def balloon_entry_from_dict(entry, data: dict[str, Any]) -> None:
 
 
 def text_entry_to_dict(entry) -> dict[str, Any]:
+    from ..utils.geom import pt_to_q
+
+    font_size_q = float(
+        getattr(entry, "font_size_q", pt_to_q(float(getattr(entry, "font_size_pt", 9.0))))
+    )
     return {
         "id": entry.id,
         "body": entry.body,
         "speakerType": entry.speaker_type,
         "speakerName": entry.speaker_name,
         "font": entry.font,
-        "fontSizePt": round(entry.font_size_pt, 3),
+        "fontSizeQ": round(font_size_q, 3),
         "color": color_to_hex(entry.color),
         "colorAlpha": round(entry.color[3], 3),
         "writingMode": entry.writing_mode,
@@ -654,13 +659,21 @@ def text_entry_to_dict(entry) -> dict[str, Any]:
 
 
 def text_entry_from_dict(entry, data: dict[str, Any]) -> None:
+    from ..utils.geom import pt_to_q, q_to_pt
+
     data = data or {}
     entry.id = data.get("id", entry.id)
     entry.body = data.get("body", "")
     entry.speaker_type = data.get("speakerType", "normal")
     entry.speaker_name = data.get("speakerName", "")
     entry.font = data.get("font", "")
-    entry.font_size_pt = float(data.get("fontSizePt", 9.0))
+    if "fontSizeQ" in data:
+        entry.font_size_q = float(data["fontSizeQ"])
+    elif "fontSizePt" in data:
+        entry.font_size_q = float(pt_to_q(float(data["fontSizePt"])))
+    else:
+        entry.font_size_q = 20.0
+    entry.font_size_pt = float(q_to_pt(float(entry.font_size_q)))
     alpha = float(data.get("colorAlpha", 1.0))
     entry.color = hex_to_rgba(data.get("color", "#000000"), alpha)
     entry.writing_mode = data.get("writingMode", "vertical")

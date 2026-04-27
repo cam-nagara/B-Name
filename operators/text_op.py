@@ -12,6 +12,7 @@ import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, StringProperty
 from bpy.types import Operator
 
+from ..core.mode import MODE_PANEL, get_mode
 from ..core.work import get_active_page, get_work
 from ..utils import layer_stack as layer_stack_utils, log
 from . import panel_modal_state
@@ -47,12 +48,36 @@ def _resolve_page_from_event(context, event):
 
 
 def _creation_blocked(context, page, x_mm: float, y_mm: float, width_mm: float, height_mm: float) -> bool:
+    # ページ一覧ファイルでは、テキストツールはクリック位置にページ上の
+    # テキストを作る道具として扱う。コマ編集ファイルでは対象コマ外だけを拒否する。
+    if get_mode(context) != MODE_PANEL:
+        return False
     try:
         from .balloon_op import _creation_violates_layer_scope
 
         return bool(_creation_violates_layer_scope(context, page, x_mm, y_mm, width_mm, height_mm))
     except Exception:  # noqa: BLE001
         return False
+
+
+def _event_in_view3d_window(context, event) -> bool:
+    screen = getattr(context, "screen", None)
+    if screen is None:
+        return False
+    mouse_x = int(getattr(event, "mouse_x", -10_000_000))
+    mouse_y = int(getattr(event, "mouse_y", -10_000_000))
+    for area in screen.areas:
+        if area.type != "VIEW_3D":
+            continue
+        for region in area.regions:
+            if region.type != "WINDOW":
+                continue
+            if (
+                region.x <= mouse_x < region.x + region.width
+                and region.y <= mouse_y < region.y + region.height
+            ):
+                return True
+    return False
 
 
 def _create_text_entry(
@@ -294,7 +319,7 @@ class BNAME_OT_text_tool(Operator):
 
     bl_idname = "bname.text_tool"
     bl_label = "テキストツール"
-    bl_options = {"REGISTER", "UNDO", "BLOCKING"}
+    bl_options = {"REGISTER", "UNDO"}
 
     _externally_finished: bool
     _cursor_modal_set: bool
@@ -330,6 +355,8 @@ class BNAME_OT_text_tool(Operator):
             return {"FINISHED", "PASS_THROUGH"}
         if getattr(self, "_editing", False):
             return self._modal_editing(context, event)
+        if not _event_in_view3d_window(context, event):
+            return {"PASS_THROUGH"}
         if event.type in {"ESC", "RIGHTMOUSE"} and event.value == "PRESS":
             self.finish_from_external(context, keep_selection=True)
             return {"FINISHED"}
@@ -345,7 +372,7 @@ class BNAME_OT_text_tool(Operator):
             self.finish_from_external(context, keep_selection=True)
             return {"FINISHED", "PASS_THROUGH"}
         if event.type != "LEFTMOUSE" or event.value != "PRESS":
-            return {"RUNNING_MODAL"}
+            return {"PASS_THROUGH"}
         work, page, lx, ly = _resolve_page_from_event(context, event)
         if work is None or page is None or lx is None or ly is None:
             return {"PASS_THROUGH"}
@@ -373,17 +400,23 @@ class BNAME_OT_text_tool(Operator):
         return {"RUNNING_MODAL"}
 
     def _modal_editing(self, context, event):
+        if not _event_in_view3d_window(context, event):
+            if event.type == "LEFTMOUSE" and event.value == "PRESS":
+                self._finish_current_text_edit(context)
+                return {"PASS_THROUGH"}
+            if not self._is_text_edit_event(event):
+                return {"PASS_THROUGH"}
         if event.value != "PRESS":
             return {"RUNNING_MODAL"}
         if event.type in {"ESC", "RIGHTMOUSE"}:
             _remove_text_by_id(context, self._page_id, self._text_id)
-            self.finish_from_external(context, keep_selection=True)
-            return {"CANCELLED"}
+            self._finish_current_text_edit(context)
+            return {"RUNNING_MODAL"}
         if event.type in {"RET", "NUMPAD_ENTER"}:
             if event.shift:
                 return self._append_to_current_text(context, "\n")
-            self.finish_from_external(context, keep_selection=True)
-            return {"FINISHED"}
+            self._finish_current_text_edit(context)
+            return {"RUNNING_MODAL"}
         if event.type == "BACK_SPACE":
             return self._backspace_current_text(context)
         if event.type == "V" and event.ctrl and not event.alt:
@@ -395,6 +428,23 @@ class BNAME_OT_text_tool(Operator):
         if text and not event.ctrl and not event.alt and not getattr(event, "oskey", False):
             return self._append_to_current_text(context, text)
         return {"RUNNING_MODAL"}
+
+    def _is_text_edit_event(self, event) -> bool:
+        if event.value != "PRESS":
+            return False
+        if event.type in {"ESC", "RET", "NUMPAD_ENTER", "BACK_SPACE"}:
+            return True
+        if event.type == "V" and event.ctrl and not event.alt:
+            return True
+        text = getattr(event, "unicode", "") or ""
+        return bool(text and not event.ctrl and not event.alt and not getattr(event, "oskey", False))
+
+    def _finish_current_text_edit(self, context) -> None:
+        self._editing = False
+        self._page_id = ""
+        self._text_id = ""
+        self.report({"INFO"}, "テキストツール: クリック位置にテキストを追加")
+        layer_stack_utils.tag_view3d_redraw(context)
 
     def _current_text_entry(self, context):
         page = _find_page_by_id(context, self._page_id)

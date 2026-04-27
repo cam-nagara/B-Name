@@ -87,6 +87,14 @@ class BNameTextEntry(bpy.types.PropertyGroup):
     speaker_name: StringProperty(name="話者", default="")  # type: ignore[valid-type]
 
     font: StringProperty(name="フォント", default="")  # type: ignore[valid-type]
+    font_size_q: FloatProperty(  # type: ignore[valid-type]
+        name="サイズ (Q)",
+        description="文字サイズを Q 数 (1 Q = 0.25 mm) で指定",
+        default=20.0,
+        min=1.0,
+        soft_max=200.0,
+    )
+    # 旧データ互換用。UI/保存/組版は font_size_q を使う。
     font_size_pt: FloatProperty(name="サイズ (pt)", default=9.0, min=1.0, soft_max=72.0)  # type: ignore[valid-type]
     # Meldex の fontBold / fontItalic 相当
     font_bold: BoolProperty(name="太字", default=False)  # type: ignore[valid-type]

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..utils.geom import q_to_pt
 from . import metrics
 
 
@@ -156,6 +157,11 @@ def typeset(
     region_height_mm: float,
 ) -> TypesetResult:
     """PropertyGroup TextEntry からレイアウトを実行."""
+    font_size_pt = float(
+        q_to_pt(float(getattr(text_entry, "font_size_q", 20.0)))
+        if hasattr(text_entry, "font_size_q")
+        else getattr(text_entry, "font_size_pt", 9.0)
+    )
     if text_entry.writing_mode == "horizontal":
         return typeset_horizontal(
             text_entry.body,
@@ -163,7 +169,7 @@ def typeset(
             region_y_mm,
             region_width_mm,
             region_height_mm,
-            font_size_pt=text_entry.font_size_pt,
+            font_size_pt=font_size_pt,
             line_height=text_entry.line_height,
             letter_spacing=text_entry.letter_spacing,
         )
@@ -173,7 +179,7 @@ def typeset(
         region_y_mm,
         region_width_mm,
         region_height_mm,
-        font_size_pt=text_entry.font_size_pt,
+        font_size_pt=font_size_pt,
         line_height=text_entry.line_height,
         letter_spacing=text_entry.letter_spacing,
     )

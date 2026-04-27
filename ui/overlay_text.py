@@ -49,5 +49,4 @@ def draw_text_pixels(
         if not entry_visible(entry):
             continue
         rect = Rect(entry.x_mm + ox_mm, entry.y_mm + oy_mm, entry.width_mm, entry.height_mm)
-        body = (getattr(entry, "body", "") or "").strip() or "(空のテキスト)"
-        draw_text_in_rect(context, rect, body, color=(0.0, 0.0, 0.0, 1.0))
+        draw_text_in_rect(context, rect, entry)

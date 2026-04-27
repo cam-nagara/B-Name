@@ -216,7 +216,7 @@ class BNAME_PT_texts(Panel):
         box = layout.box()
         box.label(text="組版", icon="FONT_DATA")
         box.prop(entry, "writing_mode")
-        box.prop(entry, "font_size_pt")
+        box.prop(entry, "font_size_q")
         # Meldex fontBold/fontItalic 相当
         row = box.row(align=True)
         row.prop(entry, "font_bold", toggle=True)

@@ -523,34 +523,88 @@ def _resolve_active_region(context):
     return found_region, found_rv3d
 
 
-def _draw_text_in_rect(context, rect, text: str, color=(0, 0, 0, 1)) -> None:
-    """``rect`` (mm) の中に ``text`` を blf で描画 (左上アンカー、改行未対応)."""
+def _draw_text_in_rect(context, rect, entry_or_text, color=(0, 0, 0, 1)) -> None:
+    """``rect`` (mm) の中にテキストレイヤーを blf で描画する."""
     from bpy_extras.view3d_utils import location_3d_to_region_2d
     from mathutils import Vector
 
     region, rv3d = _resolve_active_region(context)
     if region is None or rv3d is None:
         return
-    # 左上 (mm) をスクリーン座標に
-    world = Vector((mm_to_m(rect.x + 1.0), mm_to_m(rect.y2 - 1.0), 0.0))
-    coord = location_3d_to_region_2d(region, rv3d, world)
-    if coord is None:
-        return
     font_id = _get_jp_font_id()
+
+    if isinstance(entry_or_text, str):
+        text = entry_or_text
+        world = Vector((mm_to_m(rect.x + 1.0), mm_to_m(rect.y2 - 1.0), 0.0))
+        coord = location_3d_to_region_2d(region, rv3d, world)
+        if coord is None:
+            return
+        try:
+            blf.size(font_id, 14.0)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            blf.color(font_id, color[0], color[1], color[2], color[3])
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            _, th = blf.dimensions(font_id, text)
+        except Exception:  # noqa: BLE001
+            th = 14.0
+        blf.position(font_id, float(coord.x), float(coord.y) - th, 0.0)
+        blf.draw(font_id, text)
+        return
+
+    entry = entry_or_text
+    padded = rect.inset(1.0)
+    if padded.width <= 0.0 or padded.height <= 0.0:
+        padded = rect
     try:
-        blf.size(font_id, 14.0)
+        from ..typography import layout as text_layout
+
+        result = text_layout.typeset(
+            entry,
+            padded.x,
+            padded.y,
+            padded.width,
+            padded.height,
+        )
+    except Exception:  # noqa: BLE001
+        _logger.exception("text layout failed")
+        return
+
+    o0 = location_3d_to_region_2d(region, rv3d, Vector((0.0, 0.0, 0.0)))
+    o1 = location_3d_to_region_2d(region, rv3d, Vector((mm_to_m(1.0), 0.0, 0.0)))
+    if o0 is not None and o1 is not None:
+        px_per_mm = abs(float(o1.x) - float(o0.x))
+    else:
+        px_per_mm = 3.78
+    entry_color = getattr(entry, "color", color)
+    try:
+        blf.color(
+            font_id,
+            float(entry_color[0]),
+            float(entry_color[1]),
+            float(entry_color[2]),
+            float(entry_color[3]),
+        )
     except Exception:  # noqa: BLE001
         pass
-    try:
-        blf.color(font_id, color[0], color[1], color[2], color[3])
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        _, th = blf.dimensions(font_id, text)
-    except Exception:  # noqa: BLE001
-        th = 14.0
-    blf.position(font_id, float(coord.x), float(coord.y) - th, 0.0)
-    blf.draw(font_id, text)
+    for glyph in result.placements:
+        coord = location_3d_to_region_2d(
+            region,
+            rv3d,
+            Vector((mm_to_m(glyph.x_mm), mm_to_m(glyph.y_mm), 0.0)),
+        )
+        if coord is None:
+            continue
+        size_px = glyph.size_pt * px_per_mm * 25.4 / 72.0
+        try:
+            blf.size(font_id, max(1, int(size_px)))
+        except Exception:  # noqa: BLE001
+            pass
+        blf.position(font_id, float(coord.x), float(coord.y), 0.0)
+        blf.draw(font_id, glyph.ch)
 
 
 def _draw_panels(

@@ -4,7 +4,7 @@
 - 作品全体で 1 つの master GP オブジェクト (bname_master_sketch)
 - 各レイヤーは複数ページに横断的に存在 (CSP のレイヤーパネル感覚)
 - 「ページ GP 一覧」は廃止 (master GP 1 つだけなので不要)
-- レイヤー行の詳細設定ボタンから各種設定ダイアログを開く
+- レイヤー行の種類アイコンから各種設定ダイアログを開く
 - マテリアルは内部実装として隠し、ユーザーにはレイヤー設定だけを見せる
 """
 
@@ -112,9 +112,8 @@ def _select_name(row, index: int, text: str) -> None:
 
 
 def _select_icon_name(row, index: int, text: str, icon: str) -> None:
-    cell = row.row(align=True)
-    cell.alignment = "LEFT"
-    cell.label(text=text or "", icon=icon)
+    _draw_type_icon(row, index, icon)
+    _select_name(row, index, text)
 
 
 def _visibility_button(row, index: int, hidden: bool) -> None:
@@ -200,16 +199,13 @@ def _draw_hierarchy_slot(row, item, target, index: int) -> None:
 
 
 def _draw_type_icon(row, index: int, icon: str) -> None:
-    _select_icon(row, index, icon)
-
-
-def _draw_detail_button(row, index: int) -> None:
     cell = row.row(align=True)
     cell.ui_units_x = 1.0
+    cell.operator_context = "INVOKE_DEFAULT"
     op = cell.operator(
         "bname.layer_stack_detail",
         text="",
-        icon="INFO",
+        icon=icon,
         emboss=False,
     )
     op.index = index
@@ -270,7 +266,7 @@ def _draw_right_aux_panel_enter(row, index: int) -> None:
 def _draw_right_controls(row, controls, index: int) -> None:
     slots = row.row(align=True)
     slots.alignment = "RIGHT"
-    slots.ui_units_x = 4.0
+    slots.ui_units_x = 3.0
 
     gp_style = controls.get("gp_style")
     if gp_style is not None:
@@ -287,8 +283,6 @@ def _draw_right_controls(row, controls, index: int) -> None:
         _draw_right_aux_lock(slots, controls.get("lock_target"), controls.get("lock_prop", "lock"))
     else:
         _draw_square_placeholder(slots)
-
-    _draw_detail_button(slots, index)
 
 
 def _draw_stack_gp_row(row, controls, item, resolved, index: int) -> None:
@@ -551,7 +545,7 @@ def _draw_text_selected_settings(box, context, entry) -> None:
     type_box = box.box()
     type_box.label(text="組版", icon="FONT_DATA")
     type_box.prop(entry, "writing_mode")
-    type_box.prop(entry, "font_size_pt")
+    type_box.prop(entry, "font_size_q")
     row = type_box.row(align=True)
     row.prop(entry, "font_bold", toggle=True)
     row.prop(entry, "font_italic", toggle=True)
