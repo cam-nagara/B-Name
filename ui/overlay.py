@@ -259,7 +259,7 @@ def _draw_trim_marks(
     corner_arm_mm: float = 10.0,
     center_size_mm: float = 10.0,
     center_gap_mm: float = 5.0,
-    line_width_mm: float = 0.40,
+    line_width: float = 1.0,
 ) -> None:
     """トンボ (コーナー + センタートンボ) を CLIP STUDIO PAINT と同じ仕様で描画.
 
@@ -323,7 +323,7 @@ def _draw_trim_marks(
     segs.append(((cx_right, cy_mid - half), (cx_right, cy_mid + half)))
     segs.append(((cx_right - half, cy_mid), (cx_right + half, cy_mid)))
 
-    _draw_segments_mm(segs, color, width_mm=line_width_mm)
+    _draw_line_segments(segs, color, line_width=line_width)
 
 
 def _draw_frame_with_hole(outer: Rect, inner: Rect, color: tuple[float, float, float, float]) -> None:
@@ -853,16 +853,14 @@ def _draw_page_overlay(
         color = (r, g, b, alpha)
         _draw_frame_with_hole(canvas_r, safe_r, color)
 
-    # 枠線群 (mm 単位の太さ = ズーム連動、紙に追従)
-    # B4 257×364mm の全紙ビューでは 1mm ≈ 数 px なので、視認用に 0.3-0.6mm
-    # の太さで描画する (印刷用「実線太さ」より太いがビューポート視認性優先)
-    _draw_rect_outline(canvas_r, viewport_colors.PAPER_GUIDE_DIM, width_mm=0.30)
+    # 枠線群はビューポート上で常に 1px 表示にする。
+    _draw_rect_outline(canvas_r, viewport_colors.PAPER_GUIDE_DIM, line_width=1.0)
     # 裁ち落とし枠 (= 仕上がり枠 + 裁ち落とし幅)
     if paper.bleed_mm > 0.0:
-        _draw_rect_outline(bleed_r, viewport_colors.PAPER_GUIDE_DIM, width_mm=0.30)
-    _draw_rect_outline(finish_r, viewport_colors.PAPER_GUIDE_LIGHT, width_mm=0.50)
-    _draw_rect_outline(inner_r, viewport_colors.PAPER_GUIDE, width_mm=0.35)
-    _draw_rect_outline(safe_r, viewport_colors.SAFE_LINE, width_mm=0.30)
+        _draw_rect_outline(bleed_r, viewport_colors.PAPER_GUIDE_DIM, line_width=1.0)
+    _draw_rect_outline(finish_r, viewport_colors.PAPER_GUIDE_LIGHT, line_width=1.0)
+    _draw_rect_outline(inner_r, viewport_colors.PAPER_GUIDE, line_width=1.0)
+    _draw_rect_outline(safe_r, viewport_colors.SAFE_LINE, line_width=1.0)
     # トンボ (四隅 + 各辺中央センタートンボ) を仕上がり枠 / 裁ち落とし枠基準で描画
     if paper.bleed_mm > 0.0:
         _draw_trim_marks(finish_r, bleed_r)
