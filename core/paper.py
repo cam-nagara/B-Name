@@ -54,12 +54,6 @@ def _tag_view3d_redraw(context) -> None:
 
 
 def _on_paper_visual_changed(_self, context) -> None:
-    try:
-        from ..utils import gpencil as gp_utils
-
-        gp_utils.sync_paper_material_color(getattr(_self, "paper_color", None))
-    except Exception:  # noqa: BLE001
-        pass
     _tag_view3d_redraw(context)
 
 

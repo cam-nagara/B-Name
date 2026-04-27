@@ -71,6 +71,7 @@ class BNAME_PT_panel_return(Panel):
         layout.separator()
         layout.prop(context.scene, "bname_page_browser_position", text="ページ一覧位置")
         layout.prop(context.scene, "bname_page_browser_size", text="サイズ")
+        layout.prop(context.scene, "bname_page_browser_fit", text="フィット")
         layout.operator("bname.page_browser_workspace", text="ページ一覧ビューを開く", icon="WINDOW")
 
 

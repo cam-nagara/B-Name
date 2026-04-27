@@ -31,6 +31,8 @@ def _logical_slot_index(
     物理的な左/右位置が期待どおりになるスロットへ置く。反対側は空白扱いにし、
     2 ページ目以降は常に ``page_index + 1`` へ進める。
     """
+    if read_direction == "down":
+        return max(0, int(page_index))
     if page_index <= 0:
         first_page_is_slot0 = (
             (start_side == "right" and read_direction == "left")
@@ -56,6 +58,8 @@ def is_left_half_page(page_index: int, start_side: str = "right",
       - page 2 (slot 2, c=0): 物理右 = 次の見開きの右ページ
       - page 3 (slot 3, c=1): 物理左 = 次の見開きの左ページ
     """
+    if read_direction == "down":
+        return False
     slot = _logical_slot_index(page_index, start_side, read_direction)
     c_in_pair = slot % 2
     if read_direction == "right":
@@ -86,12 +90,31 @@ def page_grid_offset_mm(
       - "right": X が正方向に進む — 西洋本
       - "down":  すべて X=0 で Y のみ進む (縦スクロール)。cols は無視。
     """
+    slot = _logical_slot_index(page_index, start_side, read_direction)
+    return slot_grid_offset_mm(
+        slot,
+        cols,
+        gap_mm,
+        canvas_width_mm,
+        canvas_height_mm,
+        read_direction,
+    )
+
+
+def slot_grid_offset_mm(
+    slot: int,
+    cols: int,
+    gap_mm: float,
+    canvas_width_mm: float,
+    canvas_height_mm: float,
+    read_direction: str = "left",
+) -> tuple[float, float]:
+    """見開き補正後の論理 slot から grid offset (mm) を返す."""
     cols = max(1, int(cols))
     if read_direction == "down":
         # 縦スクロール: 全ページが 1 列に並ぶ。見開きの概念は無視。
-        return (0.0, -page_index * (canvas_height_mm + gap_mm))
+        return (0.0, -int(slot) * (canvas_height_mm + gap_mm))
 
-    slot = _logical_slot_index(page_index, start_side, read_direction)
     col = slot % cols
     row = slot // cols
     # X 方向は「列 c=0..col-1 の幅 + ペア境界 gap」を累積

@@ -44,6 +44,7 @@ class BNAME_PT_view(Panel):
         box.label(text="ページ一覧ビュー", icon="WINDOW")
         box.prop(scene, "bname_page_browser_position", text="位置")
         box.prop(scene, "bname_page_browser_size", text="サイズ")
+        box.prop(scene, "bname_page_browser_fit", text="フィット")
         row = box.row(align=True)
         row.operator("bname.page_browser_workspace", text="専用ワークスペース", icon="WINDOW")
         row.operator("bname.page_browser_mark_area", text="", icon="IMGDISPLAY")

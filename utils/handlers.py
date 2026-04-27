@@ -178,11 +178,11 @@ def save_scene_work_to_disk(context, *, reason: str = "") -> bool:
 
 
 def _reconcile_gpencil_collections(context, work) -> None:
-    """master GP / 紙メッシュ × pages の整合をとる (新仕様).
+    """master GP とページ Collection × pages の整合をとる (新仕様).
 
     - 作品全体で **唯一の** master GP オブジェクトを ensure (旧 page GP は残置)
-    - 各ページの紙メッシュ (page_NNNN_paper) を ensure
-    - 全ページ Collection の grid offset を apply (紙メッシュの位置補正)
+    - 旧仕様の紙メッシュ (page_NNNN_paper) は削除し、用紙は overlay で描画
+    - 全ページ Collection の grid offset を apply
 
     旧バージョンの page_NNNN_sketch GP オブジェクトはここでは触らない
     (ユーザーのデータを残置)。新規描画は master GP に行う。
@@ -196,21 +196,10 @@ def _reconcile_gpencil_collections(context, work) -> None:
     if scene is None or work is None:
         return
 
-    # 紙メッシュは各ページ単位で必要
-    for page_entry in work.pages:
-        if not page_entry.id:
-            continue
-        try:
-            gp_utils.ensure_page_paper(
-                scene, page_entry.id,
-                float(work.paper.canvas_width_mm),
-                float(work.paper.canvas_height_mm),
-                work.paper.paper_color,
-            )
-        except Exception:  # noqa: BLE001
-            _logger.exception(
-                "load_post: ensure_page_paper failed for %s", page_entry.id
-            )
+    try:
+        gp_utils.remove_all_page_papers()
+    except Exception:  # noqa: BLE001
+        _logger.exception("load_post: remove page paper meshes failed")
 
     # master GP は作品で 1 つだけ
     try:

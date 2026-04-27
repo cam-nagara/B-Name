@@ -20,6 +20,7 @@ from ..utils import geom, log, page_browser
 _logger = log.get_logger(__name__)
 
 _PAGE_BROWSER_DEFAULT_RATIO = 0.28
+_PAGE_BROWSER_AREA_SIZES: dict[int, tuple[int, int]] = {}
 
 
 # ---------- 共通ヘルパ ----------
@@ -85,12 +86,12 @@ def _fit_page_browser_area(context, area) -> bool:
     region = _find_window_region(area)
     if region is None:
         return False
-    bbox = _overview_layout_bbox(work)
-    if bbox is None:
-        return False
-    x, y, w, h = bbox
-    pad = max(10.0, float(getattr(context.scene, "bname_overview_gap_mm", 30.0)) * 0.5)
-    ok = _fit_view_to_rect_mm(context, area, region, x - pad, y - pad, w + pad * 2.0, h + pad * 2.0)
+    ok = True
+    if page_browser.fit_enabled(context.scene):
+        fit_rect = _page_browser_fit_rect_mm(context, area, region, work)
+        if fit_rect is None:
+            return False
+        ok = _fit_view_to_rect_mm(context, area, region, *fit_rect)
     try:
         space = area.spaces.active
         rv3d = getattr(space, "region_3d", None)
@@ -111,6 +112,30 @@ def _fit_page_browser_area(context, area) -> bool:
     except Exception:  # noqa: BLE001
         pass
     return ok
+
+
+def _page_browser_fit_rect_mm(context, area, region, work) -> tuple[float, float, float, float] | None:
+    bbox = page_browser.layout_bbox_mm(work, context.scene, area)
+    if bbox is None:
+        return None
+    x, y, w, h = bbox
+    paper = work.paper
+    cw = float(paper.canvas_width_mm)
+    ch = float(paper.canvas_height_mm)
+    pad = max(10.0, float(getattr(context.scene, "bname_overview_gap_mm", 30.0)) * 0.5)
+    aspect = max(0.01, float(getattr(region, "width", 1)) / max(1.0, float(getattr(region, "height", 1))))
+    if page_browser.is_vertical_area(area):
+        target_w = max(1.0, min(max(w, cw), cw * 2.0) + pad * 2.0)
+        target_h = target_w / aspect
+        return (x - pad, y + h + pad - target_h, target_w, target_h)
+    target_h = max(1.0, ch + pad * 2.0)
+    target_w = target_h * aspect
+    read_direction = getattr(paper, "read_direction", "left")
+    if read_direction == "left":
+        target_x = x + w + pad - target_w
+    else:
+        target_x = x - pad
+    return (target_x, y - pad, target_w, target_h)
 
 
 def _workspace_name_available(name: str) -> str:
@@ -545,8 +570,49 @@ def _on_overview_layout_changed(_self, context) -> None:
         work = get_work(context)
         if work is not None and work.loaded:
             page_grid.apply_page_collection_transforms(context, work)
+            _fit_page_browser_areas(context)
     except Exception:  # noqa: BLE001
         pass
+
+
+def _fit_page_browser_areas(context) -> None:
+    if context is None:
+        context = bpy.context
+    if not page_browser.fit_enabled(getattr(context, "scene", None)):
+        page_browser.tag_page_browser_redraw(context)
+        return
+    for area in page_browser.iter_page_browser_areas(context):
+        try:
+            _fit_page_browser_area(context, area)
+        except Exception:  # noqa: BLE001
+            _logger.exception("page browser refit failed")
+    page_browser.tag_page_browser_redraw(context)
+
+
+def _on_page_browser_fit_changed(_self, context) -> None:
+    _PAGE_BROWSER_AREA_SIZES.clear()
+    _fit_page_browser_areas(context)
+
+
+def _page_browser_fit_watcher():
+    try:
+        context = bpy.context
+        scene = getattr(context, "scene", None)
+        if scene is None or not page_browser.fit_enabled(scene):
+            _PAGE_BROWSER_AREA_SIZES.clear()
+            return 0.5
+        work = get_work(context)
+        if work is None or not work.loaded:
+            return 0.5
+        for area in page_browser.iter_page_browser_areas(context):
+            key = page_browser.area_key(area)
+            size = (int(getattr(area, "width", 0)), int(getattr(area, "height", 0)))
+            if key and _PAGE_BROWSER_AREA_SIZES.get(key) != size:
+                _PAGE_BROWSER_AREA_SIZES[key] = size
+                _fit_page_browser_area(context, area)
+    except Exception:  # noqa: BLE001
+        _logger.exception("page browser fit watcher failed")
+    return 0.5
 
 
 def _on_overview_cols_changed(self, context) -> None:
@@ -611,11 +677,25 @@ def register() -> None:
         max=0.5,
         subtype="FACTOR",
     )
+    bpy.types.Scene.bname_page_browser_fit = BoolProperty(
+        name="フィット",
+        description="ページ一覧ビューをパネルの縦横比に合わせて表示",
+        default=True,
+        update=_on_page_browser_fit_changed,
+    )
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
+    if not bpy.app.timers.is_registered(_page_browser_fit_watcher):
+        bpy.app.timers.register(_page_browser_fit_watcher, first_interval=0.5, persistent=True)
 
 
 def unregister() -> None:
+    if bpy.app.timers.is_registered(_page_browser_fit_watcher):
+        try:
+            bpy.app.timers.unregister(_page_browser_fit_watcher)
+        except ValueError:
+            pass
+    _PAGE_BROWSER_AREA_SIZES.clear()
     for cls in reversed(_CLASSES):
         try:
             bpy.utils.unregister_class(cls)
@@ -627,6 +707,7 @@ def unregister() -> None:
         "bname_overview_gap_mm",
         "bname_page_browser_position",
         "bname_page_browser_size",
+        "bname_page_browser_fit",
     ):
         try:
             delattr(bpy.types.Scene, prop)

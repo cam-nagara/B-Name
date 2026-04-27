@@ -766,21 +766,29 @@ def _translate_rect(r: Rect, ox_mm: float, oy_mm: float) -> Rect:
 
 
 def _draw_canvas_fill_only(paper, rects, ox_mm: float, oy_mm: float) -> None:
-    """キャンバス塗りのみを描画 (PRE_VIEW から呼び出し、GP ストロークの下に敷く).
+    """キャンバス塗りのみを表示用 overlay として描画する.
 
-    PRE_VIEW 時代 (Phase 1-2) は POST_VIEW でオブジェクトを透かすため半透明
-    (display_alpha=0.85) だったが、Phase 3 以降は PRE_VIEW で紙の下敷きとして
-    描くため **不透明** (alpha=1.0) で固定。Blender 既定の暗い背景が用紙を
-    通して透けるのを防ぐ。
+    `paper_color` は Blender COLOR プロパティなので scene-linear 値。
+    GPU overlay では UI 表示相当の sRGB に戻し、不透明 (alpha=1.0) で
+    描く。深度テストを有効にして、GP ストロークやレイヤー表示の背後に
+    入るようにする。
     """
     canvas_r = _translate_rect(rects.canvas, ox_mm, oy_mm)
+    r, g, b = color_space.linear_to_srgb_rgb(paper.paper_color[:3])
     canvas_color = (
-        float(paper.paper_color[0]),
-        float(paper.paper_color[1]),
-        float(paper.paper_color[2]),
+        r,
+        g,
+        b,
         1.0,
     )
-    _draw_rect_fill(canvas_r, canvas_color)
+    try:
+        gpu.state.depth_test_set("LESS_EQUAL")
+        _draw_rect_fill(canvas_r, canvas_color)
+    finally:
+        try:
+            gpu.state.depth_test_set("NONE")
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _draw_page_overlay(
@@ -810,6 +818,8 @@ def _draw_page_overlay(
     inner_r = _translate_rect(rects.inner_frame, ox_mm, oy_mm)
     safe_r = _translate_rect(rects.safe, ox_mm, oy_mm)
     bleed_r = _translate_rect(rects.bleed, ox_mm, oy_mm)
+
+    _draw_canvas_fill_only(paper, rects, ox_mm, oy_mm)
 
     # セーフライン外オーバーレイ (全ページに表示)
     # 仕様: 常に乗算合成相当 + alpha 100%。
@@ -920,6 +930,32 @@ def _with_page_manual_offset(work, page_index: int, ox_mm: float, oy_mm: float):
         return ox_mm + add_x, oy_mm + add_y
     except Exception:  # noqa: BLE001
         return ox_mm, oy_mm
+
+
+def _page_overview_offset(
+    context,
+    work,
+    page_index: int,
+    cols: int,
+    gap: float,
+    cw: float,
+    ch: float,
+    start_side: str,
+    read_direction: str,
+    *,
+    is_page_browser: bool,
+) -> tuple[float, float]:
+    if is_page_browser and page_browser.fit_enabled(context.scene):
+        return page_browser.page_offset_mm(
+            work,
+            context.scene,
+            getattr(context, "area", None),
+            page_index,
+        )
+    from ..utils.page_grid import page_grid_offset_mm as _pg_offset
+
+    ox, oy = _pg_offset(page_index, cols, gap, cw, ch, start_side, read_direction)
+    return _with_page_manual_offset(work, page_index, ox, oy)
 
 
 def _draw_work_info_texts(
@@ -1186,7 +1222,6 @@ def _draw_callback() -> None:
             # ページ (0002, 0003...) を左方向に展開する。オフセットは負の X。
             from ..utils.page_grid import (
                 is_left_half_page as _is_left_half,
-                page_grid_offset_mm as _pg_offset,
             )
 
             cols = max(1, int(getattr(scene, "bname_overview_cols", 4)))
@@ -1200,10 +1235,10 @@ def _draw_callback() -> None:
                 if not overlay_visibility.page_visible(page):
                     continue
                 # 見開き判定込みの式は page_grid 側に集約
-                ox, oy = _pg_offset(
-                    i, cols, gap, cw, ch, start_side, read_direction
+                ox, oy = _page_overview_offset(
+                    context, work, i, cols, gap, cw, ch,
+                    start_side, read_direction, is_page_browser=is_page_browser,
                 )
-                ox, oy = _with_page_manual_offset(work, i, ox, oy)
                 left_half = _is_left_half(i, start_side, read_direction)
                 _draw_page_overlay(
                     context, work, paper, rects, page, mode,
@@ -1218,7 +1253,6 @@ def _draw_callback() -> None:
         elif mode == MODE_PANEL and len(work.pages) > 0:
             from ..utils.page_grid import (
                 is_left_half_page as _is_left_half,
-                page_grid_offset_mm as _pg_offset,
             )
 
             cols = max(2, int(getattr(scene, "bname_overview_cols", 4)))
@@ -1231,10 +1265,10 @@ def _draw_callback() -> None:
             for i, page in enumerate(work.pages):
                 if not overlay_visibility.page_visible(page):
                     continue
-                ox, oy = _pg_offset(
-                    i, cols, gap, cw, ch, start_side, read_direction
+                ox, oy = _page_overview_offset(
+                    context, work, i, cols, gap, cw, ch,
+                    start_side, read_direction, is_page_browser=is_page_browser,
                 )
-                ox, oy = _with_page_manual_offset(work, i, ox, oy)
                 left_half = _is_left_half(i, start_side, read_direction)
                 _draw_page_overlay(
                     context, work, paper, rects, page, mode,
@@ -1260,8 +1294,8 @@ def _draw_callback() -> None:
             start_side = getattr(paper, "start_side", "right")
             read_direction = getattr(paper, "read_direction", "left")
             idx = work.active_page_index
-            # 単ページモードでも active page は grid 位置に紙メッシュがあるため、
-            # overlay も同じ (ox, oy) で描画してオーバーレイと紙メッシュを一致させる。
+            # 単ページモードでも active page の内容は grid 位置にあるため、
+            # overlay も同じ (ox, oy) で描画して内容と一致させる。
             ox, oy = _pg_offset(
                 max(0, idx), cols, gap, cw, ch, start_side, read_direction
             )
@@ -1446,7 +1480,6 @@ def _draw_callback_pixel() -> None:
     ) and len(work.pages) > 0:
         from ..utils.page_grid import (
             is_left_half_page as _is_left_half,
-            page_grid_offset_mm as _pg_offset,
         )
         cols = max(2, int(getattr(scene, "bname_overview_cols", 4)))
         gap = float(getattr(scene, "bname_overview_gap_mm", 30.0))
@@ -1457,8 +1490,10 @@ def _draw_callback_pixel() -> None:
         for i, page in enumerate(work.pages):
             if not overlay_visibility.page_visible(page):
                 continue
-            ox, oy = _pg_offset(i, cols, gap, cw, ch, start_side, read_direction)
-            ox, oy = _with_page_manual_offset(work, i, ox, oy)
+            ox, oy = _page_overview_offset(
+                context, work, i, cols, gap, cw, ch,
+                start_side, read_direction, is_page_browser=is_page_browser,
+            )
             left_half = _is_left_half(i, start_side, read_direction)
             inner = bleed_rect(paper)
             _draw_page_header_number_pixel(context, paper, i, ox, oy)

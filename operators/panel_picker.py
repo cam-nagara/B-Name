@@ -13,7 +13,7 @@ from typing import Sequence
 
 import bpy
 
-from ..utils import geom, log, page_grid
+from ..utils import geom, log, page_browser, page_grid
 
 _logger = log.get_logger(__name__)
 
@@ -179,6 +179,8 @@ def find_panel_at_event(context, event) -> tuple[int, int] | None:
     coords = _event_world_mm(context, event)
     if coords is None:
         return None
+    if page_browser.is_page_browser_area(context) and page_browser.fit_enabled(context.scene):
+        return _find_panel_at_world_mm_page_browser(context, work, coords[0], coords[1])
     return find_panel_at_world_mm(work, coords[0], coords[1])
 
 
@@ -235,11 +237,42 @@ def find_page_at_event(context, event) -> int | None:
     coords = _event_world_mm(context, event)
     if coords is None:
         return None
+    if page_browser.is_page_browser_area(context) and page_browser.fit_enabled(context.scene):
+        return _find_page_at_world_mm_page_browser(context, work, coords[0], coords[1])
     return find_page_at_world_mm(work, coords[0], coords[1])
 
 
 def _hit_test_canvas(x_mm: float, y_mm: float, width_mm: float, height_mm: float) -> bool:
     return 0.0 <= x_mm <= width_mm and 0.0 <= y_mm <= height_mm
+
+
+def _find_panel_at_world_mm_page_browser(context, work, x_mm: float, y_mm: float):
+    paper = work.paper
+    cw = float(paper.canvas_width_mm)
+    ch = float(paper.canvas_height_mm)
+    area = getattr(context, "area", None)
+    for i, page in enumerate(work.pages):
+        ox, oy = page_browser.page_offset_mm(work, context.scene, area, i)
+        local_x = x_mm - ox
+        local_y = y_mm - oy
+        if not _hit_test_canvas(local_x, local_y, cw, ch):
+            continue
+        hit = _hit_test_page(page, local_x, local_y)
+        if hit is not None:
+            return i, hit
+    return None
+
+
+def _find_page_at_world_mm_page_browser(context, work, x_mm: float, y_mm: float) -> int | None:
+    paper = work.paper
+    cw = float(paper.canvas_width_mm)
+    ch = float(paper.canvas_height_mm)
+    area = getattr(context, "area", None)
+    for i, _page in enumerate(work.pages):
+        ox, oy = page_browser.page_offset_mm(work, context.scene, area, i)
+        if _hit_test_canvas(x_mm - ox, y_mm - oy, cw, ch):
+            return i
+    return None
 
 
 def _event_world_mm(context, event) -> tuple[float, float] | None:

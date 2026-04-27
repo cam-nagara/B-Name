@@ -26,17 +26,6 @@ _logger = log.get_logger(__name__)
 
 def _on_page_visible_changed(self, context) -> None:
     try:
-        from ..utils import gpencil as gp_utils
-
-        paper = gp_utils.get_page_paper(str(getattr(self, "id", "") or ""))
-        if paper is not None:
-            hidden = not bool(getattr(self, "visible", True))
-            paper.hide_viewport = hidden
-            paper.hide_render = hidden
-            try:
-                paper.hide_set(hidden)
-            except Exception:  # noqa: BLE001
-                pass
         screen = getattr(context, "screen", None) if context is not None else None
         if screen is not None:
             for area in screen.areas:
