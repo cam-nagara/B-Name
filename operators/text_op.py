@@ -15,9 +15,16 @@ from bpy.types import Operator
 from ..core.mode import MODE_PANEL, get_mode
 from ..core.work import get_active_page, get_work
 from ..utils import layer_stack as layer_stack_utils, log
+from ..utils.layer_hierarchy import page_stack_key
 from . import panel_modal_state
 
 _logger = log.get_logger(__name__)
+
+_TEXT_DEFAULT_WIDTH_MM = 30.0
+_TEXT_DEFAULT_HEIGHT_MM = 15.0
+_TEXT_HANDLE_HIT_MM = 2.5
+_TEXT_MIN_SIZE_MM = 2.0
+_TEXT_DRAG_EPS_MM = 0.05
 
 
 _SPEAKER_TYPE_ITEMS = (
@@ -45,6 +52,68 @@ def _resolve_page_from_event(context, event):
     from . import balloon_op
 
     return balloon_op._resolve_page_from_event(context, event)
+
+
+def _find_page_with_index_by_id(work, page_id: str):
+    if work is None:
+        return -1, None
+    for i, page in enumerate(work.pages):
+        if getattr(page, "id", "") == page_id:
+            return i, page
+    return -1, None
+
+
+def _event_world_xy_mm(context, event) -> tuple[float | None, float | None]:
+    from bpy_extras.view3d_utils import region_2d_to_location_3d
+
+    from ..utils import geom
+
+    screen = getattr(context, "screen", None)
+    if screen is None:
+        return None, None
+    mouse_x = int(getattr(event, "mouse_x", -10_000_000))
+    mouse_y = int(getattr(event, "mouse_y", -10_000_000))
+    for area in screen.areas:
+        if area.type != "VIEW_3D":
+            continue
+        for region in area.regions:
+            if region.type != "WINDOW":
+                continue
+            if not (
+                region.x <= mouse_x < region.x + region.width
+                and region.y <= mouse_y < region.y + region.height
+            ):
+                continue
+            rv3d = getattr(area.spaces.active, "region_3d", None)
+            if rv3d is None:
+                continue
+            loc = region_2d_to_location_3d(
+                region,
+                rv3d,
+                (mouse_x - region.x, mouse_y - region.y),
+                (0.0, 0.0, 0.0),
+            )
+            if loc is None:
+                continue
+            return geom.m_to_mm(loc.x), geom.m_to_mm(loc.y)
+    return None, None
+
+
+def _resolve_local_xy_for_page_from_event(context, event, page_id: str):
+    """指定ページをアクティブ変更せず、event の world 座標をそのページローカル mm に変換."""
+    from ..utils import page_grid
+
+    work = get_work(context)
+    if work is None or not getattr(work, "loaded", False):
+        return None, None, None, None
+    target_index, target_page = _find_page_with_index_by_id(work, page_id)
+    if target_page is None:
+        return work, None, None, None
+    world_x_mm, world_y_mm = _event_world_xy_mm(context, event)
+    if world_x_mm is None or world_y_mm is None:
+        return work, target_page, None, None
+    ox_mm, oy_mm = page_grid.page_total_offset_mm(work, context.scene, target_index)
+    return work, target_page, world_x_mm - ox_mm, world_y_mm - oy_mm
 
 
 def _creation_blocked(context, page, x_mm: float, y_mm: float, width_mm: float, height_mm: float) -> bool:
@@ -148,6 +217,117 @@ def _remove_text_by_id(context, page_id: str, text_id: str) -> None:
     if len(page.texts) == 0 and hasattr(context.scene, "bname_active_layer_kind"):
         context.scene.bname_active_layer_kind = "gp"
     layer_stack_utils.sync_layer_stack_after_data_change(context)
+
+
+def _event_text(event) -> str:
+    if bool(getattr(event, "ctrl", False)) or bool(getattr(event, "alt", False)):
+        return ""
+    if bool(getattr(event, "oskey", False)):
+        return ""
+    event_type = getattr(event, "type", "")
+    if event_type in {"ESC", "RET", "NUMPAD_ENTER", "BACK_SPACE"}:
+        return ""
+    if event_type != "TEXTINPUT" and getattr(event, "value", "") != "PRESS":
+        return ""
+    for attr in ("unicode", "ascii"):
+        text = getattr(event, attr, "") or ""
+        if text:
+            cleaned = str(text).replace("\x00", "").replace("\r", "").replace("\n", "")
+            if any(ord(ch) >= 32 for ch in cleaned):
+                return cleaned
+    return ""
+
+
+def _select_text_index(context, work, page, text_index: int) -> bool:
+    if page is None or not (0 <= text_index < len(page.texts)):
+        return False
+    page.active_text_index = text_index
+    if work is not None:
+        for page_index, candidate in enumerate(work.pages):
+            if candidate == page or getattr(candidate, "id", "") == getattr(page, "id", ""):
+                work.active_page_index = page_index
+                break
+    scene = context.scene
+    if hasattr(scene, "bname_active_layer_kind"):
+        scene.bname_active_layer_kind = "text"
+    if hasattr(scene, "bname_active_gp_folder_key"):
+        scene.bname_active_gp_folder_key = ""
+    stack = layer_stack_utils.sync_layer_stack(context, preserve_active_index=True)
+    uid = layer_stack_utils.target_uid(
+        "text",
+        f"{page_stack_key(page)}:{getattr(page.texts[text_index], 'id', '')}",
+    )
+    if stack is not None:
+        for i, item in enumerate(stack):
+            if layer_stack_utils.stack_item_uid(item) == uid:
+                scene.bname_active_layer_stack_index = i
+                break
+    layer_stack_utils.remember_layer_stack_signature(context)
+    layer_stack_utils.tag_view3d_redraw(context)
+    return True
+
+
+def _text_rect(entry) -> tuple[float, float, float, float]:
+    x = float(getattr(entry, "x_mm", 0.0))
+    y = float(getattr(entry, "y_mm", 0.0))
+    w = float(getattr(entry, "width_mm", 0.0))
+    h = float(getattr(entry, "height_mm", 0.0))
+    return x, y, x + w, y + h
+
+
+def _text_hit_part(entry, x_mm: float, y_mm: float) -> str:
+    left, bottom, right, top = _text_rect(entry)
+    threshold = _TEXT_HANDLE_HIT_MM
+    if not (
+        left - threshold <= x_mm <= right + threshold
+        and bottom - threshold <= y_mm <= top + threshold
+    ):
+        return ""
+    near_left = abs(x_mm - left) <= threshold
+    near_right = abs(x_mm - right) <= threshold
+    near_bottom = abs(y_mm - bottom) <= threshold
+    near_top = abs(y_mm - top) <= threshold
+    inside_x = left <= x_mm <= right
+    inside_y = bottom <= y_mm <= top
+    if near_left and near_top:
+        return "top_left"
+    if near_right and near_top:
+        return "top_right"
+    if near_left and near_bottom:
+        return "bottom_left"
+    if near_right and near_bottom:
+        return "bottom_right"
+    if near_left and inside_y:
+        return "left"
+    if near_right and inside_y:
+        return "right"
+    if near_top and inside_x:
+        return "top"
+    if near_bottom and inside_x:
+        return "bottom"
+    if inside_x and inside_y:
+        return "body"
+    return ""
+
+
+def _hit_text_entry(page, x_mm: float, y_mm: float):
+    active_idx = int(getattr(page, "active_text_index", -1))
+    indices: list[int] = []
+    if 0 <= active_idx < len(page.texts):
+        indices.append(active_idx)
+    indices.extend(i for i in reversed(range(len(page.texts))) if i != active_idx)
+    for idx in indices:
+        part = _text_hit_part(page.texts[idx], x_mm, y_mm)
+        if part:
+            return idx, page.texts[idx], part
+    return -1, None, ""
+
+
+def _set_text_rect(entry, x: float, y: float, width: float, height: float) -> None:
+    entry.x_mm = float(x)
+    entry.y_mm = float(y)
+    entry.width_mm = max(_TEXT_MIN_SIZE_MM, float(width))
+    entry.height_mm = max(_TEXT_MIN_SIZE_MM, float(height))
 
 
 class BNAME_OT_text_add(Operator):
@@ -324,8 +504,21 @@ class BNAME_OT_text_tool(Operator):
     _externally_finished: bool
     _cursor_modal_set: bool
     _editing: bool
+    _editing_created_new: bool
+    _edit_original_body: str
     _page_id: str
     _text_id: str
+    _dragging: bool
+    _drag_action: str
+    _drag_page_id: str
+    _drag_text_id: str
+    _drag_start_x: float
+    _drag_start_y: float
+    _drag_orig_x: float
+    _drag_orig_y: float
+    _drag_orig_w: float
+    _drag_orig_h: float
+    _drag_moved: bool
 
     @classmethod
     def poll(cls, context):
@@ -342,8 +535,11 @@ class BNAME_OT_text_tool(Operator):
         self._externally_finished = False
         self._cursor_modal_set = panel_modal_state.set_modal_cursor(context, "TEXT")
         self._editing = False
+        self._editing_created_new = False
+        self._edit_original_body = ""
         self._page_id = ""
         self._text_id = ""
+        self._clear_drag_state()
         context.window_manager.modal_handler_add(self)
         panel_modal_state.set_active("text_tool", self, context)
         self.report({"INFO"}, "テキストツール: クリック位置にテキストを追加")
@@ -355,6 +551,8 @@ class BNAME_OT_text_tool(Operator):
             return {"FINISHED", "PASS_THROUGH"}
         if getattr(self, "_editing", False):
             return self._modal_editing(context, event)
+        if getattr(self, "_dragging", False):
+            return self._modal_dragging(context, event)
         if not _event_in_view3d_window(context, event):
             return {"PASS_THROUGH"}
         if event.type in {"ESC", "RIGHTMOUSE"} and event.value == "PRESS":
@@ -371,13 +569,21 @@ class BNAME_OT_text_tool(Operator):
         ):
             self.finish_from_external(context, keep_selection=True)
             return {"FINISHED", "PASS_THROUGH"}
-        if event.type != "LEFTMOUSE" or event.value != "PRESS":
+        if event.type != "LEFTMOUSE" or event.value not in {"PRESS", "DOUBLE_CLICK"}:
             return {"PASS_THROUGH"}
         work, page, lx, ly = _resolve_page_from_event(context, event)
         if work is None or page is None or lx is None or ly is None:
             return {"PASS_THROUGH"}
-        width = 30.0
-        height = 15.0
+        hit_index, hit_entry, hit_part = _hit_text_entry(page, lx, ly)
+        if hit_entry is not None and hit_index >= 0:
+            _select_text_index(context, work, page, hit_index)
+            if event.value == "DOUBLE_CLICK":
+                self._start_editing_existing(context, page, hit_entry)
+                return {"RUNNING_MODAL"}
+            self._start_text_drag(page, hit_entry, hit_part, lx, ly)
+            return {"RUNNING_MODAL"}
+        width = _TEXT_DEFAULT_WIDTH_MM
+        height = _TEXT_DEFAULT_HEIGHT_MM
         x_mm = lx - width / 2.0
         y_mm = ly - height / 2.0
         if _creation_blocked(context, page, x_mm, y_mm, width, height):
@@ -394,6 +600,8 @@ class BNAME_OT_text_tool(Operator):
             height_mm=height,
         )
         self._editing = True
+        self._editing_created_new = True
+        self._edit_original_body = ""
         self._page_id = getattr(page, "id", "")
         self._text_id = getattr(entry, "id", "")
         self.report({"INFO"}, "本文を入力してください (Enter: 確定 / Esc: キャンセル)")
@@ -406,10 +614,24 @@ class BNAME_OT_text_tool(Operator):
                 return {"PASS_THROUGH"}
             if not self._is_text_edit_event(event):
                 return {"PASS_THROUGH"}
+        if event.type == "LEFTMOUSE" and event.value in {"PRESS", "DOUBLE_CLICK"}:
+            self._finish_current_text_edit(context)
+            return self.modal(context, event)
+        text = _event_text(event)
+        if text:
+            return self._append_to_current_text(context, text)
         if event.value != "PRESS":
             return {"RUNNING_MODAL"}
         if event.type in {"ESC", "RIGHTMOUSE"}:
-            _remove_text_by_id(context, self._page_id, self._text_id)
+            if bool(getattr(self, "_editing_created_new", False)):
+                _remove_text_by_id(context, self._page_id, self._text_id)
+            else:
+                page, entry, idx = self._current_text_entry(context)
+                if entry is not None:
+                    entry.body = str(getattr(self, "_edit_original_body", ""))
+                    if page is not None:
+                        page.active_text_index = idx
+                    layer_stack_utils.sync_layer_stack_after_data_change(context)
             self._finish_current_text_edit(context)
             return {"RUNNING_MODAL"}
         if event.type in {"RET", "NUMPAD_ENTER"}:
@@ -424,27 +646,169 @@ class BNAME_OT_text_tool(Operator):
             if clipboard:
                 return self._append_to_current_text(context, clipboard)
             return {"RUNNING_MODAL"}
-        text = getattr(event, "unicode", "") or ""
-        if text and not event.ctrl and not event.alt and not getattr(event, "oskey", False):
-            return self._append_to_current_text(context, text)
         return {"RUNNING_MODAL"}
 
     def _is_text_edit_event(self, event) -> bool:
+        if _event_text(event):
+            return True
+        if event.type == "TEXTINPUT":
+            return True
         if event.value != "PRESS":
             return False
         if event.type in {"ESC", "RET", "NUMPAD_ENTER", "BACK_SPACE"}:
             return True
         if event.type == "V" and event.ctrl and not event.alt:
             return True
-        text = getattr(event, "unicode", "") or ""
-        return bool(text and not event.ctrl and not event.alt and not getattr(event, "oskey", False))
+        return False
 
     def _finish_current_text_edit(self, context) -> None:
         self._editing = False
+        self._editing_created_new = False
+        self._edit_original_body = ""
         self._page_id = ""
         self._text_id = ""
         self.report({"INFO"}, "テキストツール: クリック位置にテキストを追加")
         layer_stack_utils.tag_view3d_redraw(context)
+
+    def _start_editing_existing(self, context, page, entry) -> None:
+        self._editing = True
+        self._editing_created_new = False
+        self._edit_original_body = str(getattr(entry, "body", ""))
+        self._page_id = getattr(page, "id", "")
+        self._text_id = getattr(entry, "id", "")
+        self._clear_drag_state()
+        self.report({"INFO"}, "本文を入力してください (Enter: 確定 / Esc: キャンセル)")
+        layer_stack_utils.tag_view3d_redraw(context)
+
+    def _start_text_drag(self, page, entry, part: str, x_mm: float, y_mm: float) -> None:
+        self._dragging = True
+        self._drag_action = "move" if part == "body" else part
+        self._drag_page_id = getattr(page, "id", "")
+        self._drag_text_id = getattr(entry, "id", "")
+        self._drag_start_x = float(x_mm)
+        self._drag_start_y = float(y_mm)
+        self._drag_orig_x = float(entry.x_mm)
+        self._drag_orig_y = float(entry.y_mm)
+        self._drag_orig_w = float(entry.width_mm)
+        self._drag_orig_h = float(entry.height_mm)
+        self._drag_moved = False
+
+    def _clear_drag_state(self) -> None:
+        self._dragging = False
+        self._drag_action = ""
+        self._drag_page_id = ""
+        self._drag_text_id = ""
+        self._drag_start_x = 0.0
+        self._drag_start_y = 0.0
+        self._drag_orig_x = 0.0
+        self._drag_orig_y = 0.0
+        self._drag_orig_w = 0.0
+        self._drag_orig_h = 0.0
+        self._drag_moved = False
+
+    def _modal_dragging(self, context, event):
+        if event.type == "MOUSEMOVE":
+            self._update_text_drag(context, event)
+            return {"RUNNING_MODAL"}
+        if event.type == "LEFTMOUSE" and event.value == "DOUBLE_CLICK":
+            page, entry, idx = self._drag_text_entry(context)
+            moved = bool(getattr(self, "_drag_moved", False))
+            self._clear_drag_state()
+            if not moved and entry is not None and page is not None and idx >= 0:
+                work = get_work(context)
+                _select_text_index(context, work, page, idx)
+                self._start_editing_existing(context, page, entry)
+            return {"RUNNING_MODAL"}
+        if event.type == "LEFTMOUSE" and event.value == "RELEASE":
+            moved = bool(getattr(self, "_drag_moved", False))
+            self._clear_drag_state()
+            if moved:
+                self._push_undo_step("B-Name: テキスト移動/リサイズ")
+                layer_stack_utils.sync_layer_stack_after_data_change(context)
+            else:
+                layer_stack_utils.tag_view3d_redraw(context)
+            return {"RUNNING_MODAL"}
+        if event.type in {"ESC", "RIGHTMOUSE"} and event.value == "PRESS":
+            self._cancel_text_drag(context)
+            return {"RUNNING_MODAL"}
+        return {"RUNNING_MODAL"}
+
+    def _drag_text_entry(self, context):
+        page = _find_page_by_id(context, getattr(self, "_drag_page_id", ""))
+        if page is None:
+            return None, None, -1
+        idx = _find_text_index(page, getattr(self, "_drag_text_id", ""))
+        if idx < 0:
+            return page, None, -1
+        return page, page.texts[idx], idx
+
+    def _update_text_drag(self, context, event) -> None:
+        page, entry, idx = self._drag_text_entry(context)
+        if entry is None or page is None:
+            self._clear_drag_state()
+            return
+        work, current_page, lx, ly = _resolve_local_xy_for_page_from_event(
+            context,
+            event,
+            getattr(page, "id", ""),
+        )
+        if work is None or current_page is None or lx is None or ly is None:
+            return
+        if getattr(page, "id", "") != getattr(current_page, "id", ""):
+            return
+        dx = float(lx) - float(self._drag_start_x)
+        dy = float(ly) - float(self._drag_start_y)
+        if abs(dx) > _TEXT_DRAG_EPS_MM or abs(dy) > _TEXT_DRAG_EPS_MM:
+            self._drag_moved = True
+        x, y, w, h = self._drag_result_rect(dx, dy)
+        if _creation_blocked(context, page, x, y, w, h):
+            return
+        _set_text_rect(entry, x, y, w, h)
+        _select_text_index(context, work, page, idx)
+        layer_stack_utils.tag_view3d_redraw(context)
+
+    def _drag_result_rect(self, dx: float, dy: float) -> tuple[float, float, float, float]:
+        x = float(self._drag_orig_x)
+        y = float(self._drag_orig_y)
+        w = float(self._drag_orig_w)
+        h = float(self._drag_orig_h)
+        right = x + w
+        top = y + h
+        action = str(getattr(self, "_drag_action", "") or "")
+        if action == "move":
+            return x + dx, y + dy, w, h
+        new_left = x
+        new_right = right
+        new_bottom = y
+        new_top = top
+        if "left" in action:
+            new_left = min(right - _TEXT_MIN_SIZE_MM, x + dx)
+        if "right" in action:
+            new_right = max(x + _TEXT_MIN_SIZE_MM, right + dx)
+        if "bottom" in action:
+            new_bottom = min(top - _TEXT_MIN_SIZE_MM, y + dy)
+        if "top" in action:
+            new_top = max(y + _TEXT_MIN_SIZE_MM, top + dy)
+        return new_left, new_bottom, new_right - new_left, new_top - new_bottom
+
+    def _cancel_text_drag(self, context) -> None:
+        page, entry, _idx = self._drag_text_entry(context)
+        if entry is not None:
+            _set_text_rect(
+                entry,
+                self._drag_orig_x,
+                self._drag_orig_y,
+                self._drag_orig_w,
+                self._drag_orig_h,
+            )
+        self._clear_drag_state()
+        layer_stack_utils.tag_view3d_redraw(context)
+
+    def _push_undo_step(self, message: str) -> None:
+        try:
+            bpy.ops.ed.undo_push(message=message)
+        except Exception:  # noqa: BLE001
+            _logger.exception("text_tool: undo_push failed")
 
     def _current_text_entry(self, context):
         page = _find_page_by_id(context, self._page_id)
@@ -486,6 +850,9 @@ class BNAME_OT_text_tool(Operator):
             panel_modal_state.restore_modal_cursor(context)
             self._cursor_modal_set = False
         self._editing = False
+        self._editing_created_new = False
+        self._edit_original_body = ""
+        self._clear_drag_state()
 
     def finish_from_external(self, context, *, keep_selection: bool) -> None:
         _ = keep_selection

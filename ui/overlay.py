@@ -843,10 +843,21 @@ def _draw_page_overlay(
             skip_stem = getattr(context.scene, "bname_current_panel_stem", "")
         _draw_panels(work, page, ox_mm=ox_mm, oy_mm=oy_mm, skip_preview_stem=skip_stem)
         _draw_balloons(page, ox_mm=ox_mm, oy_mm=oy_mm)
+        active_text_guides = False
+        if getattr(context.scene, "bname_active_layer_kind", "") == "text":
+            active_idx = int(getattr(work, "active_page_index", -1))
+            if 0 <= active_idx < len(work.pages):
+                active_page = work.pages[active_idx]
+                active_text_guides = (
+                    active_page == page
+                    or str(getattr(active_page, "id", "") or "")
+                    == str(getattr(page, "id", "") or "")
+                )
         overlay_text.draw_text_guides(
             page,
             ox_mm=ox_mm,
             oy_mm=oy_mm,
+            active=active_text_guides,
             entry_visible=lambda entry: overlay_visibility.entry_in_visible_panel(page, entry),
             draw_rect_fill=_draw_rect_fill,
             draw_rect_outline=_draw_rect_outline,

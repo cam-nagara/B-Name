@@ -7,6 +7,25 @@ from collections.abc import Callable
 from ..utils.geom import Rect
 
 EntryVisiblePredicate = Callable[[object], bool]
+_TEXT_HANDLE_SIZE_MM = 2.0
+
+
+def _text_handle_rects(rect: Rect) -> list[Rect]:
+    half = _TEXT_HANDLE_SIZE_MM * 0.5
+    points = (
+        (rect.x, rect.y),
+        (rect.x + rect.width * 0.5, rect.y),
+        (rect.x2, rect.y),
+        (rect.x, rect.y + rect.height * 0.5),
+        (rect.x2, rect.y + rect.height * 0.5),
+        (rect.x, rect.y2),
+        (rect.x + rect.width * 0.5, rect.y2),
+        (rect.x2, rect.y2),
+    )
+    return [
+        Rect(x - half, y - half, _TEXT_HANDLE_SIZE_MM, _TEXT_HANDLE_SIZE_MM)
+        for x, y in points
+    ]
 
 
 def draw_text_guides(
@@ -14,6 +33,7 @@ def draw_text_guides(
     *,
     ox_mm: float = 0.0,
     oy_mm: float = 0.0,
+    active: bool = False,
     entry_visible: EntryVisiblePredicate,
     draw_rect_fill: Callable[..., None],
     draw_rect_outline: Callable[..., None],
@@ -21,7 +41,7 @@ def draw_text_guides(
     texts = getattr(page, "texts", None)
     if texts is None:
         return
-    active_idx = getattr(page, "active_text_index", -1)
+    active_idx = getattr(page, "active_text_index", -1) if active else -1
     for i, entry in enumerate(texts):
         if not entry_visible(entry):
             continue
@@ -31,6 +51,9 @@ def draw_text_guides(
         draw_rect_outline(rect, color, width_mm=0.30)
         if i == active_idx:
             draw_rect_outline(rect.inset(-1.0), (1.0, 0.6, 0.0, 1.0), width_mm=0.50)
+            for handle in _text_handle_rects(rect):
+                draw_rect_fill(handle, (1.0, 1.0, 1.0, 0.95))
+                draw_rect_outline(handle, (1.0, 0.6, 0.0, 1.0), width_mm=0.25)
 
 
 def draw_text_pixels(
