@@ -10,14 +10,16 @@
 from __future__ import annotations
 
 import bpy
-from bpy.props import BoolProperty, FloatProperty, IntProperty
+from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty
 from bpy.types import Operator
 
 from ..core.mode import MODE_PAGE, get_mode
 from ..core.work import get_work
-from ..utils import geom, log
+from ..utils import geom, log, page_browser
 
 _logger = log.get_logger(__name__)
+
+_PAGE_BROWSER_DEFAULT_RATIO = 0.28
 
 
 # ---------- 共通ヘルパ ----------
@@ -48,6 +50,136 @@ def _find_view3d_region(context):
     if rv3d is None:
         return None
     return area, region, rv3d
+
+
+def _find_window_region(area):
+    if area is None:
+        return None
+    for region in getattr(area, "regions", []):
+        if getattr(region, "type", "") == "WINDOW":
+            return region
+    return None
+
+
+def _context_screen(context):
+    window = getattr(context, "window", None)
+    screen = getattr(window, "screen", None)
+    return screen or getattr(context, "screen", None)
+
+
+def _largest_view3d_area(screen, *, exclude_browser: bool = True):
+    areas = []
+    for area in page_browser.view3d_areas(screen):
+        if exclude_browser and page_browser.is_marked_area(area):
+            continue
+        areas.append(area)
+    if not areas:
+        return None
+    return max(areas, key=lambda area: int(getattr(area, "width", 0)) * int(getattr(area, "height", 0)))
+
+
+def _fit_page_browser_area(context, area) -> bool:
+    work = get_work(context)
+    if work is None or not work.loaded or len(work.pages) == 0:
+        return False
+    region = _find_window_region(area)
+    if region is None:
+        return False
+    bbox = _overview_layout_bbox(work)
+    if bbox is None:
+        return False
+    x, y, w, h = bbox
+    pad = max(10.0, float(getattr(context.scene, "bname_overview_gap_mm", 30.0)) * 0.5)
+    ok = _fit_view_to_rect_mm(context, area, region, x - pad, y - pad, w + pad * 2.0, h + pad * 2.0)
+    try:
+        space = area.spaces.active
+        rv3d = getattr(space, "region_3d", None)
+        if rv3d is not None:
+            rv3d.view_perspective = "ORTHO"
+        overlay = getattr(space, "overlay", None)
+        if overlay is not None:
+            overlay.show_overlays = False
+        shading = getattr(space, "shading", None)
+        if shading is not None:
+            shading.type = "SOLID"
+            shading.light = "FLAT"
+            shading.background_type = "THEME"
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        area.tag_redraw()
+    except Exception:  # noqa: BLE001
+        pass
+    return ok
+
+
+def _workspace_name_available(name: str) -> str:
+    existing = {workspace.name for workspace in bpy.data.workspaces}
+    if name not in existing:
+        return name
+    index = 1
+    while True:
+        candidate = f"{name}.{index:03d}"
+        if candidate not in existing:
+            return candidate
+        index += 1
+
+
+def _activate_or_create_page_workspace(context, position: str):
+    window = getattr(context, "window", None)
+    if window is None:
+        return getattr(context, "workspace", None)
+    for workspace in bpy.data.workspaces:
+        if page_browser.is_page_browser_workspace(workspace) or workspace.name == page_browser.WORKSPACE_NAME:
+            window.workspace = workspace
+            page_browser.mark_workspace(workspace, position)
+            return workspace
+    try:
+        bpy.ops.workspace.duplicate()
+        workspace = window.workspace
+    except Exception:  # noqa: BLE001
+        workspace = getattr(context, "workspace", None)
+    if workspace is not None:
+        try:
+            workspace.name = _workspace_name_available(page_browser.WORKSPACE_NAME)
+        except Exception:  # noqa: BLE001
+            pass
+        page_browser.mark_workspace(workspace, position)
+    return workspace
+
+
+def _split_area_for_page_browser(context, base_area, position: str, ratio: float):
+    screen = _context_screen(context)
+    if screen is None or base_area is None:
+        return None
+    before = {page_browser.area_key(area) for area in getattr(screen, "areas", [])}
+    pos = page_browser.normalize_position(position)
+    direction = "VERTICAL" if pos in {"LEFT", "RIGHT"} else "HORIZONTAL"
+    browser_ratio = max(0.12, min(0.5, float(ratio)))
+    factor = browser_ratio if pos in {"LEFT", "BOTTOM"} else 1.0 - browser_ratio
+    try:
+        with context.temp_override(screen=screen, area=base_area):
+            result = bpy.ops.screen.area_split(direction=direction, factor=factor)
+        if "FINISHED" not in result:
+            return None
+    except Exception:  # noqa: BLE001
+        _logger.exception("page browser area split failed")
+        return None
+
+    candidates = [
+        area
+        for area in page_browser.view3d_areas(screen)
+        if page_browser.area_key(area) not in before or area == base_area
+    ]
+    if not candidates:
+        candidates = page_browser.view3d_areas(screen)
+    if pos == "LEFT":
+        return min(candidates, key=lambda area: getattr(area, "x", 0))
+    if pos == "RIGHT":
+        return max(candidates, key=lambda area: getattr(area, "x", 0) + getattr(area, "width", 0))
+    if pos == "TOP":
+        return max(candidates, key=lambda area: getattr(area, "y", 0) + getattr(area, "height", 0))
+    return min(candidates, key=lambda area: getattr(area, "y", 0))
 
 
 def _fit_view_to_rect_mm(
@@ -291,10 +423,117 @@ class BNAME_OT_view_overview_toggle(Operator):
         return {"FINISHED"}
 
 
+class BNAME_OT_page_browser_workspace(Operator):
+    """ページ一覧専用ワークスペースを作成/表示し、3D View をページ一覧ビューにする."""
+
+    bl_idname = "bname.page_browser_workspace"
+    bl_label = "ページ一覧ワークスペースを開く"
+    bl_options = {"REGISTER"}
+
+    position: EnumProperty(  # type: ignore[valid-type]
+        name="表示位置",
+        items=page_browser.POSITION_ITEMS,
+        default="LEFT",
+    )
+
+    @classmethod
+    def poll(cls, context):
+        work = get_work(context)
+        return bool(work is not None and work.loaded and len(work.pages) > 0)
+
+    def invoke(self, context, _event):
+        self.position = page_browser.normalize_position(
+            getattr(context.scene, "bname_page_browser_position", "LEFT")
+        )
+        return self.execute(context)
+
+    def execute(self, context):
+        position = page_browser.normalize_position(self.position)
+        context.scene.bname_page_browser_position = position
+        workspace = _activate_or_create_page_workspace(context, position)
+        if workspace is not None:
+            page_browser.mark_workspace(workspace, position)
+
+        screen = _context_screen(context)
+        if screen is None:
+            self.report({"ERROR"}, "画面レイアウトが見つかりません")
+            return {"CANCELLED"}
+        ratio = float(getattr(context.scene, "bname_page_browser_size", _PAGE_BROWSER_DEFAULT_RATIO))
+        view_areas = page_browser.view3d_areas(screen)
+        marked = page_browser.marked_view3d_areas(screen)
+        current_browser = marked[0] if marked else None
+        desired_edge = page_browser.edge_view3d_area(screen, position) if len(view_areas) > 1 else None
+        browser_area = current_browser if current_browser is not None and current_browser == desired_edge else None
+        needs_split = len(view_areas) <= 1 or (
+            current_browser is not None and current_browser != desired_edge
+        )
+        if browser_area is None and needs_split:
+            base_area = _largest_view3d_area(screen, exclude_browser=current_browser is not None)
+            if base_area is None or base_area == current_browser:
+                candidates = [area for area in view_areas if area != current_browser]
+                base_area = max(
+                    candidates,
+                    key=lambda area: int(getattr(area, "width", 0)) * int(getattr(area, "height", 0)),
+                    default=current_browser,
+                )
+            browser_area = _split_area_for_page_browser(context, base_area, position, ratio)
+        if browser_area is None:
+            browser_area = desired_edge
+        if browser_area is None:
+            browser_area = _largest_view3d_area(screen, exclude_browser=False)
+        if browser_area is None:
+            self.report({"ERROR"}, "3D ビューポートが見つかりません")
+            return {"CANCELLED"}
+
+        page_browser.clear_screen_marks(screen)
+        page_browser.mark_area(browser_area)
+        if not _fit_page_browser_area(context, browser_area):
+            self.report({"WARNING"}, "ページ一覧ビューのフィットに失敗しました")
+        page_browser.tag_page_browser_redraw(context)
+        labels = {identifier: label for identifier, label, _description in page_browser.POSITION_ITEMS}
+        self.report({"INFO"}, f"ページ一覧ビューを{labels.get(position, position)}に表示")
+        return {"FINISHED"}
+
+
+class BNAME_OT_page_browser_mark_area(Operator):
+    """現在の 3D View をページ一覧ビューとして扱う."""
+
+    bl_idname = "bname.page_browser_mark_area"
+    bl_label = "この3Dビューをページ一覧にする"
+    bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, context):
+        work = get_work(context)
+        return bool(
+            work is not None
+            and work.loaded
+            and getattr(context, "area", None) is not None
+            and context.area.type == "VIEW_3D"
+        )
+
+    def execute(self, context):
+        area = context.area
+        screen = getattr(context, "screen", None)
+        position = page_browser.normalize_position(
+            getattr(context.scene, "bname_page_browser_position", "LEFT")
+        )
+        if screen is not None:
+            page_browser.clear_screen_marks(screen)
+        page_browser.mark_area(area)
+        page_browser.mark_workspace(getattr(context, "workspace", None), position)
+        if not _fit_page_browser_area(context, area):
+            self.report({"WARNING"}, "ページ一覧ビューのフィットに失敗しました")
+        page_browser.tag_page_browser_redraw(context)
+        return {"FINISHED"}
+
+
 _CLASSES = (
     BNAME_OT_view_fit_page,
     BNAME_OT_view_fit_all,
     BNAME_OT_view_overview_toggle,
+    BNAME_OT_page_browser_workspace,
+    BNAME_OT_page_browser_mark_area,
 )
 
 
@@ -358,6 +597,20 @@ def register() -> None:
         soft_max=200.0,
         update=_on_overview_layout_changed,
     )
+    bpy.types.Scene.bname_page_browser_position = EnumProperty(
+        name="ページ一覧の位置",
+        description="ページ一覧専用ビューを表示する位置",
+        items=page_browser.POSITION_ITEMS,
+        default="LEFT",
+    )
+    bpy.types.Scene.bname_page_browser_size = FloatProperty(
+        name="ページ一覧の幅",
+        description="ページ一覧専用ビューの分割比率",
+        default=_PAGE_BROWSER_DEFAULT_RATIO,
+        min=0.12,
+        max=0.5,
+        subtype="FACTOR",
+    )
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
 
@@ -368,7 +621,13 @@ def unregister() -> None:
             bpy.utils.unregister_class(cls)
         except RuntimeError:
             pass
-    for prop in ("bname_overview_mode", "bname_overview_cols", "bname_overview_gap_mm"):
+    for prop in (
+        "bname_overview_mode",
+        "bname_overview_cols",
+        "bname_overview_gap_mm",
+        "bname_page_browser_position",
+        "bname_page_browser_size",
+    ):
         try:
             delattr(bpy.types.Scene, prop)
         except (AttributeError, RuntimeError):

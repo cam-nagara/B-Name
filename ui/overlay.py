@@ -35,7 +35,7 @@ except ImportError:  # pragma: no cover - 古い Blender
 
 from ..core.mode import MODE_PAGE, MODE_PANEL, get_mode
 from ..core.work import get_active_page, get_work
-from ..utils import border_geom, color_space, log
+from ..utils import border_geom, color_space, log, page_browser
 from ..utils.geom import Rect, bleed_rect, mm_to_m
 from . import overlay_balloon
 from . import overlay_effect_line
@@ -1165,7 +1165,8 @@ def _draw_callback() -> None:
     if work is None or not work.loaded:
         return
     mode = get_mode(context)
-    if mode == MODE_PANEL:
+    is_page_browser = page_browser.is_page_browser_area(context)
+    if mode == MODE_PANEL and not is_page_browser:
         return
     paper = work.paper
     rects = overlay_shared.compute_paper_rects(paper)
@@ -1174,10 +1175,12 @@ def _draw_callback() -> None:
     gpu.state.blend_set("ALPHA")
     try:
         if (
-            mode == MODE_PAGE
-            and getattr(scene, "bname_overview_mode", False)
-            and len(work.pages) > 0
-        ):
+            (
+                mode == MODE_PAGE
+                and getattr(scene, "bname_overview_mode", False)
+            )
+            or is_page_browser
+        ) and len(work.pages) > 0:
             # 全ページ一覧モード.
             # 日本の漫画は右→左に読むため、ページ 0001 を右端に置き、追加した
             # ページ (0002, 0003...) を左方向に展開する。オフセットは負の X。
@@ -1429,14 +1432,18 @@ def _draw_callback_pixel() -> None:
     rects = overlay_shared.compute_paper_rects(paper)
     mode = get_mode(context)
     scene = context.scene
+    is_page_browser = page_browser.is_page_browser_area(context)
 
-    if mode != MODE_PAGE:
+    if mode != MODE_PAGE and not is_page_browser:
         return
 
     if (
-        getattr(scene, "bname_overview_mode", False)
-        and len(work.pages) > 0
-    ):
+        (
+            getattr(scene, "bname_overview_mode", False)
+            and mode == MODE_PAGE
+        )
+        or is_page_browser
+    ) and len(work.pages) > 0:
         from ..utils.page_grid import (
             is_left_half_page as _is_left_half,
             page_grid_offset_mm as _pg_offset,

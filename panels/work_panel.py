@@ -68,6 +68,10 @@ class BNAME_PT_panel_return(Panel):
     def draw(self, context):
         layout = self.layout
         layout.operator("bname.exit_panel_mode", text="ページ一覧に戻る", icon="BACK")
+        layout.separator()
+        layout.prop(context.scene, "bname_page_browser_position", text="ページ一覧位置")
+        layout.prop(context.scene, "bname_page_browser_size", text="サイズ")
+        layout.operator("bname.page_browser_workspace", text="ページ一覧ビューを開く", icon="WINDOW")
 
 
 _CLASSES = (

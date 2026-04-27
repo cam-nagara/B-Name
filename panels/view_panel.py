@@ -7,6 +7,7 @@ from bpy.types import Panel
 
 from ..core.mode import MODE_PANEL, get_mode
 from ..core.work import get_work
+from ..utils import page_browser
 
 B_NAME_CATEGORY = "B-Name"
 
@@ -37,6 +38,17 @@ class BNAME_PT_view(Panel):
         row = col.row(align=True)
         row.prop(scene, "bname_overview_cols", text="列数")
         row.prop(scene, "bname_overview_gap_mm", text="間隔mm")
+
+        layout.separator()
+        box = layout.box()
+        box.label(text="ページ一覧ビュー", icon="WINDOW")
+        box.prop(scene, "bname_page_browser_position", text="位置")
+        box.prop(scene, "bname_page_browser_size", text="サイズ")
+        row = box.row(align=True)
+        row.operator("bname.page_browser_workspace", text="専用ワークスペース", icon="WINDOW")
+        row.operator("bname.page_browser_mark_area", text="", icon="IMGDISPLAY")
+        if page_browser.is_page_browser_area(context):
+            box.label(text="この3Dビューはページ一覧です", icon="CHECKMARK")
 
 
 _CLASSES = (

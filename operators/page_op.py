@@ -19,7 +19,7 @@ from ..core.work import get_work
 from ..io import page_io, work_io
 from ..utils import gpencil as gp_utils
 from ..utils import layer_stack as layer_stack_utils
-from ..utils import log, page_grid, page_range, paths
+from ..utils import log, page_browser, page_grid, page_range, paths
 
 _logger = log.get_logger(__name__)
 
@@ -331,12 +331,13 @@ class BNAME_OT_page_pick_viewport(Operator):
     @classmethod
     def poll(cls, context):
         work = get_work(context)
+        in_page_browser = page_browser.is_page_browser_area(context)
         return bool(
             work is not None
             and work.loaded
-            and get_mode(context) == MODE_PAGE
+            and (get_mode(context) == MODE_PAGE or in_page_browser)
             and getattr(context, "mode", "") == "OBJECT"
-    )
+        )
 
     def invoke(self, context, event):
         if (
@@ -353,9 +354,13 @@ class BNAME_OT_page_pick_viewport(Operator):
         work = get_work(context)
         if work is None or not work.loaded:
             return {"PASS_THROUGH"}
+        is_browser = page_browser.is_page_browser_area(context)
+        previous_overview = bool(getattr(context.scene, "bname_overview_mode", False))
         try:
             from . import panel_picker
 
+            if is_browser:
+                context.scene.bname_overview_mode = True
             panel_hit = panel_picker.find_panel_at_event(context, event)
             if panel_hit is not None:
                 page_index, panel_index = panel_hit
@@ -365,14 +370,20 @@ class BNAME_OT_page_pick_viewport(Operator):
         except Exception:  # noqa: BLE001
             _logger.exception("page_pick_viewport failed")
             return {"PASS_THROUGH"}
+        finally:
+            if is_browser:
+                context.scene.bname_overview_mode = previous_overview
         if page_index is None or not (0 <= page_index < len(work.pages)):
             return {"PASS_THROUGH"}
         changed = False
-        if not bool(getattr(context.scene, "bname_overview_mode", True)):
+        if not is_browser and not bool(getattr(context.scene, "bname_overview_mode", True)):
             context.scene.bname_overview_mode = True
             changed = True
         if page_index != work.active_page_index:
-            _switch_to_page(context, work, Path(work.work_dir), page_index)
+            if is_browser:
+                work.active_page_index = page_index
+            else:
+                _switch_to_page(context, work, Path(work.work_dir), page_index)
             changed = True
         if panel_index is not None:
             page = work.pages[page_index]
@@ -388,7 +399,7 @@ class BNAME_OT_page_pick_viewport(Operator):
         if changed:
             _tag_screen_redraw(context)
         # Blender標準のオブジェクト選択は妨げない。
-        return {"PASS_THROUGH"}
+        return {"FINISHED"} if is_browser else {"PASS_THROUGH"}
 
     def execute(self, context):
         return {"CANCELLED"}
