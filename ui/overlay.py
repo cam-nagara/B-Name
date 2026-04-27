@@ -429,6 +429,18 @@ def _ensure_bpy_image(filepath: str):
 
 def _draw_balloons(page, ox_mm: float = 0.0, oy_mm: float = 0.0) -> None:
     """ページ内のフキダシをオーバーレイ描画する."""
+    context = bpy.context
+    work = get_work(context)
+    active_guides = False
+    if work is not None and getattr(context.scene, "bname_active_layer_kind", "") == "balloon":
+        active_idx = int(getattr(work, "active_page_index", -1))
+        if 0 <= active_idx < len(work.pages):
+            active_page = work.pages[active_idx]
+            active_guides = (
+                active_page == page
+                or str(getattr(active_page, "id", "") or "")
+                == str(getattr(page, "id", "") or "")
+            )
     overlay_balloon.draw_balloons(
         page,
         ox_mm=ox_mm,
@@ -437,6 +449,7 @@ def _draw_balloons(page, ox_mm: float = 0.0, oy_mm: float = 0.0) -> None:
         draw_polygon_fill=_draw_polygon_fill,
         draw_polyline_loop=_draw_polyline_loop,
         is_entry_visible=lambda entry: overlay_visibility.entry_in_visible_panel(page, entry),
+        active=active_guides,
     )
 
 

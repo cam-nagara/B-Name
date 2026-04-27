@@ -80,6 +80,12 @@ class BNAME_PT_tools(Panel):
             depress=panel_modal_state.is_active("layer_move"),
         )
         row.operator(
+            "bname.balloon_tool",
+            text="",
+            icon="MOD_FLUID",
+            depress=panel_modal_state.is_active("balloon_tool"),
+        )
+        row.operator(
             "bname.text_tool",
             text="",
             icon="FONT_DATA",

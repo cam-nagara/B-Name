@@ -49,6 +49,28 @@ def stack_item_uid(item) -> str:
     return target_uid(getattr(item, "kind", ""), getattr(item, "key", ""))
 
 
+def set_active_stack_index_silently(context, index: int) -> None:
+    """実データ選択を再実行せず、UIList のアクティブ行だけを合わせる。"""
+    scene = getattr(context, "scene", None)
+    if scene is None or not hasattr(scene, "bname_active_layer_stack_index"):
+        return
+    core_layer_stack = None
+    try:
+        from ..core import layer_stack as core_layer_stack
+
+        core_layer_stack._active_index_update_depth += 1
+    except Exception:  # noqa: BLE001
+        core_layer_stack = None
+    try:
+        scene.bname_active_layer_stack_index = int(index)
+    finally:
+        if core_layer_stack is not None:
+            core_layer_stack._active_index_update_depth = max(
+                0,
+                core_layer_stack._active_index_update_depth - 1,
+            )
+
+
 def get_effect_gp_object():
     obj = bpy.data.objects.get(EFFECT_GP_OBJECT_NAME)
     if obj is not None and getattr(obj, "type", "") == "GREASEPENCIL":
@@ -145,6 +167,9 @@ def _collect_page_layer_targets(
     page_key = page_stack_key(page)
     panel_children: dict[str, list[LayerTarget]] = {}
     page_children: list[LayerTarget] = []
+    balloon_groups: dict[str, LayerTarget] = {}
+    balloon_group_children: dict[str, list[LayerTarget]] = {}
+    balloon_group_parents: dict[str, set[str]] = {}
 
     for entry in reversed(list(getattr(page, "balloons", []))):
         bid = _ensure_unique_id(entry, used_balloon, "balloon")
@@ -155,11 +180,45 @@ def _collect_page_layer_targets(
         else:
             parent = page_key
             depth = 1
+        group_id = str(getattr(entry, "merge_group_id", "") or "")
+        if group_id:
+            group_key = f"{page_key}:{group_id}"
+            balloon_group_parents.setdefault(group_key, set()).add(parent)
+            if group_key not in balloon_groups:
+                label = group_id.replace("balloon_group_", "フキダシ結合 ")
+                balloon_groups[group_key] = LayerTarget(
+                    "balloon_group", group_key, label, parent, depth
+                )
+            target = LayerTarget("balloon", f"{page_key}:{bid}", bid, group_key, depth + 1)
+            balloon_group_children.setdefault(group_key, []).append(target)
+            continue
         target = LayerTarget("balloon", f"{page_key}:{bid}", bid, parent, depth)
         if depth == 2:
             panel_children.setdefault(parent, []).append(target)
         else:
             page_children.append(target)
+
+    for group_key, group_target in balloon_groups.items():
+        if len(balloon_group_parents.get(group_key, set())) > 1:
+            group_target = LayerTarget(
+                "balloon_group",
+                group_key,
+                group_target.label,
+                page_key,
+                1,
+            )
+            children = [
+                LayerTarget(child.kind, child.key, child.label, group_key, 2)
+                for child in balloon_group_children.get(group_key, [])
+            ]
+        else:
+            children = balloon_group_children.get(group_key, [])
+        if group_target.depth == 2:
+            panel_children.setdefault(group_target.parent_key, []).append(group_target)
+            panel_children[group_target.parent_key].extend(children)
+        else:
+            page_children.append(group_target)
+            page_children.extend(children)
 
     for entry in reversed(list(getattr(page, "texts", []))):
         tid = _ensure_unique_id(entry, used_text, "text")
@@ -216,9 +275,11 @@ def collect_targets(context) -> list[LayerTarget]:
                 )
             # コマ外のページ直下レイヤーは、すべてのコマ行の後にまとめて表示する。
             all_page_layers = _collect_page_layer_targets(page, panels_by_key)
+            visible_parent_keys = {page_key}
             for target in all_page_layers:
-                if target.parent_key == page_key:
+                if target.parent_key in visible_parent_keys:
                     targets.append(target)
+                    visible_parent_keys.add(target.key)
 
     effect_obj = get_effect_gp_object()
     if effect_obj is not None:
@@ -253,7 +314,7 @@ def _find_insert_index_for_target(stack, target: LayerTarget) -> int:
         parent_idx = -1
         last_child_idx = -1
         for i, item in enumerate(stack):
-            if item.key == target.parent_key and item.kind in {PAGE_KIND, PANEL_KIND, "gp_folder"}:
+            if item.key == target.parent_key and item.kind in {PAGE_KIND, PANEL_KIND, "gp_folder", "balloon_group"}:
                 parent_idx = i
                 last_child_idx = max(last_child_idx, i)
             elif getattr(item, "parent_key", "") == target.parent_key:
@@ -349,9 +410,17 @@ def _normalize_tree_order(
             for child in stack:
                 if getattr(child, "parent_key", "") == panel_item.key:
                     _append_uid(child)
+                    if child.kind == "balloon_group":
+                        for group_child in stack:
+                            if getattr(group_child, "parent_key", "") == child.key:
+                                _append_uid(group_child)
         for child in stack:
             if getattr(child, "parent_key", "") == page_key and child.kind != PANEL_KIND:
                 _append_uid(child)
+                if child.kind == "balloon_group":
+                    for group_child in stack:
+                        if getattr(group_child, "parent_key", "") == child.key:
+                            _append_uid(group_child)
 
     if page_key_order is not None:
         for page_item in page_items:
@@ -429,12 +498,12 @@ def sync_layer_stack(
     if preserve_active_index and old_active_uid:
         for i, item in enumerate(stack):
             if stack_item_uid(item) == old_active_uid:
-                scene.bname_active_layer_stack_index = i
+                set_active_stack_index_silently(context, i)
                 break
         else:
             _sync_active_stack_index(context)
     elif preserve_active_index and 0 <= old_active_index < len(stack):
-        scene.bname_active_layer_stack_index = old_active_index
+        set_active_stack_index_silently(context, old_active_index)
     else:
         _sync_active_stack_index(context)
     return stack
@@ -778,13 +847,13 @@ def _sync_active_stack_index(context) -> None:
         uid = target_uid(*active_key)
         for i, item in enumerate(stack):
             if stack_item_uid(item) == uid:
-                scene.bname_active_layer_stack_index = i
+                set_active_stack_index_silently(context, i)
                 return
     idx = int(getattr(scene, "bname_active_layer_stack_index", -1))
     if idx >= len(stack):
-        scene.bname_active_layer_stack_index = len(stack) - 1
+        set_active_stack_index_silently(context, len(stack) - 1)
     elif idx < -1:
-        scene.bname_active_layer_stack_index = -1
+        set_active_stack_index_silently(context, -1)
 
 
 def _find_by_id(coll, key: str):
@@ -878,6 +947,23 @@ def resolve_stack_item(context, item):
             "index": idx,
             "page": target_page,
             "page_index": page_idx,
+        }
+    if kind == "balloon_group":
+        page_id, group_id = split_child_key(key)
+        target_page = page
+        page_idx = int(getattr(work, "active_page_index", -1)) if work is not None else -1
+        if page_id and work is not None:
+            page_idx, target_page = _find_by_id(work.pages, page_id)
+        if target_page is None:
+            return None
+        return {
+            "kind": kind,
+            "target": target_page,
+            "object": None,
+            "index": -1,
+            "page": target_page,
+            "page_index": page_idx,
+            "group_id": group_id,
         }
     if kind == "text":
         page_id, child_id = split_child_key(key)
@@ -997,6 +1083,28 @@ def select_stack_index(context, index: int) -> bool:
         scene.bname_active_image_layer_index = int(resolved.get("index", -1))
         scene.bname_active_gp_folder_key = ""
         scene.bname_active_layer_kind = "image"
+    elif kind == "balloon_group":
+        target_page = resolved.get("page") or page
+        if target_page is None:
+            return False
+        work = get_work(context)
+        page_idx = int(resolved.get("page_index", -1))
+        if work is not None and 0 <= page_idx < len(work.pages):
+            work.active_page_index = page_idx
+        group_id = str(resolved.get("group_id", "") or "")
+        first_selected = -1
+        for i, balloon in enumerate(getattr(target_page, "balloons", [])):
+            selected = str(getattr(balloon, "merge_group_id", "") or "") == group_id
+            try:
+                balloon.selected = selected
+            except Exception:  # noqa: BLE001
+                pass
+            if selected and first_selected < 0:
+                first_selected = i
+        if first_selected >= 0:
+            target_page.active_balloon_index = first_selected
+        scene.bname_active_gp_folder_key = ""
+        scene.bname_active_layer_kind = "balloon"
     elif kind == "balloon":
         target_page = resolved.get("page") or page
         if target_page is None:
@@ -1006,6 +1114,11 @@ def select_stack_index(context, index: int) -> bool:
         if work is not None and 0 <= page_idx < len(work.pages):
             work.active_page_index = page_idx
         target_page.active_balloon_index = int(resolved.get("index", -1))
+        for i, balloon in enumerate(getattr(target_page, "balloons", [])):
+            try:
+                balloon.selected = i == target_page.active_balloon_index
+            except Exception:  # noqa: BLE001
+                pass
         scene.bname_active_gp_folder_key = ""
         scene.bname_active_layer_kind = "balloon"
     elif kind == "text":

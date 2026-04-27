@@ -284,5 +284,11 @@ def render_balloon_layer(entry, canvas_height_px: int, dpi: int):
         canvas.image,
         canvas.left,
         canvas.top,
-        group_path=("balloons",),
+        blend_mode=getattr(entry, "blend_mode", "normal"),
+        group_path=(
+            "balloons",
+            str(getattr(entry, "merge_group_id", "") or ""),
+        )
+        if getattr(entry, "merge_group_id", "")
+        else ("balloons",),
     )

@@ -570,6 +570,8 @@ def balloon_entry_to_dict(entry) -> dict[str, Any]:
         "lineColorAlpha": round(entry.line_color[3], 3),
         "fillColor": color_to_hex(entry.fill_color),
         "fillColorAlpha": round(entry.fill_color[3], 3),
+        "blendMode": getattr(entry, "blend_mode", "normal"),
+        "mergeGroupId": getattr(entry, "merge_group_id", ""),
         "tails": [
             {
                 "type": t.type,
@@ -610,6 +612,8 @@ def balloon_entry_from_dict(entry, data: dict[str, Any]) -> None:
     entry.line_color = hex_to_rgba(data.get("lineColor", "#000000"), alpha)
     alpha = float(data.get("fillColorAlpha", 1.0))
     entry.fill_color = hex_to_rgba(data.get("fillColor", "#FFFFFF"), alpha)
+    entry.blend_mode = data.get("blendMode", "normal")
+    entry.merge_group_id = data.get("mergeGroupId", "")
     entry.tails.clear()
     for td in data.get("tails", []):
         tail = entry.tails.add()

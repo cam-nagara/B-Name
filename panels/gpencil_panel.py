@@ -55,6 +55,7 @@ def _kind_icon(kind: str) -> str:
         "gp": "OUTLINER_OB_GREASEPENCIL",
         "gp_folder": "FILE_FOLDER",
         "image": "IMAGE_DATA",
+        "balloon_group": "FILE_FOLDER",
         "balloon": "MOD_FLUID",
         "text": "FONT_DATA",
         "effect": "STROKE",
@@ -475,6 +476,12 @@ def _draw_balloon_selected_settings(box, context, entry) -> None:
     row.prop(entry, "flip_h", toggle=True)
     row.prop(entry, "flip_v", toggle=True)
     settings.prop(entry, "opacity", slider=True)
+    settings.prop(entry, "blend_mode")
+    if getattr(entry, "merge_group_id", ""):
+        settings.label(text=f"結合: {entry.merge_group_id}", icon="FILE_FOLDER")
+    page = get_active_page(context)
+    if page is not None and sum(1 for b in page.balloons if getattr(b, "selected", False)) >= 2:
+        settings.operator("bname.balloon_merge_selected", text="フキダシを結合", icon="FILE_FOLDER")
     settings.prop(entry, "rounded_corner_enabled")
     sub = settings.row()
     sub.enabled = entry.rounded_corner_enabled

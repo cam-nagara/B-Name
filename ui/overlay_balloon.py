@@ -11,6 +11,25 @@ DrawRectOutline = Callable[..., None]
 DrawPolygonFill = Callable[[list[tuple[float, float]], tuple[float, float, float, float]], None]
 DrawPolylineLoop = Callable[..., None]
 EntryVisiblePredicate = Callable[[object], bool]
+_BALLOON_HANDLE_SIZE_MM = 2.0
+
+
+def _handle_rects(rect: Rect) -> list[Rect]:
+    half = _BALLOON_HANDLE_SIZE_MM * 0.5
+    points = (
+        (rect.x, rect.y),
+        (rect.x + rect.width * 0.5, rect.y),
+        (rect.x2, rect.y),
+        (rect.x, rect.y + rect.height * 0.5),
+        (rect.x2, rect.y + rect.height * 0.5),
+        (rect.x, rect.y2),
+        (rect.x + rect.width * 0.5, rect.y2),
+        (rect.x2, rect.y2),
+    )
+    return [
+        Rect(x - half, y - half, _BALLOON_HANDLE_SIZE_MM, _BALLOON_HANDLE_SIZE_MM)
+        for x, y in points
+    ]
 
 
 def draw_balloons(
@@ -22,6 +41,7 @@ def draw_balloons(
     draw_polygon_fill: DrawPolygonFill,
     draw_polyline_loop: DrawPolylineLoop,
     is_entry_visible: EntryVisiblePredicate | None = None,
+    active: bool = False,
 ) -> None:
     """ページ内のフキダシをオーバーレイ描画する."""
     balloons = getattr(page, "balloons", None)
@@ -82,9 +102,15 @@ def draw_balloons(
                 draw_polyline_loop=draw_polyline_loop,
             )
 
-        if i == active_idx:
-            highlight = rect.inset(-1.0)
-            draw_rect_outline(highlight, (1.0, 0.6, 0.0, 0.9), width_mm=0.50)
+        selected = active and (i == active_idx or bool(getattr(entry, "selected", False)))
+        if selected:
+            draw_rect_outline(rect.inset(-1.0), (1.0, 0.6, 0.0, 0.9), width_mm=0.50)
+            for handle in _handle_rects(rect):
+                draw_polygon_fill(
+                    [(handle.x, handle.y), (handle.x2, handle.y), (handle.x2, handle.y2), (handle.x, handle.y2)],
+                    (1.0, 1.0, 1.0, 0.95),
+                )
+                draw_rect_outline(handle, (1.0, 0.6, 0.0, 0.95), width_mm=0.25)
 
 
 def _outline_rect(rect: Rect) -> list[tuple[float, float]]:

@@ -35,6 +35,7 @@ def _psd_blend_mode(mode: str):
         "normal": BlendMode.NORMAL,
         "multiply": BlendMode.MULTIPLY,
         "screen": BlendMode.SCREEN,
+        "lighten": getattr(BlendMode, "LIGHTEN", BlendMode.NORMAL),
         "overlay": BlendMode.OVERLAY,
         "add": BlendMode.LINEAR_DODGE,
         "linear_dodge": BlendMode.LINEAR_DODGE,

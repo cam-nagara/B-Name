@@ -35,6 +35,7 @@ _ADD_KIND_ICONS = {
     "panel": "MOD_WIREFRAME",
     "gp": "OUTLINER_OB_GREASEPENCIL",
     "image": "IMAGE_DATA",
+    "balloon_group": "FILE_FOLDER",
     "balloon": "MOD_FLUID",
     "text": "FONT_DATA",
     "effect": "STROKE",
@@ -62,7 +63,7 @@ def _page_key_for_item(item) -> str:
         return ""
     if item.kind == PAGE_KIND:
         return item.key
-    if item.kind in {PANEL_KIND, "balloon", "text"}:
+    if item.kind in {PANEL_KIND, "balloon_group", "balloon", "text"}:
         page_key, _child = split_child_key(item.key)
         return page_key
     parent_key = str(getattr(item, "parent_key", "") or "")

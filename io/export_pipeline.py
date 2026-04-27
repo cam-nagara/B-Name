@@ -1373,6 +1373,8 @@ def _blend_rgb(base_rgb, src_rgb, mode: str):
         return ImageChops.multiply(base_rgb, src_rgb)
     if mode == "screen":
         return ImageChops.screen(base_rgb, src_rgb)
+    if mode == "lighten":
+        return ImageChops.lighter(base_rgb, src_rgb)
     if mode == "overlay" and hasattr(ImageChops, "overlay"):
         return ImageChops.overlay(base_rgb, src_rgb)
     if mode in {"add", "linear_dodge"}:

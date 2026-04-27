@@ -54,6 +54,11 @@ _LINE_STYLE_ITEMS = (
     ("double", "二重線", ""),
 )
 
+_BLEND_MODE_ITEMS = (
+    ("normal", "通常", ""),
+    ("lighten", "比較 (明)", ""),
+)
+
 
 class BNameBalloonTail(bpy.types.PropertyGroup):
     type: EnumProperty(items=_TAIL_TYPE_ITEMS, default="straight")  # type: ignore[valid-type]
@@ -113,6 +118,9 @@ class BNameBalloonEntry(bpy.types.PropertyGroup):
     line_width_mm: FloatProperty(name="線幅", default=0.6, min=0.0, soft_max=10.0)  # type: ignore[valid-type]
     line_color: FloatVectorProperty(subtype="COLOR", size=4, default=(0.0, 0.0, 0.0, 1.0), min=0.0, max=1.0)  # type: ignore[valid-type]
     fill_color: FloatVectorProperty(subtype="COLOR", size=4, default=(1.0, 1.0, 1.0, 1.0), min=0.0, max=1.0)  # type: ignore[valid-type]
+    blend_mode: EnumProperty(name="合成モード", items=_BLEND_MODE_ITEMS, default="normal")  # type: ignore[valid-type]
+    merge_group_id: StringProperty(name="結合フォルダ ID", default="")  # type: ignore[valid-type]
+    selected: BoolProperty(name="選択", default=False, options={"SKIP_SAVE"})  # type: ignore[valid-type]
 
     # 反転 / 不透明度 (Meldex flipH/flipV/opacity 相当)
     flip_h: BoolProperty(name="水平反転", default=False)  # type: ignore[valid-type]

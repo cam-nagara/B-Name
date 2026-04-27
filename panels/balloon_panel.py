@@ -75,6 +75,8 @@ class BNAME_PT_balloons(Panel):
         col.operator("bname.balloon_remove", text="", icon="REMOVE")
         col.separator()
         col.operator("bname.balloon_tail_add", text="", icon="PARTICLE_POINT")
+        if sum(1 for balloon in page.balloons if getattr(balloon, "selected", False)) >= 2:
+            layout.operator("bname.balloon_merge_selected", text="フキダシを結合", icon="FILE_FOLDER")
 
         idx = page.active_balloon_index
         if not (0 <= idx < len(page.balloons)):
@@ -103,6 +105,7 @@ class BNAME_PT_balloons(Panel):
         row.prop(entry, "flip_h", toggle=True)
         row.prop(entry, "flip_v", toggle=True)
         box.prop(entry, "opacity", slider=True)
+        box.prop(entry, "blend_mode")
         box.prop(entry, "rounded_corner_enabled")
         sub = box.row()
         sub.enabled = entry.rounded_corner_enabled

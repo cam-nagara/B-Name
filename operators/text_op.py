@@ -116,6 +116,47 @@ def _resolve_local_xy_for_page_from_event(context, event, page_id: str):
     return work, target_page, world_x_mm - ox_mm, world_y_mm - oy_mm
 
 
+def _page_indices_for_text_hit_search(work):
+    if work is None:
+        return
+    active_index = int(getattr(work, "active_page_index", -1))
+    if 0 <= active_index < len(work.pages):
+        yield active_index
+    for page_index in reversed(range(len(work.pages))):
+        if page_index != active_index:
+            yield page_index
+
+
+def _resolve_text_hit_from_event(context, event):
+    """既存テキストをページ矩形外でも拾い、空白クリックはページ内だけ作成対象にする."""
+    from ..utils import page_grid
+
+    work, page, lx, ly = _resolve_page_from_event(context, event)
+    can_create = page is not None and lx is not None and ly is not None
+    if can_create:
+        hit_index, hit_entry, hit_part = _hit_text_entry(page, lx, ly)
+        if hit_entry is not None and hit_index >= 0:
+            return work, page, lx, ly, hit_index, hit_entry, hit_part, True
+
+    if work is None or not getattr(work, "loaded", False):
+        return work, page, lx, ly, -1, None, "", can_create
+
+    world_x_mm, world_y_mm = _event_world_xy_mm(context, event)
+    if world_x_mm is None or world_y_mm is None:
+        return work, page, lx, ly, -1, None, "", can_create
+
+    for page_index in _page_indices_for_text_hit_search(work):
+        candidate = work.pages[page_index]
+        ox_mm, oy_mm = page_grid.page_total_offset_mm(work, context.scene, page_index)
+        local_x = world_x_mm - ox_mm
+        local_y = world_y_mm - oy_mm
+        hit_index, hit_entry, hit_part = _hit_text_entry(candidate, local_x, local_y)
+        if hit_entry is not None and hit_index >= 0:
+            return work, candidate, local_x, local_y, hit_index, hit_entry, hit_part, False
+
+    return work, page, lx, ly, -1, None, "", can_create
+
+
 def _creation_blocked(context, page, x_mm: float, y_mm: float, width_mm: float, height_mm: float) -> bool:
     # ページ一覧ファイルでは、テキストツールはクリック位置にページ上の
     # テキストを作る道具として扱う。コマ編集ファイルでは対象コマ外だけを拒否する。
@@ -219,6 +260,19 @@ def _remove_text_by_id(context, page_id: str, text_id: str) -> None:
     layer_stack_utils.sync_layer_stack_after_data_change(context)
 
 
+def _clean_event_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        text = value.decode("utf-8", errors="ignore")
+    elif isinstance(value, str):
+        text = str(value)
+    else:
+        return ""
+    text = text.replace("\x00", "").replace("\r", "").replace("\n", "")
+    return "".join(ch for ch in text if ord(ch) >= 32)
+
+
 def _event_text(event) -> str:
     if bool(getattr(event, "ctrl", False)) or bool(getattr(event, "alt", False)):
         return ""
@@ -227,14 +281,13 @@ def _event_text(event) -> str:
     event_type = getattr(event, "type", "")
     if event_type in {"ESC", "RET", "NUMPAD_ENTER", "BACK_SPACE"}:
         return ""
-    if event_type != "TEXTINPUT" and getattr(event, "value", "") != "PRESS":
+    value = getattr(event, "value", "")
+    for attr in ("unicode", "utf8", "text", "ascii"):
+        cleaned = _clean_event_text(getattr(event, attr, ""))
+        if cleaned and (event_type == "TEXTINPUT" or value in {"PRESS", "NOTHING"}):
+            return cleaned
+    if event_type != "TEXTINPUT" and value != "PRESS":
         return ""
-    for attr in ("unicode", "ascii"):
-        text = getattr(event, attr, "") or ""
-        if text:
-            cleaned = str(text).replace("\x00", "").replace("\r", "").replace("\n", "")
-            if any(ord(ch) >= 32 for ch in cleaned):
-                return cleaned
     return ""
 
 
@@ -260,7 +313,7 @@ def _select_text_index(context, work, page, text_index: int) -> bool:
     if stack is not None:
         for i, item in enumerate(stack):
             if layer_stack_utils.stack_item_uid(item) == uid:
-                scene.bname_active_layer_stack_index = i
+                layer_stack_utils.set_active_stack_index_silently(context, i)
                 break
     layer_stack_utils.remember_layer_stack_signature(context)
     layer_stack_utils.tag_view3d_redraw(context)
@@ -532,6 +585,7 @@ class BNAME_OT_text_tool(Operator):
         panel_modal_state.finish_active("knife_cut", context, keep_selection=False)
         panel_modal_state.finish_active("edge_move", context, keep_selection=True)
         panel_modal_state.finish_active("layer_move", context, keep_selection=True)
+        panel_modal_state.finish_active("balloon_tool", context, keep_selection=True)
         self._externally_finished = False
         self._cursor_modal_set = panel_modal_state.set_modal_cursor(context, "TEXT")
         self._editing = False
@@ -563,7 +617,7 @@ class BNAME_OT_text_tool(Operator):
             return {"FINISHED"}
         if (
             event.value == "PRESS"
-            and event.type in {"O", "P", "F", "G", "K", "COMMA", "PERIOD", "Z", "X"}
+            and event.type in {"O", "P", "F", "G", "K"}
             and not event.ctrl
             and not event.alt
         ):
@@ -571,10 +625,11 @@ class BNAME_OT_text_tool(Operator):
             return {"FINISHED", "PASS_THROUGH"}
         if event.type != "LEFTMOUSE" or event.value not in {"PRESS", "DOUBLE_CLICK"}:
             return {"PASS_THROUGH"}
-        work, page, lx, ly = _resolve_page_from_event(context, event)
-        if work is None or page is None or lx is None or ly is None:
+        work, page, lx, ly, hit_index, hit_entry, hit_part, can_create = _resolve_text_hit_from_event(
+            context, event
+        )
+        if work is None or page is None:
             return {"PASS_THROUGH"}
-        hit_index, hit_entry, hit_part = _hit_text_entry(page, lx, ly)
         if hit_entry is not None and hit_index >= 0:
             _select_text_index(context, work, page, hit_index)
             if event.value == "DOUBLE_CLICK":
@@ -582,6 +637,8 @@ class BNAME_OT_text_tool(Operator):
                 return {"RUNNING_MODAL"}
             self._start_text_drag(page, hit_entry, hit_part, lx, ly)
             return {"RUNNING_MODAL"}
+        if not can_create or lx is None or ly is None:
+            return {"PASS_THROUGH"}
         width = _TEXT_DEFAULT_WIDTH_MM
         height = _TEXT_DEFAULT_HEIGHT_MM
         x_mm = lx - width / 2.0
@@ -761,7 +818,7 @@ class BNAME_OT_text_tool(Operator):
         if abs(dx) > _TEXT_DRAG_EPS_MM or abs(dy) > _TEXT_DRAG_EPS_MM:
             self._drag_moved = True
         x, y, w, h = self._drag_result_rect(dx, dy)
-        if _creation_blocked(context, page, x, y, w, h):
+        if self._drag_action != "move" and _creation_blocked(context, page, x, y, w, h):
             return
         _set_text_rect(entry, x, y, w, h)
         _select_text_index(context, work, page, idx)

@@ -16,6 +16,7 @@ LAYER_KIND_ITEMS = (
     ("gp", "グリースペンシル", ""),
     ("gp_folder", "フォルダ", ""),
     ("image", "画像", ""),
+    ("balloon_group", "フキダシフォルダ", ""),
     ("balloon", "フキダシ", ""),
     ("text", "テキスト", ""),
     ("effect", "効果線", ""),
