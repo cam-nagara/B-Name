@@ -27,7 +27,7 @@ from gpu_extras.batch import batch_for_shader
 from ..core.work import get_work
 from ..io import page_io, panel_io
 from . import panel_modal_state
-from ..utils import geom, log, page_grid
+from ..utils import geom, layer_stack as layer_stack_utils, log, page_grid
 
 _logger = log.get_logger(__name__)
 
@@ -360,6 +360,16 @@ def _apply_cut_to_panel(
     except Exception:  # noqa: BLE001
         _logger.exception("knife_cut: save_page_json failed")
     return True
+
+
+def _sync_layer_stack_after_cut(context) -> None:
+    try:
+        layer_stack_utils.sync_layer_stack_after_data_change(
+            context,
+            align_panel_order=True,
+        )
+    except Exception:  # noqa: BLE001
+        _logger.exception("knife_cut: layer stack sync failed")
 
 
 def _find_panel_at_world(
@@ -704,6 +714,7 @@ class BNAME_OT_panel_knife_cut(Operator):
                 page_io.save_pages_json(work_dir, work)
             except Exception:  # noqa: BLE001
                 _logger.exception("knife_cut: save_pages_json failed")
+            _sync_layer_stack_after_cut(bpy.context)
             self._cut_count_total += 1
             # 1 回のカットを独立した undo step として記録
             # (modal 中のすべてのカットを 1 ステップにまとめず個別に undo/redo 可能に)

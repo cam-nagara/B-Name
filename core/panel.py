@@ -63,6 +63,10 @@ def _on_panel_background_color_changed(self, context) -> None:
     _tag_view3d_redraw(context)
 
 
+def _on_panel_visible_changed(_self, context) -> None:
+    _tag_view3d_redraw(context)
+
+
 class BNamePanelVertex(bpy.types.PropertyGroup):
     """コマ枠の頂点 (mm)."""
 
@@ -119,6 +123,12 @@ class BNamePanelEntry(bpy.types.PropertyGroup):
         name="自動くり抜き",
         description="手前コマが重なる範囲を自動的にくり抜く",
         default=True,
+    )
+    visible: BoolProperty(  # type: ignore[valid-type]
+        name="表示",
+        description="このコマ枠とプレビューを表示する",
+        default=True,
+        update=_on_panel_visible_changed,
     )
     background_color: FloatVectorProperty(  # type: ignore[valid-type]
         name="背景色",

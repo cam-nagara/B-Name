@@ -640,6 +640,24 @@ def ensure_page_paper(
         pass
 
     _relink_object_to_collection_only(scene, obj, coll)
+    try:
+        from ..core.work import get_work
+
+        work = get_work(bpy.context)
+        if work is not None:
+            for page in getattr(work, "pages", []):
+                if str(getattr(page, "id", "") or "") != str(page_id):
+                    continue
+                hidden = not bool(getattr(page, "visible", True))
+                obj.hide_viewport = hidden
+                obj.hide_render = hidden
+                try:
+                    obj.hide_set(hidden)
+                except Exception:  # noqa: BLE001
+                    pass
+                break
+    except Exception:  # noqa: BLE001
+        pass
     return obj
 
 

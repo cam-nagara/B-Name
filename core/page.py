@@ -24,6 +24,28 @@ from .text_entry import BNameTextEntry
 _logger = log.get_logger(__name__)
 
 
+def _on_page_visible_changed(self, context) -> None:
+    try:
+        from ..utils import gpencil as gp_utils
+
+        paper = gp_utils.get_page_paper(str(getattr(self, "id", "") or ""))
+        if paper is not None:
+            hidden = not bool(getattr(self, "visible", True))
+            paper.hide_viewport = hidden
+            paper.hide_render = hidden
+            try:
+                paper.hide_set(hidden)
+            except Exception:  # noqa: BLE001
+                pass
+        screen = getattr(context, "screen", None) if context is not None else None
+        if screen is not None:
+            for area in screen.areas:
+                if area.type == "VIEW_3D":
+                    area.tag_redraw()
+    except Exception:  # noqa: BLE001
+        _logger.exception("page visible update failed")
+
+
 class BNameOriginalPageRef(bpy.types.PropertyGroup):
     """見開きページ結合時の結合元ページ ID を保持する要素."""
 
@@ -88,6 +110,12 @@ class BNamePageEntry(bpy.types.PropertyGroup):
         name="展開",
         description="統合レイヤーリストでこのページ配下を表示する",
         default=True,
+    )
+    visible: BoolProperty(  # type: ignore[valid-type]
+        name="表示",
+        description="このページの用紙・ガイド・内包レイヤーを表示する",
+        default=True,
+        update=_on_page_visible_changed,
     )
     offset_x_mm: FloatProperty(  # type: ignore[valid-type]
         name="表示X",

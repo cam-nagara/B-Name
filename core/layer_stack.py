@@ -8,6 +8,7 @@ from bpy.props import CollectionProperty, EnumProperty, IntProperty, StringPrope
 from ..utils import log
 
 _logger = log.get_logger(__name__)
+_active_index_update_depth = 0
 
 LAYER_KIND_ITEMS = (
     ("page", "ページ", ""),
@@ -50,11 +51,39 @@ class BNameLayerStackItem(bpy.types.PropertyGroup):
 _CLASSES = (BNameLayerStackItem,)
 
 
+def _on_active_layer_stack_index_changed(_self, context) -> None:
+    """UIList の通常クリック/D&D選択を実データの選択状態へ反映する."""
+    global _active_index_update_depth
+
+    if _active_index_update_depth > 0:
+        return
+    scene = getattr(context, "scene", None)
+    if scene is None:
+        return
+    stack = getattr(scene, "bname_layer_stack", None)
+    idx = int(getattr(scene, "bname_active_layer_stack_index", -1))
+    if stack is None or not (0 <= idx < len(stack)):
+        return
+    _active_index_update_depth += 1
+    try:
+        from ..utils import layer_stack as layer_stack_utils
+
+        layer_stack_utils.select_stack_index(context, idx)
+    except Exception:  # noqa: BLE001
+        _logger.exception("active layer stack index update failed")
+    finally:
+        _active_index_update_depth -= 1
+
+
 def register() -> None:
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.Scene.bname_layer_stack = CollectionProperty(type=BNameLayerStackItem)
-    bpy.types.Scene.bname_active_layer_stack_index = IntProperty(default=-1, min=-1)
+    bpy.types.Scene.bname_active_layer_stack_index = IntProperty(
+        default=-1,
+        min=-1,
+        update=_on_active_layer_stack_index_changed,
+    )
     bpy.types.Scene.bname_active_layer_kind = EnumProperty(
         name="アクティブレイヤー種別",
         items=ACTIVE_LAYER_KIND_ITEMS,

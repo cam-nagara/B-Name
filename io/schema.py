@@ -318,6 +318,7 @@ def page_entry_to_dict(entry) -> dict[str, Any]:
         "title": entry.title,
         "dir": entry.dir_rel,
         "spread": bool(entry.spread),
+        "visible": bool(getattr(entry, "visible", True)),
         "offsetXMm": round(float(getattr(entry, "offset_x_mm", 0.0)), 3),
         "offsetYMm": round(float(getattr(entry, "offset_y_mm", 0.0)), 3),
     }
@@ -340,6 +341,8 @@ def page_entry_from_dict(entry, data: dict[str, Any]) -> None:
     entry.title = data.get("title", "")
     entry.dir_rel = data.get("dir", "")
     entry.spread = bool(data.get("spread", False))
+    if hasattr(entry, "visible"):
+        entry.visible = bool(data.get("visible", True))
     entry.offset_x_mm = float(data.get("offsetXMm", 0.0))
     entry.offset_y_mm = float(data.get("offsetYMm", 0.0))
     entry.original_pages.clear()
@@ -478,6 +481,7 @@ def panel_entry_to_dict(entry) -> dict[str, Any]:
         },
         "zOrder": int(entry.z_order),
         "overlapClipping": bool(entry.overlap_clipping),
+        "visible": bool(getattr(entry, "visible", True)),
         "backgroundColor": color_to_hex(entry.background_color),
         "backgroundColorAlpha": round(entry.background_color[3], 3),
         "border": panel_border_to_dict(entry.border),
@@ -519,6 +523,8 @@ def panel_entry_from_dict(entry, data: dict[str, Any]) -> None:
         v.y_mm = float(pair[1]) if len(pair) > 1 else 0.0
     entry.z_order = int(data.get("zOrder", 0))
     entry.overlap_clipping = bool(data.get("overlapClipping", True))
+    if hasattr(entry, "visible"):
+        entry.visible = bool(data.get("visible", True))
     bg_alpha = float(data.get("backgroundColorAlpha", 0.0))
     entry.background_color = hex_to_rgba(data.get("backgroundColor", "#FFFFFF"), bg_alpha)
     panel_border_from_dict(entry.border, data.get("border", {}))

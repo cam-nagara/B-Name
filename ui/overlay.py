@@ -39,6 +39,8 @@ from ..utils import border_geom, color_space, log
 from ..utils.geom import Rect, bleed_rect, mm_to_m
 from . import overlay_balloon
 from . import overlay_shared
+from . import overlay_text
+from . import overlay_visibility
 from . import panel_preview_overlay
 
 _logger = log.get_logger(__name__)
@@ -366,20 +368,6 @@ def _apply_blend_mode(_mode: str) -> None:
     gpu.state.blend_set("ALPHA")
 
 
-def _panel_rect(entry) -> Rect | None:
-    """PanelEntry から描画用の Rect を得る (rect 形状のみ)."""
-    if entry.shape_type != "rect":
-        # 多角形/曲線は Phase 2.5 以降で実装。現段階は bbox で近似表示する案もあるが、
-        # Phase 2 段階ではスキップ。
-        return None
-    return Rect(
-        entry.rect_x_mm,
-        entry.rect_y_mm,
-        entry.rect_width_mm,
-        entry.rect_height_mm,
-    )
-
-
 def _draw_image_layers(scene) -> None:
     """画像レイヤーを gpu.texture 経由でオーバーレイ描画.
 
@@ -448,6 +436,7 @@ def _draw_balloons(page, ox_mm: float = 0.0, oy_mm: float = 0.0) -> None:
         draw_rect_outline=_draw_rect_outline,
         draw_polygon_fill=_draw_polygon_fill,
         draw_polyline_loop=_draw_polyline_loop,
+        is_entry_visible=lambda entry: overlay_visibility.entry_in_visible_panel(page, entry),
     )
 
 
@@ -497,39 +486,6 @@ def _draw_polyline_loop(pts: list[tuple[float, float]], color, line_width: float
         batch.draw(shader)
     finally:
         gpu.state.line_width_set(1.0)
-
-
-def _draw_texts(page, ox_mm: float = 0.0, oy_mm: float = 0.0, context=None) -> None:
-    """ページ内のテキストエントリを描画 (本文 blf + 外接ガイド枠).
-
-    実際の組版は将来の typography レンダラに委ねるが、ビューポート上で
-    「テキストがどこにあるか・何が書かれているか」が見えないと「追加した
-    のに見当たらない」という不具合に見えるため、この関数で:
-    - 半透明の白い下敷き (alpha=0.55 で目立つように)
-    - ガイド枠線 (親子連動: シアン / 独立: 黄)
-    - 本文 (空なら "(空のテキスト)" のプレースホルダ) を blf で描画
-    する。
-    """
-    texts = getattr(page, "texts", None)
-    if texts is None:
-        return
-    active_idx = getattr(page, "active_text_index", -1)
-    for i, entry in enumerate(texts):
-        rect = Rect(
-            entry.x_mm + ox_mm,
-            entry.y_mm + oy_mm,
-            entry.width_mm,
-            entry.height_mm,
-        )
-        # 白い下敷き (本文を読みやすくするため半透明白)
-        _draw_rect_fill(rect, (1.0, 1.0, 1.0, 0.55))
-        # ガイド枠線 (ズーム連動)
-        color = (0.2, 0.7, 1.0, 1.0) if entry.parent_balloon_id else (0.95, 0.85, 0.1, 1.0)
-        _draw_rect_outline(rect, color, width_mm=0.30)
-        if i == active_idx:
-            highlight = rect.inset(-1.0)
-            _draw_rect_outline(highlight, (1.0, 0.6, 0.0, 1.0), width_mm=0.50)
-        # 本文 blf 描画は POST_PIXEL handler (_draw_texts_pixel) で実行
 
 
 def _resolve_active_region(context):
@@ -627,6 +583,8 @@ def _draw_panels(
             active_stem = str(getattr(page.panels[active_idx], "panel_stem", "") or "")
     sorted_panels = sorted(page.panels, key=lambda p: p.z_order)
     for entry in sorted_panels:
+        if not overlay_visibility.panel_visible(entry):
+            continue
         # ポリゴン頂点リスト (mm) を取得 — rect なら 4 隅、polygon なら vertices
         if entry.shape_type == "rect":
             poly = [
@@ -774,6 +732,8 @@ def _draw_page_overlay(
     ``is_left_half=True`` (見開きの左半分のページ) の場合、ノド/小口/
     inner_frame 横オフセットを左右反転して再計算する。
     """
+    if not overlay_visibility.page_visible(page):
+        return
     # is_left_half が True の場合は per-page で rects を再計算 (左右反転対応)
     if is_left_half:
         rects = overlay_shared.compute_paper_rects(paper, is_left_half=True)
@@ -829,7 +789,14 @@ def _draw_page_overlay(
             skip_stem = getattr(context.scene, "bname_current_panel_stem", "")
         _draw_panels(work, page, ox_mm=ox_mm, oy_mm=oy_mm, skip_preview_stem=skip_stem)
         _draw_balloons(page, ox_mm=ox_mm, oy_mm=oy_mm)
-        _draw_texts(page, ox_mm=ox_mm, oy_mm=oy_mm, context=context)
+        overlay_text.draw_text_guides(
+            page,
+            ox_mm=ox_mm,
+            oy_mm=oy_mm,
+            entry_visible=lambda entry: overlay_visibility.entry_in_visible_panel(page, entry),
+            draw_rect_fill=_draw_rect_fill,
+            draw_rect_outline=_draw_rect_outline,
+        )
 
     # NOTE: 作品情報の blf 描画は POST_VIEW では効かないため _draw_callback_pixel
     # (POST_PIXEL handler) で別途実行する。ここでは呼ばない。
@@ -1143,6 +1110,8 @@ def _draw_callback() -> None:
             read_direction = getattr(paper, "read_direction", "left")
             active_idx = work.active_page_index
             for i, page in enumerate(work.pages):
+                if not overlay_visibility.page_visible(page):
+                    continue
                 # 見開き判定込みの式は page_grid 側に集約
                 ox, oy = _pg_offset(
                     i, cols, gap, cw, ch, start_side, read_direction
@@ -1173,6 +1142,8 @@ def _draw_callback() -> None:
             read_direction = getattr(paper, "read_direction", "left")
             active_idx = work.active_page_index
             for i, page in enumerate(work.pages):
+                if not overlay_visibility.page_visible(page):
+                    continue
                 ox, oy = _pg_offset(
                     i, cols, gap, cw, ch, start_side, read_direction
                 )
@@ -1193,6 +1164,8 @@ def _draw_callback() -> None:
                 page_grid_offset_mm as _pg_offset,
             )
             page = get_active_page(context)
+            if page is not None and not overlay_visibility.page_visible(page):
+                return
             cols = max(2, int(getattr(scene, "bname_overview_cols", 4)))
             gap = float(getattr(scene, "bname_overview_gap_mm", 30.0))
             cw = paper.canvas_width_mm
@@ -1385,6 +1358,8 @@ def _draw_callback_pixel() -> None:
         start_side = getattr(paper, "start_side", "right")
         read_direction = getattr(paper, "read_direction", "left")
         for i, page in enumerate(work.pages):
+            if not overlay_visibility.page_visible(page):
+                continue
             ox, oy = _pg_offset(i, cols, gap, cw, ch, start_side, read_direction)
             ox, oy = _with_page_manual_offset(work, i, ox, oy)
             left_half = _is_left_half(i, start_side, read_direction)
@@ -1394,7 +1369,14 @@ def _draw_callback_pixel() -> None:
                                          ox_mm=ox, oy_mm=oy)
             page = work.pages[i] if 0 <= i < len(work.pages) else None
             if page is not None:
-                _draw_texts_pixel(context, page, ox_mm=ox, oy_mm=oy)
+                overlay_text.draw_text_pixels(
+                    context,
+                    page,
+                    ox_mm=ox,
+                    oy_mm=oy,
+                    entry_visible=lambda entry: overlay_visibility.entry_in_visible_panel(page, entry),
+                    draw_text_in_rect=_draw_text_in_rect,
+                )
     else:
         from ..utils.page_grid import (
             is_left_half_page as _is_left_half,
@@ -1411,12 +1393,19 @@ def _draw_callback_pixel() -> None:
         ox, oy = _with_page_manual_offset(work, idx, ox, oy)
         left_half = _is_left_half(idx, start_side, read_direction)
         inner = bleed_rect(paper)
-        _draw_page_header_number_pixel(context, paper, idx, ox, oy)
-        _draw_work_info_texts_pixel(context, work, inner, page_index=idx,
-                                     ox_mm=ox, oy_mm=oy)
         page = get_active_page(context)
-        if page is not None:
-            _draw_texts_pixel(context, page, ox_mm=ox, oy_mm=oy)
+        if page is not None and overlay_visibility.page_visible(page):
+            _draw_page_header_number_pixel(context, paper, idx, ox, oy)
+            _draw_work_info_texts_pixel(context, work, inner, page_index=idx,
+                                         ox_mm=ox, oy_mm=oy)
+            overlay_text.draw_text_pixels(
+                context,
+                page,
+                ox_mm=ox,
+                oy_mm=oy,
+                entry_visible=lambda entry: overlay_visibility.entry_in_visible_panel(page, entry),
+                draw_text_in_rect=_draw_text_in_rect,
+            )
 
 
 def _draw_work_info_texts_pixel(context, work, inner_rect, page_index: int,
@@ -1447,22 +1436,6 @@ def _draw_work_info_texts_pixel(context, work, inner_rect, page_index: int,
         if item is None or not item.enabled or not text:
             continue
         _draw_text_at_position(context, inner, item, text)
-
-
-def _draw_texts_pixel(context, page, ox_mm: float, oy_mm: float) -> None:
-    """POST_PIXEL 版のテキストエントリ本文描画 (blf のみ)."""
-    texts = getattr(page, "texts", None)
-    if texts is None:
-        return
-    for entry in texts:
-        rect = Rect(
-            entry.x_mm + ox_mm,
-            entry.y_mm + oy_mm,
-            entry.width_mm,
-            entry.height_mm,
-        )
-        body = (getattr(entry, "body", "") or "").strip() or "(空のテキスト)"
-        _draw_text_in_rect(context, rect, body, color=(0.0, 0.0, 0.0, 1.0))
 
 
 def register() -> None:

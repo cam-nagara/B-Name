@@ -918,6 +918,12 @@ def _apply_page_panel_orders(context, stack) -> None:
         page.panel_count = count
 
     _restore_active_page_panel(work, active_page_key, active_panel_key)
+    try:
+        from . import page_grid
+
+        page_grid.apply_page_collection_transforms(context, work)
+    except Exception:  # noqa: BLE001
+        _logger.exception("apply page collection transforms after stack order failed")
 
 
 def _apply_simple_collection_orders(context, stack) -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from . import (
     asset_op,
     balloon_op,
+    brush_size_op,
     effect_line_op,
     gpencil_op,
     image_layer_op,
@@ -46,6 +47,7 @@ _MODULES = (
     balloon_op,
     text_op,
     effect_line_op,
+    brush_size_op,
     image_layer_op,
     layer_stack_op,
     layer_move_op,

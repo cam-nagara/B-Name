@@ -4,11 +4,13 @@
 - 作品全体で 1 つの master GP オブジェクト (bname_master_sketch)
 - 各レイヤーは複数ページに横断的に存在 (CSP のレイヤーパネル感覚)
 - 「ページ GP 一覧」は廃止 (master GP 1 つだけなので不要)
-- 選択中レイヤーの不透明度 / 線色 / 塗り色を上部で調整
+- 選択中レイヤーの不透明度 / 線色 / 塗り色をレイヤーリスト下部で調整
 - マテリアルは内部実装として隠し、ユーザーにはレイヤー設定だけを見せる
 """
 
 from __future__ import annotations
+
+import re
 
 import bpy
 from bpy.types import Panel, UIList
@@ -47,8 +49,8 @@ def _indent(row, depth: int) -> None:
 
 def _kind_icon(kind: str) -> str:
     return {
-        "page": "FILE_IMAGE",
-        "panel": "IMAGE_DATA",
+        "page": "FILE_BLANK",
+        "panel": "MOD_WIREFRAME",
         "gp": "OUTLINER_OB_GREASEPENCIL",
         "gp_folder": "FILE_FOLDER",
         "image": "IMAGE_DATA",
@@ -62,32 +64,176 @@ def _hide_icon(hidden: bool) -> str:
     return "HIDE_ON" if hidden else "HIDE_OFF"
 
 
-def _draw_stack_gp_row(row, item, resolved) -> None:
+def _zero_based_layer_name(prefix: str, value: str, width: int) -> str:
+    text = str(value or "")
+    match = re.search(r"(\d+)(?!.*\d)", text)
+    if match is None:
+        return f"{prefix}{text}" if text else f"{prefix}{0:0{width}d}"
+    number = max(0, int(match.group(1)) - 1)
+    return f"{prefix}{number:0{width}d}"
+
+
+def _page_layer_name(target) -> str:
+    return _zero_based_layer_name("p", str(getattr(target, "id", "") or ""), 3)
+
+
+def _panel_layer_name(target) -> str:
+    stem = str(getattr(target, "panel_stem", "") or getattr(target, "id", "") or "")
+    return _zero_based_layer_name("c", stem, 2)
+
+
+def _gp_hidden(target) -> bool:
+    try:
+        return bool(gp_utils.layer_effectively_hidden(target))
+    except Exception:  # noqa: BLE001
+        return bool(getattr(target, "hide", False))
+
+
+def _select_icon(row, index: int, icon: str) -> None:
+    cell = row.row(align=True)
+    cell.ui_units_x = 1.0
+    op = cell.operator(
+        "bname.layer_stack_select",
+        text="",
+        icon=icon,
+        emboss=False,
+    )
+    op.index = index
+
+
+def _select_name(row, index: int, text: str) -> None:
+    op = row.operator(
+        "bname.layer_stack_select",
+        text=text or "",
+        emboss=False,
+    )
+    op.index = index
+
+
+def _select_icon_name(row, index: int, text: str, icon: str) -> None:
+    op = row.operator(
+        "bname.layer_stack_select",
+        text=text or "",
+        icon=icon,
+        emboss=False,
+    )
+    op.index = index
+
+
+def _visibility_button(row, index: int, hidden: bool) -> None:
+    cell = row.row(align=True)
+    cell.ui_units_x = 1.0
+    op = cell.operator(
+        "bname.layer_stack_toggle_visibility",
+        text="",
+        icon=_hide_icon(hidden),
+        emboss=False,
+    )
+    op.index = index
+
+
+def _draw_square_label(row, text: str = "", icon: str = "BLANK1") -> None:
+    cell = row.row(align=True)
+    cell.ui_units_x = 1.0
+    if icon == "BLANK1" and not text:
+        cell.label(text="")
+    else:
+        cell.label(text=text, icon=icon)
+
+
+def _draw_visibility_slot(row, item, target, index: int) -> None:
+    if target is None:
+        _draw_square_label(row)
+    elif item.kind in {"page", "panel"} and hasattr(target, "visible"):
+        _visibility_button(row, index, not bool(target.visible))
+    elif item.kind == "image" and hasattr(target, "visible"):
+        _visibility_button(row, index, not bool(target.visible))
+    elif item.kind in {"gp", "gp_folder", "effect"} and hasattr(target, "hide"):
+        _visibility_button(row, index, _gp_hidden(target))
+    else:
+        _draw_square_label(row)
+
+
+def _draw_selection_slot(row, index: int, active: bool) -> None:
+    _select_icon(row, index, "RADIOBUT_ON" if active else "RADIOBUT_OFF")
+
+
+def _draw_hierarchy_slot(row, item, target, index: int) -> None:
+    _indent(row, int(getattr(item, "depth", 0)))
+    if target is None:
+        _draw_square_label(row)
+        return
+    if item.kind == "page":
+        expanded = bool(getattr(target, "stack_expanded", True))
+        cell = row.row(align=True)
+        cell.ui_units_x = 1.0
+        op = cell.operator(
+            "bname.layer_stack_toggle_expanded",
+            text="",
+            emboss=False,
+            icon="DISCLOSURE_TRI_DOWN" if expanded else "DISCLOSURE_TRI_RIGHT",
+        )
+        op.index = index
+    elif item.kind == "gp_folder":
+        expanded = bool(getattr(target, "is_expanded", True))
+        cell = row.row(align=True)
+        cell.ui_units_x = 1.0
+        op = cell.operator(
+            "bname.layer_stack_toggle_expanded",
+            text="",
+            emboss=False,
+            icon="DISCLOSURE_TRI_DOWN" if expanded else "DISCLOSURE_TRI_RIGHT",
+        )
+        op.index = index
+    else:
+        _draw_square_label(row)
+
+
+def _draw_type_icon(row, index: int, icon: str) -> None:
+    _select_icon(row, index, icon)
+
+
+def _draw_gp_color_swatches(row, obj, layer) -> None:
+    mat = None
+    try:
+        mat = bpy.data.materials.get(gp_utils._layer_material_name(layer))
+    except Exception:  # noqa: BLE001
+        mat = None
+    gp_style = getattr(mat, "grease_pencil", None) if mat is not None else None
+    if gp_style is None:
+        _draw_square_placeholder(row)
+        _draw_square_placeholder(row)
+        return
+    _draw_square_color_prop(row, gp_style, "color")
+    if hasattr(gp_style, "fill_color"):
+        _draw_square_color_prop(row, gp_style, "fill_color")
+    else:
+        _draw_square_placeholder(row)
+
+
+def _draw_square_color_prop(row, owner, prop_name: str) -> None:
+    cell = row.row(align=True)
+    cell.ui_units_x = 1.0
+    cell.prop(owner, prop_name, text="")
+
+
+def _draw_square_placeholder(row) -> None:
+    cell = row.row(align=True)
+    cell.ui_units_x = 1.0
+    cell.label(text="")
+
+
+def _draw_stack_gp_row(row, item, resolved, index: int) -> None:
     target = resolved.get("target") if resolved is not None else None
     if target is None:
-        row.label(text=item.label, icon=_kind_icon(item.kind))
+        _draw_type_icon(row, index, _kind_icon(item.kind))
+        _select_name(row, index, item.label)
         return
-    if item.kind == "gp_folder":
-        expanded = bool(getattr(target, "is_expanded", True))
-        row.prop(
-            target,
-            "is_expanded",
-            text="",
-            emboss=False,
-            icon="TRIA_DOWN" if expanded else "TRIA_RIGHT",
-        )
-        row.prop(target, "name", text="")
-    else:
-        row.label(text="", icon=_kind_icon(item.kind))
-        row.prop(target, "name", text="")
-    if hasattr(target, "hide"):
-        row.prop(
-            target,
-            "hide",
-            text="",
-            emboss=False,
-            icon=_hide_icon(bool(target.hide)),
-        )
+    obj = resolved.get("object") if resolved is not None else None
+    _draw_type_icon(row, index, _kind_icon(item.kind))
+    _select_name(row, index, target.name)
+    if item.kind == "gp":
+        _draw_gp_color_swatches(row, obj, target)
     if hasattr(target, "lock"):
         row.prop(
             target,
@@ -98,30 +244,21 @@ def _draw_stack_gp_row(row, item, resolved) -> None:
         )
 
 
-def _draw_stack_page_row(row, item, resolved) -> None:
+def _draw_stack_page_row(row, item, resolved, index: int) -> None:
     target = resolved.get("target") if resolved is not None else None
     if target is None:
-        row.label(text=item.label, icon="FILE_IMAGE")
+        _select_icon_name(row, index, item.label, _kind_icon(item.kind))
         return
-    expanded = bool(getattr(target, "stack_expanded", True))
-    row.prop(
-        target,
-        "stack_expanded",
-        text="",
-        emboss=False,
-        icon="TRIA_DOWN" if expanded else "TRIA_RIGHT",
-    )
-    row.label(text=getattr(target, "id", ""), icon="IMGDISPLAY" if target.spread else "FILE_IMAGE")
-    row.prop(target, "title", text="")
+    icon = "DOCUMENTS" if target.spread else "FILE_BLANK"
+    _select_icon_name(row, index, _page_layer_name(target), icon)
 
 
 def _draw_stack_panel_row(row, item, resolved, index: int) -> None:
     target = resolved.get("target") if resolved is not None else None
     if target is None:
-        row.label(text=item.label, icon="IMAGE_DATA")
+        _select_icon_name(row, index, item.label, _kind_icon(item.kind))
         return
-    row.label(text=getattr(target, "panel_stem", ""), icon="IMAGE_DATA")
-    row.prop(target, "title", text="")
+    _select_icon_name(row, index, _panel_layer_name(target), "MOD_WIREFRAME")
     op = row.operator(
         "bname.layer_stack_enter_panel",
         text="",
@@ -131,21 +268,15 @@ def _draw_stack_panel_row(row, item, resolved, index: int) -> None:
     op.stack_index = index
 
 
-def _draw_stack_data_row(row, item, resolved) -> None:
+def _draw_stack_data_row(row, item, resolved, index: int) -> None:
     target = resolved.get("target") if resolved is not None else None
     if target is None:
-        row.label(text=item.label, icon=_kind_icon(item.kind))
+        _draw_type_icon(row, index, _kind_icon(item.kind))
+        _select_name(row, index, item.label)
         return
     if item.kind == "image":
-        row.label(text="", icon="IMAGE_DATA")
-        row.prop(target, "title", text="")
-        row.prop(
-            target,
-            "visible",
-            text="",
-            emboss=False,
-            icon=_hide_icon(not bool(target.visible)),
-        )
+        _draw_type_icon(row, index, "IMAGE_DATA")
+        _select_name(row, index, getattr(target, "title", "") or item.label)
         row.prop(
             target,
             "locked",
@@ -154,15 +285,17 @@ def _draw_stack_data_row(row, item, resolved) -> None:
             icon="LOCKED" if target.locked else "UNLOCKED",
         )
     elif item.kind == "balloon":
-        row.label(text=target.id, icon="MOD_FLUID")
-        row.prop(target, "shape", text="")
+        _draw_type_icon(row, index, "MOD_FLUID")
+        _select_name(row, index, target.id)
+        row.label(text=getattr(target, "shape", ""))
     elif item.kind == "text":
-        row.label(text="", icon="FONT_DATA")
-        row.prop(target, "body", text="")
+        _draw_type_icon(row, index, "FONT_DATA")
+        _select_name(row, index, getattr(target, "body", "") or item.label)
     elif item.kind == "effect":
-        _draw_stack_gp_row(row, item, resolved)
+        _draw_stack_gp_row(row, item, resolved, index)
     else:
-        row.label(text=item.label, icon=_kind_icon(item.kind))
+        _draw_type_icon(row, index, _kind_icon(item.kind))
+        _select_name(row, index, item.label)
 
 
 class BNAME_UL_layer_stack(UIList):
@@ -186,29 +319,28 @@ class BNAME_UL_layer_stack(UIList):
             layout.label(text=item.label, icon=_kind_icon(item.kind))
             return
         row = layout.row(align=True)
-        _indent(row, int(getattr(item, "depth", 0)))
         active = int(getattr(context.scene, "bname_active_layer_stack_index", -1)) == index
-        op = row.operator(
-            "bname.layer_stack_select",
-            text="",
-            icon="RADIOBUT_ON" if active else "RADIOBUT_OFF",
-            emboss=False,
-        )
-        op.index = index
         resolved = layer_stack_utils.resolve_stack_item(context, item)
+        target = resolved.get("target") if resolved is not None else None
+        _draw_visibility_slot(row, item, target, index)
+        _draw_selection_slot(row, index, active)
+        _draw_hierarchy_slot(row, item, target, index)
         if item.kind == "page":
-            _draw_stack_page_row(row, item, resolved)
+            _draw_stack_page_row(row, item, resolved, index)
         elif item.kind == "panel":
             _draw_stack_panel_row(row, item, resolved, index)
         elif item.kind in {"gp", "gp_folder", "effect"}:
-            _draw_stack_gp_row(row, item, resolved)
+            _draw_stack_gp_row(row, item, resolved, index)
         else:
-            _draw_stack_data_row(row, item, resolved)
+            _draw_stack_data_row(row, item, resolved, index)
 
 
 def _draw_gp_selected_settings(box, obj, active_layer) -> None:
     settings = box.column(align=True)
     settings.label(text=f"選択中: {active_layer.name}")
+    settings.prop(active_layer, "name", text="名前")
+    if hasattr(active_layer, "hide"):
+        settings.prop(active_layer, "hide", text="非表示")
     if hasattr(active_layer, "opacity"):
         settings.prop(active_layer, "opacity", text="不透明度", slider=True)
 
@@ -244,6 +376,11 @@ def _draw_gp_selected_settings(box, obj, active_layer) -> None:
 def _draw_image_selected_settings(box, entry) -> None:
     settings = box.column(align=True)
     settings.label(text=f"選択中: {entry.title} (画像)")
+    settings.prop(
+        entry,
+        "visible",
+        text="表示",
+    )
     settings.prop(entry, "opacity", text="不透明度", slider=True)
     settings.prop(entry, "filepath")
 
@@ -458,8 +595,10 @@ def _draw_effect_selected_settings(box, context, obj, active_layer) -> None:
 
 def _draw_page_selected_settings(box, context, entry) -> None:
     settings = box.column(align=True)
-    settings.label(text=f"選択中: {entry.id} (ページ)", icon="FILE_IMAGE")
+    settings.label(text=f"選択中: {_page_layer_name(entry)} (ページ)", icon="FILE_BLANK")
     settings.prop(entry, "title", text="表示名")
+    if hasattr(entry, "visible"):
+        settings.prop(entry, "visible", text="表示")
     row = settings.row(align=True)
     row.prop(entry, "offset_x_mm", text="表示X")
     row.prop(entry, "offset_y_mm", text="表示Y")
@@ -467,8 +606,10 @@ def _draw_page_selected_settings(box, context, entry) -> None:
 
 def _draw_panel_selected_settings(box, context, entry) -> None:
     settings = box.column(align=True)
-    settings.label(text=f"選択中: {entry.panel_stem} (コマ)", icon="IMAGE_DATA")
+    settings.label(text=f"選択中: {_panel_layer_name(entry)} (コマ)", icon="MOD_WIREFRAME")
     settings.prop(entry, "title", text="表示名")
+    if hasattr(entry, "visible"):
+        settings.prop(entry, "visible", text="表示")
     row = settings.row(align=True)
     row.prop(entry, "rect_x_mm", text="X")
     row.prop(entry, "rect_y_mm", text="Y")
@@ -478,16 +619,16 @@ def _draw_panel_selected_settings(box, context, entry) -> None:
     box.operator("bname.enter_panel_mode", text="コマ編集へ", icon="PLAY")
 
 
-def _draw_selected_stack_settings(box, context) -> None:
+def _draw_selected_stack_settings(box, context) -> bool:
     scene = context.scene
     stack = getattr(scene, "bname_layer_stack", None)
     idx = int(getattr(scene, "bname_active_layer_stack_index", -1))
     if stack is None or not (0 <= idx < len(stack)):
-        return
+        return False
     item = stack[idx]
     resolved = layer_stack_utils.resolve_stack_item(context, item)
     if resolved is None or resolved.get("target") is None:
-        return
+        return False
     kind = item.kind
     target = resolved["target"]
     obj = resolved.get("object")
@@ -514,35 +655,13 @@ def _draw_selected_stack_settings(box, context) -> None:
         box.separator()
     elif kind == "gp_folder":
         box.label(text=f"選択中: {target.name} (フォルダ)", icon="FILE_FOLDER")
+        box.prop(target, "name", text="名前")
         if hasattr(target, "hide"):
             box.prop(target, "hide", text="非表示")
         if hasattr(target, "lock"):
             box.prop(target, "lock", text="ロック")
         box.separator()
-
-
-def _draw_layer_add_buttons(box) -> None:
-    page_row = box.row(align=True)
-    page_row.operator("bname.page_add", text="", icon="ADD")
-    page_row.operator("bname.page_remove", text="", icon="REMOVE")
-    page_row.operator("bname.page_duplicate", text="", icon="DUPLICATE")
-    page_row.separator()
-    page_row.operator("bname.pages_merge_spread", text="", icon="ARROW_LEFTRIGHT")
-    page_row.operator("bname.pages_split_spread", text="", icon="UNLINKED")
-
-    panel_row = box.row(align=True)
-    panel_row.operator("bname.panel_add", text="", icon="ADD")
-    panel_row.operator("bname.panel_remove", text="", icon="REMOVE")
-    panel_row.operator("bname.panel_duplicate", text="", icon="DUPLICATE")
-    panel_row.operator("bname.panel_move_to_page", text="", icon="FORWARD")
-
-    row = box.row(align=True)
-    row.operator("bname.gpencil_layer_add", text="GP", icon="OUTLINER_OB_GREASEPENCIL")
-    row.operator("bname.image_layer_add", text="画像", icon="IMAGE_DATA")
-    row.operator("bname.balloon_add", text="フキダシ", icon="MOD_FLUID")
-    row.operator("bname.text_add", text="テキスト", icon="FONT_DATA")
-    row.operator("bname.effect_line_generate", text="効果線", icon="STROKE")
-    row.operator("bname.gpencil_folder_add", text="フォルダ", icon="FILE_FOLDER")
+    return True
 
 
 def _draw_layer_stack_box(layout, context) -> None:
@@ -556,10 +675,8 @@ def _draw_layer_stack_box(layout, context) -> None:
         box.label(text="レイヤー一覧を更新できません", icon="ERROR")
         box.label(text=str(exc)[:80])
         return
-    _draw_selected_stack_settings(box, context)
-
     stack = getattr(scene, "bname_layer_stack", None)
-    if stack is None or len(stack) == 0:
+    if stack is None:
         box.label(text="(レイヤーがありません)")
     else:
         row = box.row()
@@ -573,6 +690,11 @@ def _draw_layer_stack_box(layout, context) -> None:
             rows=8,
         )
         col = row.column(align=True)
+        add_menu = col.operator("wm.call_menu", text="", icon="ADD")
+        add_menu.name = "BNAME_MT_layer_stack_add"
+        col.operator("bname.layer_stack_duplicate", text="", icon="DUPLICATE")
+        col.operator("bname.layer_stack_delete", text="", icon="REMOVE")
+        col.separator()
         op = col.operator("bname.layer_stack_move", text="", icon="TRIA_UP_BAR")
         op.direction = "FRONT"
         op = col.operator("bname.layer_stack_move", text="", icon="TRIA_UP")
@@ -581,10 +703,8 @@ def _draw_layer_stack_box(layout, context) -> None:
         op.direction = "DOWN"
         op = col.operator("bname.layer_stack_move", text="", icon="TRIA_DOWN_BAR")
         op.direction = "BACK"
-        col.separator()
-        col.operator("bname.layer_stack_delete", text="", icon="REMOVE")
 
-    _draw_layer_add_buttons(box)
+    _draw_selected_stack_settings(box, context)
 
 
 class BNAME_PT_layer_stack(Panel):

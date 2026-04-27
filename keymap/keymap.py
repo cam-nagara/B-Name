@@ -203,6 +203,7 @@ class KeymapState:
 
         - Space → bname.view_navigate (ブラシ Asset Shelf の先取り)
         - C     → bname.toggle_asset_shelf (元の機能を C 側に移設)
+        - Ctrl+Alt+LMB → bname.brush_size_drag (ブラシサイズ調整)
         - L     → bname.toggle_lasso_tool (投げ縄 ⇔ Box トグル)
         - Ctrl+X → bname.gp_cut_to_new_layer (Paste で新レイヤー化フラグを立てる)
         - Ctrl+V → bname.gp_paste_to_new_layer (フラグありなら新レイヤーへ paste)
@@ -229,6 +230,7 @@ class KeymapState:
 
         _add("bname.view_navigate", nav_key)
         _add("bname.toggle_asset_shelf", "C")
+        _add("bname.brush_size_drag", "LEFTMOUSE", ctrl=True, alt=True)
         _add("bname.toggle_lasso_tool", "L")
         _add("bname.gp_cut_to_new_layer", "X", ctrl=True)
         _add("bname.gp_paste_to_new_layer", "V", ctrl=True)
@@ -367,6 +369,8 @@ class KeymapState:
 
         # Ctrl+Shift+クリック → レイヤー選択 (固定)
         _add("bname.view_layer_pick", "LEFTMOUSE", ctrl=True, shift=True)
+        # Ctrl+Alt+ドラッグ → ブラシサイズ変更 (固定)
+        _add("bname.brush_size_drag", "LEFTMOUSE", ctrl=True, alt=True)
         # オブジェクトモードのクリック → ページをアクティブ化。
         # operator 側で PASS_THROUGH し、Blender 標準のオブジェクト選択は妨げない。
         _add("bname.page_pick_viewport", "LEFTMOUSE")

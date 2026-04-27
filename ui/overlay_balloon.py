@@ -10,6 +10,7 @@ from ..utils.geom import Rect
 DrawRectOutline = Callable[..., None]
 DrawPolygonFill = Callable[[list[tuple[float, float]], tuple[float, float, float, float]], None]
 DrawPolylineLoop = Callable[..., None]
+EntryVisiblePredicate = Callable[[object], bool]
 
 
 def draw_balloons(
@@ -20,6 +21,7 @@ def draw_balloons(
     draw_rect_outline: DrawRectOutline,
     draw_polygon_fill: DrawPolygonFill,
     draw_polyline_loop: DrawPolylineLoop,
+    is_entry_visible: EntryVisiblePredicate | None = None,
 ) -> None:
     """ページ内のフキダシをオーバーレイ描画する."""
     balloons = getattr(page, "balloons", None)
@@ -27,6 +29,8 @@ def draw_balloons(
         return
     active_idx = getattr(page, "active_balloon_index", -1)
     for i, entry in enumerate(balloons):
+        if is_entry_visible is not None and not is_entry_visible(entry):
+            continue
         if entry.shape == "none":
             continue
         rect = Rect(
