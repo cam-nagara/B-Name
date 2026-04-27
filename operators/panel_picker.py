@@ -13,7 +13,7 @@ from typing import Sequence
 
 import bpy
 
-from ..utils import geom, log, page_browser, page_grid
+from ..utils import geom, log, page_browser, page_grid, page_range
 
 _logger = log.get_logger(__name__)
 
@@ -126,6 +126,8 @@ def find_panel_at_world_mm(
         if not (0 <= idx < len(work.pages)):
             return None
         page = work.pages[idx]
+        if not page_range.page_in_range(page):
+            return None
         cols = max(1, int(getattr(scene, "bname_overview_cols", 4)))
         gap = float(getattr(scene, "bname_overview_gap_mm", 30.0))
         cw = work.paper.canvas_width_mm
@@ -148,6 +150,8 @@ def find_panel_at_world_mm(
     start_side = getattr(work.paper, "start_side", "right")
     read_direction = getattr(work.paper, "read_direction", "left")
     for i, page in enumerate(work.pages):
+        if not page_range.page_in_range(page):
+            continue
         ox, oy = page_grid.page_grid_offset_mm(
             i, cols, gap, cw, ch, start_side, read_direction
         )
@@ -203,6 +207,8 @@ def find_page_at_world_mm(work, x_mm: float, y_mm: float) -> int | None:
         idx = int(getattr(work, "active_page_index", -1))
         if not (0 <= idx < len(work.pages)):
             return None
+        if not page_range.page_in_range(work.pages[idx]):
+            return None
         ox, oy = page_grid.page_grid_offset_mm(
             idx, cols, gap, cw, ch, start_side, read_direction
         )
@@ -212,6 +218,8 @@ def find_page_at_world_mm(work, x_mm: float, y_mm: float) -> int | None:
         return idx if _hit_test_canvas(x_mm - ox, y_mm - oy, cw, ch) else None
 
     for i, _page in enumerate(work.pages):
+        if not page_range.page_in_range(_page):
+            continue
         ox, oy = page_grid.page_grid_offset_mm(
             i, cols, gap, cw, ch, start_side, read_direction
         )
@@ -252,6 +260,8 @@ def _find_panel_at_world_mm_page_browser(context, work, x_mm: float, y_mm: float
     ch = float(paper.canvas_height_mm)
     area = getattr(context, "area", None)
     for i, page in enumerate(work.pages):
+        if not page_range.page_in_range(page):
+            continue
         ox, oy = page_browser.page_offset_mm(work, context.scene, area, i)
         local_x = x_mm - ox
         local_y = y_mm - oy
@@ -269,6 +279,8 @@ def _find_page_at_world_mm_page_browser(context, work, x_mm: float, y_mm: float)
     ch = float(paper.canvas_height_mm)
     area = getattr(context, "area", None)
     for i, _page in enumerate(work.pages):
+        if not page_range.page_in_range(_page):
+            continue
         ox, oy = page_browser.page_offset_mm(work, context.scene, area, i)
         if _hit_test_canvas(x_mm - ox, y_mm - oy, cw, ch):
             return i

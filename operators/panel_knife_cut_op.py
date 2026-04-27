@@ -27,7 +27,7 @@ from gpu_extras.batch import batch_for_shader
 from ..core.work import get_work
 from ..io import page_io, panel_io
 from . import panel_modal_state
-from ..utils import geom, layer_stack as layer_stack_utils, log, page_grid
+from ..utils import geom, layer_stack as layer_stack_utils, log, page_grid, page_range
 
 _logger = log.get_logger(__name__)
 
@@ -389,6 +389,8 @@ def _find_panel_at_world(
     start_side = getattr(work.paper, "start_side", "right")
     read_direction = getattr(work.paper, "read_direction", "left")
     for i, page in enumerate(work.pages):
+        if not page_range.page_in_range(page):
+            continue
         ox, oy = page_grid.page_grid_offset_mm(
             i, cols, gap, cw, ch, start_side, read_direction
         )

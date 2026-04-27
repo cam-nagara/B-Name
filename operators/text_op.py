@@ -17,7 +17,7 @@ from bpy.types import Operator
 
 from ..core.mode import MODE_PANEL, get_mode
 from ..core.work import get_active_page, get_work
-from ..utils import layer_stack as layer_stack_utils, log
+from ..utils import layer_stack as layer_stack_utils, log, page_range
 from ..utils.layer_hierarchy import page_stack_key
 from . import panel_modal_state, text_edit_runtime
 
@@ -125,10 +125,16 @@ def _page_indices_for_text_hit_search(work):
     if work is None:
         return
     active_index = int(getattr(work, "active_page_index", -1))
-    if 0 <= active_index < len(work.pages):
+    if (
+        0 <= active_index < len(work.pages)
+        and page_range.page_in_range(work.pages[active_index])
+    ):
         yield active_index
     for page_index in reversed(range(len(work.pages))):
-        if page_index != active_index:
+        if (
+            page_index != active_index
+            and page_range.page_in_range(work.pages[page_index])
+        ):
             yield page_index
 
 

@@ -18,7 +18,7 @@ from bpy.types import Operator
 from ..core.work import get_active_page, get_work
 from ..io import export_pipeline
 from ..io.export_pipeline import ExportOptions
-from ..utils import log, paths
+from ..utils import log, page_range, paths
 
 
 def _save_image(img, out_path: Path, image_format: str) -> None:
@@ -186,9 +186,14 @@ class BNAME_OT_export_all_pages(Operator):
             format=self.format,
             area=self.area,
         )
+        export_pages = list(page_range.iter_in_range_pages(work))
+        if not export_pages:
+            self.report({"ERROR"}, "書き出せるページがありません")
+            return {"CANCELLED"}
         success = 0
         errors: list[str] = []
-        for i, page in enumerate(work.pages, start=1):
+        for _page_index, page in export_pages:
+            i = int(getattr(work.work_info, "page_number_start", 1)) + _page_index
             try:
                 name = _resolve_filename(self.filename_template, work, page, i)
                 ext = self.format.replace("jpeg", "jpg")
@@ -205,7 +210,7 @@ class BNAME_OT_export_all_pages(Operator):
             except Exception as exc:  # noqa: BLE001
                 _logger.exception("export failed for %s", page.id)
                 errors.append(f"{page.id}: {exc}")
-        msg = f"書き出し完了: {success}/{len(work.pages)} ページ"
+        msg = f"書き出し完了: {success}/{len(export_pages)} ページ"
         if errors:
             msg += f" (エラー {len(errors)} 件)"
         self.report({"INFO"}, msg)
@@ -247,8 +252,10 @@ class BNAME_OT_export_pdf(Operator):
             format="png",  # 中間画像は PNG、最終 PDF へ結合
             area=self.area,
         )
+        export_pages = list(page_range.iter_in_range_pages(work))
         tmp_images: list[Path] = []
-        for i, page in enumerate(work.pages, start=1):
+        for _page_index, page in export_pages:
+            i = int(getattr(work.work_info, "page_number_start", 1)) + _page_index
             try:
                 img = export_pipeline.render_page(work, page, options)
                 if img is None:

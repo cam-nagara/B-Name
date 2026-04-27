@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from ..utils import page_range
 from ..utils.layer_hierarchy import entry_center, panel_containing_point
 
 
 def page_visible(page) -> bool:
-    return bool(getattr(page, "visible", True))
+    return page_range.page_visible_in_work(page)
 
 
 def panel_visible(panel) -> bool:

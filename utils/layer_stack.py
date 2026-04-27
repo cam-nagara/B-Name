@@ -290,7 +290,11 @@ def collect_targets(context) -> list[LayerTarget]:
     gp_root_targets, gp_targets_by_parent = _partition_gp_targets(gp_obj, work)
 
     if work is not None and getattr(work, "loaded", False):
+        from . import page_range
+
         for page in work.pages:
+            if not page_range.page_in_range(page):
+                continue
             page_key = page_stack_key(page)
             label = getattr(page, "title", "") or page_key
             targets.append(LayerTarget(PAGE_KIND, page_key, label))
@@ -1373,6 +1377,12 @@ def _apply_page_panel_orders(context, stack) -> None:
 
     page_keys = [item.key for item in stack if item.kind == PAGE_KIND]
     _reorder_collection(work.pages, page_keys, page_stack_key)
+    try:
+        from . import page_range
+
+        page_range.update_page_range_visibility(work)
+    except Exception:  # noqa: BLE001
+        _logger.exception("page range update after stack order failed")
     if page_grid is not None:
         for i, page in enumerate(work.pages):
             old = old_page_offsets.get(page_stack_key(page))

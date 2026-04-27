@@ -258,7 +258,11 @@ def page_index_at_world_mm(
     cols, gap, cw, ch = _resolve_overview_params(scene, work)
     start_side = getattr(work.paper, "start_side", "right")
     read_direction = getattr(work.paper, "read_direction", "left")
-    for i, _ in enumerate(work.pages):
+    from . import page_range
+
+    for i, page in enumerate(work.pages):
+        if not page_range.page_in_range(page):
+            continue
         ox_mm, oy_mm = page_grid_offset_mm(
             i, cols, gap, cw, ch, start_side, read_direction
         )

@@ -106,6 +106,12 @@ class BNamePageEntry(bpy.types.PropertyGroup):
         default=True,
         update=_on_page_visible_changed,
     )
+    in_page_range: BoolProperty(  # type: ignore[valid-type]
+        name="ページ数範囲内",
+        description="作品情報の開始/終了ページ範囲に含まれるページとして表示する",
+        default=True,
+        update=_on_page_visible_changed,
+    )
     offset_x_mm: FloatProperty(  # type: ignore[valid-type]
         name="表示X",
         description="全ページ一覧上での手動移動量 X (mm)",

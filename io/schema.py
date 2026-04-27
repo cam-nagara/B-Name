@@ -323,6 +323,7 @@ def page_entry_to_dict(entry) -> dict[str, Any]:
         "dir": entry.dir_rel,
         "spread": bool(entry.spread),
         "visible": bool(getattr(entry, "visible", True)),
+        "inPageRange": bool(getattr(entry, "in_page_range", True)),
         "offsetXMm": round(float(getattr(entry, "offset_x_mm", 0.0)), 3),
         "offsetYMm": round(float(getattr(entry, "offset_y_mm", 0.0)), 3),
     }
@@ -347,6 +348,8 @@ def page_entry_from_dict(entry, data: dict[str, Any]) -> None:
     entry.spread = bool(data.get("spread", False))
     if hasattr(entry, "visible"):
         entry.visible = bool(data.get("visible", True))
+    if hasattr(entry, "in_page_range"):
+        entry.in_page_range = bool(data.get("inPageRange", True))
     entry.offset_x_mm = float(data.get("offsetXMm", 0.0))
     entry.offset_y_mm = float(data.get("offsetYMm", 0.0))
     entry.original_pages.clear()

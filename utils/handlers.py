@@ -146,6 +146,7 @@ def save_scene_work_to_disk(context, *, reason: str = "") -> bool:
     try:
         from ..core.work import get_work
         from ..io import page_io, work_io
+        from . import page_range
     except Exception:  # noqa: BLE001
         return False
 
@@ -162,6 +163,7 @@ def save_scene_work_to_disk(context, *, reason: str = "") -> bool:
 
     _saving_work_metadata = True
     try:
+        page_range.update_page_range_visibility(work)
         work_io.save_work_json(work_dir, work)
         page_io.save_pages_json(work_dir, work)
         for page in getattr(work, "pages", []):

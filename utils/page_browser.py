@@ -187,7 +187,7 @@ def is_vertical_area(area) -> bool:
 def _page_slots(work) -> tuple[int, int]:
     if work is None or len(getattr(work, "pages", [])) == 0:
         return 0, 0
-    from . import page_grid
+    from . import page_grid, page_range
 
     paper = getattr(work, "paper", None)
     start_side = getattr(paper, "start_side", "right")
@@ -195,7 +195,10 @@ def _page_slots(work) -> tuple[int, int]:
     slots = [
         int(page_grid._logical_slot_index(i, start_side, read_direction))
         for i, _page in enumerate(work.pages)
+        if page_range.page_in_range(_page)
     ]
+    if not slots:
+        return 0, 0
     return min(slots), max(slots)
 
 
@@ -269,6 +272,8 @@ def layout_bbox_mm(work, scene, area) -> tuple[float, float, float, float] | Non
             max_y = oy + ch if max_y is None else max(max_y, oy + ch)
 
     for i, _page in enumerate(work.pages):
+        if not page_range.page_in_range(_page):
+            continue
         ox, oy = page_offset_mm(work, scene, area, i)
         min_x = ox if min_x is None else min(min_x, ox)
         min_y = oy if min_y is None else min(min_y, oy)

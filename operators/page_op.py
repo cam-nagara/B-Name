@@ -256,7 +256,10 @@ class BNAME_OT_page_move(Operator):
         if not _require_loaded(self, work):
             return {"CANCELLED"}
         idx = work.active_page_index
-        new_idx = idx + (1 if self.direction > 0 else -1)
+        step = 1 if self.direction > 0 else -1
+        new_idx = idx + step
+        while 0 <= new_idx < len(work.pages) and not page_range.page_in_range(work.pages[new_idx]):
+            new_idx += step
         if not (0 <= new_idx < len(work.pages)):
             return {"CANCELLED"}  # 端では無効 (エラーにはしない)
         work_dir = Path(work.work_dir)
@@ -266,6 +269,7 @@ class BNAME_OT_page_move(Operator):
                 for i, page in enumerate(work.pages)
             }
             page_io.move_page(work, idx, new_idx)
+            page_range.update_page_range_visibility(work)
             for i, page in enumerate(work.pages):
                 old = old_offsets.get(page.id)
                 if old is None:
@@ -298,6 +302,8 @@ def _switch_to_page(context, work, work_dir: Path, new_index: int) -> bool:
     必要に応じて実行する。
     """
     if not (0 <= new_index < len(work.pages)):
+        return False
+    if not page_range.page_in_range(work.pages[new_index]):
         return False
     work.active_page_index = new_index
     context.scene.bname_overview_mode = True
@@ -334,6 +340,8 @@ class BNAME_OT_page_select(Operator):
         ):
             return {"CANCELLED"}
         if not (0 <= self.index < len(work.pages)):
+            return {"CANCELLED"}
+        if not page_range.page_in_range(work.pages[self.index]):
             return {"CANCELLED"}
         if self.index == work.active_page_index:
             if not bool(getattr(context.scene, "bname_overview_mode", True)):
@@ -408,6 +416,8 @@ class BNAME_OT_page_pick_viewport(Operator):
             if is_browser:
                 context.scene.bname_overview_mode = previous_overview
         if page_index is None or not (0 <= page_index < len(work.pages)):
+            return {"PASS_THROUGH"}
+        if not page_range.page_in_range(work.pages[page_index]):
             return {"PASS_THROUGH"}
         changed = False
         if not is_browser and not bool(getattr(context.scene, "bname_overview_mode", True)):

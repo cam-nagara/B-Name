@@ -66,9 +66,16 @@ def load_pages_json(work_dir: Path, work) -> dict:
     try:
         from ..utils import page_range
 
-        page_range.sync_end_number_to_existing_pages(work)
+        page_entries = data.get("pages", []) if isinstance(data, dict) else []
+        has_saved_range_flags = any(
+            isinstance(entry, dict) and "inPageRange" in entry
+            for entry in page_entries
+        )
+        if not has_saved_range_flags:
+            page_range.sync_end_number_to_existing_pages(work)
+        page_range.update_page_range_visibility(work)
     except Exception:  # noqa: BLE001
-        _logger.exception("page number end migration failed")
+        _logger.exception("page range visibility sync failed")
     _logger.info("pages.json loaded: %s (%d pages)", path, len(work.pages))
     return data
 

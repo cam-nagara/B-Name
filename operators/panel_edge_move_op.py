@@ -26,7 +26,7 @@ from gpu_extras.batch import batch_for_shader
 from ..core.work import get_work
 from ..io import page_io, panel_io
 from . import panel_edge_style_op, panel_modal_state
-from ..utils import geom, log, page_grid, panel_edge_adjacency, polygon_geom
+from ..utils import geom, log, page_grid, page_range, panel_edge_adjacency, polygon_geom
 
 _logger = log.get_logger(__name__)
 
@@ -293,6 +293,8 @@ def _all_panel_edges_world(work) -> list[tuple[int, int, int, tuple[float, float
 
     out: list = []
     for pi, page in enumerate(work.pages):
+        if not page_range.page_in_range(page):
+            continue
         ox, oy = page_grid.page_grid_offset_mm(
             pi, cols, gap, cw, ch, start_side, read_direction
         )
@@ -986,6 +988,8 @@ class BNAME_OT_panel_edge_move(Operator):
             )
             shared = []
             for pi, page2 in enumerate(self._work.pages):
+                if not page_range.page_in_range(page2):
+                    continue
                 ox2, oy2 = _page_offset(self._work, pi)
                 for panel_i, p in enumerate(page2.panels):
                     poly2 = _panel_polygon(p)

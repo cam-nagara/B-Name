@@ -18,7 +18,7 @@ from bpy.types import Operator
 from ..core.mode import MODE_PAGE, get_mode
 from ..core.work import get_work
 from ..utils import gpencil as gp_utils
-from ..utils import log
+from ..utils import log, page_range
 from ..utils.geom import mm_to_m
 from ..utils.page_grid import (
     _resolve_overview_params,
@@ -197,8 +197,15 @@ class BNAME_OT_page_next(Operator):
         work = get_work(context)
         if work is None or len(work.pages) == 0:
             return {"CANCELLED"}
-        new_idx = min(len(work.pages) - 1, work.active_page_index + 1)
-        if new_idx == work.active_page_index:
+        active = int(getattr(work, "active_page_index", -1))
+        new_idx = next(
+            (
+                i for i in range(max(0, active + 1), len(work.pages))
+                if page_range.page_in_range(work.pages[i])
+            ),
+            -1,
+        )
+        if new_idx < 0:
             return {"CANCELLED"}
         work.active_page_index = new_idx
         _focus_view_to_page(context, work, new_idx)
@@ -226,8 +233,15 @@ class BNAME_OT_page_prev(Operator):
         work = get_work(context)
         if work is None or len(work.pages) == 0:
             return {"CANCELLED"}
-        new_idx = max(0, work.active_page_index - 1)
-        if new_idx == work.active_page_index:
+        active = int(getattr(work, "active_page_index", -1))
+        new_idx = next(
+            (
+                i for i in range(min(len(work.pages) - 1, active - 1), -1, -1)
+                if page_range.page_in_range(work.pages[i])
+            ),
+            -1,
+        )
+        if new_idx < 0:
             return {"CANCELLED"}
         work.active_page_index = new_idx
         _focus_view_to_page(context, work, new_idx)
