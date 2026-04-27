@@ -33,6 +33,7 @@ def open_active_detail(context) -> bool:
             "INVOKE_DEFAULT",
             index=index,
             preserve_edge_selection=True,
+            offset_from_selection=True,
         )
     except Exception:  # noqa: BLE001
         _logger.exception("detail popup: failed to open active layer detail")

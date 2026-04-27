@@ -400,9 +400,12 @@ class BNAME_OT_page_pick_viewport(Operator):
         previous_overview = bool(getattr(context.scene, "bname_overview_mode", False))
         try:
             from . import panel_picker
+            from . import panel_edge_move_op
 
             if is_browser:
                 context.scene.bname_overview_mode = True
+            if panel_edge_move_op.extend_selected_handle_at_event(context, event):
+                return {"FINISHED"}
             edge_hit = panel_picker.find_panel_edge_at_event(context, event)
             panel_hit = None if edge_hit is not None else panel_picker.find_panel_at_event(context, event)
             if edge_hit is not None:

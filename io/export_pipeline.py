@@ -777,6 +777,7 @@ def _render_text_layer(entry, canvas_height_px: int, dpi: int) -> ExportLayer | 
     if canvas is None:
         return None
     from ..typography import export_renderer, layout as text_layout
+    from ..utils import text_style
 
     font_path = _resolve_font_path(str(getattr(entry, "font", "")))
     result = text_layout.typeset(entry, pad_mm, pad_mm, float(entry.width_mm), float(entry.height_mm))
@@ -789,6 +790,7 @@ def _render_text_layer(entry, canvas_height_px: int, dpi: int) -> ExportLayer | 
         result,
         canvas.image,
         font_path=font_path,
+        font_path_for_index=lambda index: _resolve_font_path(text_style.font_for_index(entry, index)),
         px_per_mm=mm_to_px(1.0, dpi),
         color=_rgb255(getattr(entry, "color", (0.0, 0.0, 0.0, 1.0))),
         stroke_width_px=stroke_width_px,

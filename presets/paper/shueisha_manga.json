@@ -23,6 +23,12 @@
     "defaultLineCount": 60.00,
     "paperColor": "#FFFFFF",
     "paperColorAlpha": 1.0,
+    "showCanvasFrame": true,
+    "showBleedFrame": true,
+    "showFinishFrame": true,
+    "showInnerFrame": true,
+    "showSafeLine": true,
+    "showTrimMarks": true,
     "colorProfile": "sRGB IEC61966-2.1",
     "presetName": "集英社マンガ誌汎用"
   },

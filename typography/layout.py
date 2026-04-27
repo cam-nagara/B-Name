@@ -24,6 +24,7 @@ class GlyphPlacement:
     y_mm: float
     size_pt: float  # この文字の描画サイズ (縦中横などで変わる)
     rotation_deg: float  # 0=通常、-90=縦中横の横向き等
+    index: int = -1  # 元本文内の文字インデックス
 
 
 @dataclass(frozen=True)
@@ -67,7 +68,7 @@ def typeset_vertical(
     row_index = 0
     overflow = False
 
-    for ch in text:
+    for text_index, ch in enumerate(text):
         if ch == "\n":
             col_index += 1
             row_index = 0
@@ -96,13 +97,21 @@ def typeset_vertical(
                     y_mm=prev.y_mm - char_pitch_mm,
                     size_pt=font_size_pt,
                     rotation_deg=0.0,
+                    index=text_index,
                 )
             )
             # row_index はそのまま (次の文字も新行の先頭扱い)
             continue
 
         placements.append(
-            GlyphPlacement(ch=ch, x_mm=x, y_mm=y, size_pt=font_size_pt, rotation_deg=0.0)
+            GlyphPlacement(
+                ch=ch,
+                x_mm=x,
+                y_mm=y,
+                size_pt=font_size_pt,
+                rotation_deg=0.0,
+                index=text_index,
+            )
         )
         row_index += 1
 
@@ -128,7 +137,7 @@ def typeset_horizontal(
     row = 0
     col = 0
     overflow = False
-    for ch in text:
+    for text_index, ch in enumerate(text):
         if ch == "\n":
             row += 1
             col = 0
@@ -143,7 +152,14 @@ def typeset_horizontal(
             col = 0
             continue
         placements.append(
-            GlyphPlacement(ch=ch, x_mm=x, y_mm=y, size_pt=font_size_pt, rotation_deg=0.0)
+            GlyphPlacement(
+                ch=ch,
+                x_mm=x,
+                y_mm=y,
+                size_pt=font_size_pt,
+                rotation_deg=0.0,
+                index=text_index,
+            )
         )
         col += 1
     return TypesetResult(placements=placements, overflow=overflow)

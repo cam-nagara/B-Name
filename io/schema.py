@@ -76,6 +76,12 @@ def paper_to_dict(paper) -> dict[str, Any]:
         "defaultLineCount": round(paper.default_line_count, 2),
         "paperColor": color_to_hex(paper.paper_color),
         "paperColorAlpha": round(paper.paper_color[3], 3),
+        "showCanvasFrame": bool(getattr(paper, "show_canvas_frame", True)),
+        "showBleedFrame": bool(getattr(paper, "show_bleed_frame", True)),
+        "showFinishFrame": bool(getattr(paper, "show_finish_frame", True)),
+        "showInnerFrame": bool(getattr(paper, "show_inner_frame", True)),
+        "showSafeLine": bool(getattr(paper, "show_safe_line", True)),
+        "showTrimMarks": bool(getattr(paper, "show_trim_marks", True)),
         "colorProfile": paper.color_profile,
         "startSide": paper.start_side,
         "readDirection": paper.read_direction,
@@ -105,6 +111,12 @@ def paper_from_dict(paper, data: dict[str, Any]) -> None:
     hex_code = data.get("paperColor", "#FFFFFF")
     alpha = float(data.get("paperColorAlpha", 1.0))
     paper.paper_color = hex_to_rgba(hex_code, alpha)
+    paper.show_canvas_frame = bool(data.get("showCanvasFrame", True))
+    paper.show_bleed_frame = bool(data.get("showBleedFrame", True))
+    paper.show_finish_frame = bool(data.get("showFinishFrame", True))
+    paper.show_inner_frame = bool(data.get("showInnerFrame", True))
+    paper.show_safe_line = bool(data.get("showSafeLine", True))
+    paper.show_trim_marks = bool(data.get("showTrimMarks", True))
     paper.color_profile = data.get("colorProfile", "sRGB IEC61966-2.1")
     paper.start_side = data.get("startSide", "left")
     paper.read_direction = data.get("readDirection", "left")
@@ -637,6 +649,7 @@ def balloon_entry_from_dict(entry, data: dict[str, Any]) -> None:
 
 def text_entry_to_dict(entry) -> dict[str, Any]:
     from ..utils.geom import pt_to_q
+    from ..utils import text_style
 
     font_size_q = float(
         getattr(entry, "font_size_q", pt_to_q(float(getattr(entry, "font_size_pt", 9.0))))
@@ -662,10 +675,19 @@ def text_entry_to_dict(entry) -> dict[str, Any]:
         "widthMm": round(entry.width_mm, 3),
         "heightMm": round(entry.height_mm, 3),
         "parentBalloonId": entry.parent_balloon_id,
+        "fontSpans": [
+            {
+                "start": int(start),
+                "length": int(end - start),
+                "font": font,
+            }
+            for start, end, font in text_style.font_spans_snapshot(entry)
+        ],
     }
 
 
 def text_entry_from_dict(entry, data: dict[str, Any]) -> None:
+    from ..utils import text_style
     from ..utils.geom import pt_to_q, q_to_pt
 
     data = data or {}
@@ -695,6 +717,13 @@ def text_entry_from_dict(entry, data: dict[str, Any]) -> None:
     entry.width_mm = float(data.get("widthMm", 30.0))
     entry.height_mm = float(data.get("heightMm", 15.0))
     entry.parent_balloon_id = data.get("parentBalloonId", "")
+    entry.font_spans.clear()
+    for item in data.get("fontSpans", []):
+        span = entry.font_spans.add()
+        span.start = int(item.get("start", 0))
+        span.length = max(1, int(item.get("length", 1)))
+        span.font = str(item.get("font", "") or "")
+    text_style.normalize_font_spans(entry)
 
 
 # ---------- page.json ----------

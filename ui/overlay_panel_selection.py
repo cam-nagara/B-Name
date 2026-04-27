@@ -13,8 +13,8 @@ from . import overlay_visibility
 
 _LINE_WIDTH_PX = 4.0
 _VERTEX_MARKER_SIZE_PX = 6.0
-_HANDLE_SIZE_PX = 10.0
-_HANDLE_OFFSET_PX = 18.0
+_HANDLE_SIZE_PX = 20.0
+_HANDLE_OFFSET_PX = 21.0
 
 
 def draw(context, work, region, rv3d) -> None:

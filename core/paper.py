@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import bpy
 from bpy.props import (
+    BoolProperty,
     EnumProperty,
     FloatProperty,
     FloatVectorProperty,
@@ -213,6 +214,42 @@ class BNamePaperSettings(bpy.types.PropertyGroup):
         min=0.0,
         max=1.0,
         subtype="FACTOR",
+    )
+    show_canvas_frame: BoolProperty(  # type: ignore[valid-type]
+        name="用紙枠",
+        description="キャンバス外周のガイド線を表示",
+        default=True,
+        update=_on_paper_visual_changed,
+    )
+    show_bleed_frame: BoolProperty(  # type: ignore[valid-type]
+        name="裁ち落とし枠",
+        description="裁ち落とし枠のガイド線を表示",
+        default=True,
+        update=_on_paper_visual_changed,
+    )
+    show_finish_frame: BoolProperty(  # type: ignore[valid-type]
+        name="仕上がり枠",
+        description="仕上がり枠のガイド線を表示",
+        default=True,
+        update=_on_paper_visual_changed,
+    )
+    show_inner_frame: BoolProperty(  # type: ignore[valid-type]
+        name="基本枠",
+        description="基本枠のガイド線を表示",
+        default=True,
+        update=_on_paper_visual_changed,
+    )
+    show_safe_line: BoolProperty(  # type: ignore[valid-type]
+        name="セーフライン",
+        description="セーフラインのガイド線を表示",
+        default=True,
+        update=_on_paper_visual_changed,
+    )
+    show_trim_marks: BoolProperty(  # type: ignore[valid-type]
+        name="トンボ",
+        description="トンボを表示",
+        default=True,
+        update=_on_paper_visual_changed,
     )
     color_profile: StringProperty(  # type: ignore[valid-type]
         name="カラープロファイル",

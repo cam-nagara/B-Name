@@ -49,5 +49,6 @@ def apply_tatechuyoko(
                 y_mm=y,
                 size_pt=shrink_size,
                 rotation_deg=0.0,  # 横並び (回転不要) ですでに「横書き相当」になる
+                index=g.index,
             )
     return marked

@@ -84,6 +84,18 @@ class BNAME_PT_paper(Panel):
         box.label(text="色")
         box.prop(p, "paper_color", text="用紙色")
 
+        box = layout.box()
+        box.label(text="用紙要素の表示")
+        row = box.row(align=True)
+        row.prop(p, "show_canvas_frame")
+        row.prop(p, "show_bleed_frame")
+        row = box.row(align=True)
+        row.prop(p, "show_finish_frame")
+        row.prop(p, "show_inner_frame")
+        row = box.row(align=True)
+        row.prop(p, "show_safe_line")
+        row.prop(p, "show_trim_marks")
+
         # 綴じ / 読む方向
         box = layout.box()
         box.label(text="綴じ / 読む方向")

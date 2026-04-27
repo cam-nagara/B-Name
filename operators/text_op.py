@@ -17,7 +17,7 @@ from bpy.types import Operator
 
 from ..core.mode import MODE_PANEL, get_mode
 from ..core.work import get_active_page, get_work
-from ..utils import detail_popup, layer_stack as layer_stack_utils, log, page_range
+from ..utils import detail_popup, layer_stack as layer_stack_utils, log, page_range, text_style
 from ..utils.layer_hierarchy import page_stack_key
 from . import panel_modal_state, text_edit_runtime
 
@@ -331,6 +331,20 @@ def _select_text_index(context, work, page, text_index: int) -> bool:
     return True
 
 
+def _active_text_selection_bounds(context, page, entry) -> tuple[int, int] | None:
+    op = panel_modal_state.get_active("text_tool")
+    if op is None or not bool(getattr(op, "_editing", False)):
+        return None
+    if str(getattr(op, "_page_id", "") or "") != str(getattr(page, "id", "") or ""):
+        return None
+    if str(getattr(op, "_text_id", "") or "") != str(getattr(entry, "id", "") or ""):
+        return None
+    return text_edit_runtime.selection_bounds(
+        int(getattr(op, "_cursor_index", 0)),
+        int(getattr(op, "_selection_anchor", -1)),
+    )
+
+
 def _text_rect(entry) -> tuple[float, float, float, float]:
     x = float(getattr(entry, "x_mm", 0.0))
     y = float(getattr(entry, "y_mm", 0.0))
@@ -558,6 +572,49 @@ class BNAME_OT_text_attach_to_balloon(Operator):
         return {"CANCELLED"}
 
 
+class BNAME_OT_text_apply_font_to_selection(Operator):
+    """テキスト編集中の選択範囲へフォントを適用する."""
+
+    bl_idname = "bname.text_apply_font_to_selection"
+    bl_label = "選択範囲にフォントを適用"
+    bl_options = {"REGISTER", "UNDO"}
+
+    font: StringProperty(name="フォント", default="", subtype="FILE_PATH")  # type: ignore[valid-type]
+    clear: BoolProperty(name="基本フォントに戻す", default=False)  # type: ignore[valid-type]
+
+    @classmethod
+    def poll(cls, context):
+        page = get_active_page(context)
+        if page is None:
+            return False
+        return 0 <= page.active_text_index < len(page.texts)
+
+    def execute(self, context):
+        page = get_active_page(context)
+        if page is None or not (0 <= page.active_text_index < len(page.texts)):
+            return {"CANCELLED"}
+        entry = page.texts[page.active_text_index]
+        bounds = _active_text_selection_bounds(context, page, entry)
+        if bounds is None:
+            self.report({"ERROR"}, "フォントを変える文字範囲を選択してください")
+            return {"CANCELLED"}
+        start, end = bounds
+        font = "" if self.clear else str(self.font or "").strip()
+        if not self.clear and not font:
+            font = str(getattr(context.scene, "bname_text_selection_font", "") or "").strip()
+        if not self.clear and not font:
+            font = str(getattr(entry, "font", "") or "").strip()
+        if not self.clear and not font:
+            self.report({"ERROR"}, "適用するフォントを指定してください")
+            return {"CANCELLED"}
+        if not text_style.apply_font_span(entry, start, end, font):
+            return {"CANCELLED"}
+        layer_stack_utils.sync_layer_stack_after_data_change(context)
+        layer_stack_utils.tag_view3d_redraw(context)
+        self.report({"INFO"}, "選択範囲のフォントを更新しました")
+        return {"FINISHED"}
+
+
 class BNAME_OT_text_tool(Operator):
     """クリック位置へテキストレイヤーを作成し、インライン入力を開始する."""
 
@@ -570,6 +627,7 @@ class BNAME_OT_text_tool(Operator):
     _editing: bool
     _editing_created_new: bool
     _edit_original_body: str
+    _edit_original_font_spans: tuple[tuple[int, int, str], ...]
     _cursor_index: int
     _selection_anchor: int
     _page_id: str
@@ -590,6 +648,7 @@ class BNAME_OT_text_tool(Operator):
     _last_click_text_id: str
     _last_click_x: float
     _last_click_y: float
+    _ime_timer: object | None
 
     @classmethod
     def poll(cls, context):
@@ -610,10 +669,12 @@ class BNAME_OT_text_tool(Operator):
         self._editing = False
         self._editing_created_new = False
         self._edit_original_body = ""
+        self._edit_original_font_spans = ()
         self._cursor_index = 0
         self._selection_anchor = -1
         self._page_id = ""
         self._text_id = ""
+        self._ime_timer = None
         self._clear_drag_state()
         self._clear_click_state()
         context.window_manager.modal_handler_add(self)
@@ -685,21 +746,25 @@ class BNAME_OT_text_tool(Operator):
         self._editing = True
         self._editing_created_new = True
         self._edit_original_body = ""
+        self._edit_original_font_spans = ()
         self._cursor_index = 0
         self._selection_anchor = -1
         self._page_id = getattr(page, "id", "")
         self._text_id = getattr(entry, "id", "")
         self._clear_click_state()
+        self._begin_inline_input(context)
         self.report({"INFO"}, "本文を入力してください (Enter: 確定 / Esc: キャンセル)")
         return {"RUNNING_MODAL"}
 
     def _modal_editing(self, context, event):
+        queued_text = text_edit_runtime.poll_ime_text()
+        if queued_text:
+            return self._insert_current_text(context, queued_text)
+        if event.type == "TIMER":
+            return {"RUNNING_MODAL"}
         if text_edit_runtime.event_is_ime_control(event):
-            return {"PASS_THROUGH"}
+            return {"RUNNING_MODAL"}
         if not _event_in_view3d_window(context, event):
-            if event.type == "LEFTMOUSE" and event.value == "PRESS":
-                self._finish_current_text_edit(context)
-                return {"PASS_THROUGH"}
             if not self._is_text_edit_event(event):
                 return {"PASS_THROUGH"}
         if event.type == "LEFTMOUSE" and event.value in {"PRESS", "DOUBLE_CLICK"}:
@@ -719,6 +784,7 @@ class BNAME_OT_text_tool(Operator):
                 page, entry, idx = self._current_text_entry(context)
                 if entry is not None:
                     entry.body = str(getattr(self, "_edit_original_body", ""))
+                    text_style.restore_font_spans(entry, getattr(self, "_edit_original_font_spans", ()))
                     if page is not None:
                         page.active_text_index = idx
                     layer_stack_utils.sync_layer_stack_after_data_change(context)
@@ -782,13 +848,50 @@ class BNAME_OT_text_tool(Operator):
             return True
         return False
 
+    def _begin_inline_input(self, context) -> None:
+        text_edit_runtime.begin_ime_capture()
+        if getattr(self, "_ime_timer", None) is not None:
+            return
+        window = getattr(context, "window", None)
+        wm = getattr(context, "window_manager", None)
+        if window is None or wm is None:
+            return
+        try:
+            self._ime_timer = wm.event_timer_add(0.05, window=window)
+        except Exception:  # noqa: BLE001
+            self._ime_timer = None
+
+    def _end_inline_input(self, context) -> None:
+        timer = getattr(self, "_ime_timer", None)
+        if timer is not None:
+            wm = getattr(context, "window_manager", None)
+            if wm is not None:
+                try:
+                    wm.event_timer_remove(timer)
+                except Exception:  # noqa: BLE001
+                    pass
+        self._ime_timer = None
+        text_edit_runtime.end_ime_capture()
+
     def _finish_current_text_edit(self, context) -> None:
         _page, entry, _idx = self._current_text_entry(context)
-        if entry is not None and str(getattr(entry, "body", "")) != str(getattr(self, "_edit_original_body", "")):
+        spans_changed = (
+            entry is not None
+            and text_style.font_spans_snapshot(entry) != getattr(self, "_edit_original_font_spans", ())
+        )
+        if (
+            entry is not None
+            and (
+                str(getattr(entry, "body", "")) != str(getattr(self, "_edit_original_body", ""))
+                or spans_changed
+            )
+        ):
             self._push_undo_step("B-Name: テキスト編集")
+        self._end_inline_input(context)
         self._editing = False
         self._editing_created_new = False
         self._edit_original_body = ""
+        self._edit_original_font_spans = ()
         self._cursor_index = 0
         self._selection_anchor = -1
         self._page_id = ""
@@ -801,12 +904,14 @@ class BNAME_OT_text_tool(Operator):
         self._editing = True
         self._editing_created_new = False
         self._edit_original_body = str(getattr(entry, "body", ""))
+        self._edit_original_font_spans = text_style.font_spans_snapshot(entry)
         self._cursor_index = len(self._edit_original_body)
         self._selection_anchor = -1
         self._page_id = getattr(page, "id", "")
         self._text_id = getattr(entry, "id", "")
         self._clear_drag_state()
         self._clear_click_state()
+        self._begin_inline_input(context)
         self.report({"INFO"}, "本文を入力してください (Enter: 確定 / Esc: キャンセル)")
         layer_stack_utils.tag_view3d_redraw(context)
 
@@ -1142,9 +1247,11 @@ class BNAME_OT_text_tool(Operator):
         if getattr(self, "_cursor_modal_set", False):
             panel_modal_state.restore_modal_cursor(context)
             self._cursor_modal_set = False
+        self._end_inline_input(context)
         self._editing = False
         self._editing_created_new = False
         self._edit_original_body = ""
+        self._edit_original_font_spans = ()
         self._cursor_index = 0
         self._selection_anchor = -1
         self._clear_drag_state()
@@ -1163,6 +1270,7 @@ _CLASSES = (
     BNAME_OT_text_add,
     BNAME_OT_text_remove,
     BNAME_OT_text_attach_to_balloon,
+    BNAME_OT_text_apply_font_to_selection,
     BNAME_OT_text_tool,
 )
 

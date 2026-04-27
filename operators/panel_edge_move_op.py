@@ -31,6 +31,7 @@ from ..utils import (
     detail_popup,
     geom,
     log,
+    page_browser,
     page_grid,
     page_range,
     panel_edge_adjacency,
@@ -43,8 +44,9 @@ _logger = log.get_logger(__name__)
 # ---- 定数 ----
 EDGE_PICK_TOLERANCE_PX = 12.0  # 辺をクリックしたとみなす距離 (px)
 VERTEX_PICK_TOLERANCE_PX = 14.0  # 頂点をクリックしたとみなす距離 (px)
-HANDLE_SIZE_PX = 14.0  # 三角ハンドルの一辺 (px)
-HANDLE_OFFSET_PX = 22.0  # 辺中点からハンドル中心までの距離 (px)
+HANDLE_SIZE_PX = 28.0  # 三角ハンドルの一辺 (px)
+HANDLE_OFFSET_PX = 26.0  # 辺中点からハンドル中心までの距離 (px)
+HANDLE_HIT_RADIUS_PX = 28.0
 ADJACENCY_GAP_TOLERANCE_MM = 0.2  # 隣接判定: 対応辺との垂直距離が gap ± この値以内
 ADJACENCY_OVERLAP_RATIO = 0.2  # 隣接判定: 重なり比率がこの値以上で連動
 DOUBLE_CLICK_INTERVAL = 0.4  # シングル/ダブル判定の閾値 (秒)
@@ -581,16 +583,119 @@ def _compute_handle_centers_px(
     return h1, h2
 
 
-def _hit_handle(
-    region, rv3d, edge_a_mm, edge_b_mm, mx: int, my: int,
-) -> int:
-    """ハンドルクリック判定: 0=どちらも外、1=正側、2=負側."""
-    h1, h2 = _compute_handle_centers_px(region, rv3d, edge_a_mm, edge_b_mm) or (None, None)
-    if h1 is not None and math.hypot(h1[0] - mx, h1[1] - my) < HANDLE_SIZE_PX:
-        return 1
-    if h2 is not None and math.hypot(h2[0] - mx, h2[1] - my) < HANDLE_SIZE_PX:
-        return 2
-    return 0
+def _event_view_context(context, event):
+    screen = getattr(context, "screen", None)
+    if screen is None:
+        return None
+    for area in screen.areas:
+        if area.type != "VIEW_3D":
+            continue
+        for region in area.regions:
+            if region.type != "WINDOW":
+                continue
+            if not (
+                region.x <= event.mouse_x < region.x + region.width
+                and region.y <= event.mouse_y < region.y + region.height
+            ):
+                continue
+            space = area.spaces.active
+            rv3d = getattr(space, "region_3d", None)
+            if rv3d is None:
+                continue
+            return area, region, rv3d, event.mouse_x - region.x, event.mouse_y - region.y
+    return None
+
+
+def _page_offset_for_area(context, work, area, page_index: int) -> tuple[float, float]:
+    scene = getattr(context, "scene", None)
+    if page_browser.is_marked_area(area) or page_browser.page_browser_area(context) == area:
+        if page_browser.fit_enabled(scene):
+            return page_browser.page_offset_mm(work, scene, area, page_index)
+    return _page_offset(work, page_index)
+
+
+def _iter_selection_edge_refs(work, selection: dict | None):
+    if selection is None:
+        return
+    kind = selection.get("type")
+    if kind not in {"edge", "border"}:
+        return
+    page_index = int(selection.get("page", -1))
+    panel_index = int(selection.get("panel", -1))
+    if not (0 <= page_index < len(work.pages)):
+        return
+    page = work.pages[page_index]
+    if not page_range.page_in_range(page):
+        return
+    if not (0 <= panel_index < len(page.panels)):
+        return
+    panel = page.panels[panel_index]
+    poly = _panel_polygon(panel)
+    if len(poly) < 2:
+        return
+    if kind == "edge":
+        edge_index = int(selection.get("edge", -1))
+        if 0 <= edge_index < len(poly):
+            yield page_index, panel_index, edge_index, poly[edge_index], poly[(edge_index + 1) % len(poly)]
+        return
+    for edge_index in range(len(poly)):
+        yield page_index, panel_index, edge_index, poly[edge_index], poly[(edge_index + 1) % len(poly)]
+
+
+def _hit_selection_handle(
+    context,
+    work,
+    selection: dict | None,
+    area,
+    region,
+    rv3d,
+    mx: int,
+    my: int,
+) -> dict | None:
+    best: dict | None = None
+    best_dist = HANDLE_HIT_RADIUS_PX
+    for page_index, panel_index, edge_index, a, b in _iter_selection_edge_refs(work, selection):
+        ox, oy = _page_offset_for_area(context, work, area, page_index)
+        edge_a = (a[0] + ox, a[1] + oy)
+        edge_b = (b[0] + ox, b[1] + oy)
+        h1, h2 = _compute_handle_centers_px(region, rv3d, edge_a, edge_b) or (None, None)
+        for direction, handle in ((1, h1), (2, h2)):
+            if handle is None:
+                continue
+            dist = math.hypot(handle[0] - mx, handle[1] - my)
+            if dist <= best_dist:
+                best_dist = dist
+                best = {
+                    "page": page_index,
+                    "panel": panel_index,
+                    "edge": edge_index,
+                    "direction": direction,
+                }
+    return best
+
+
+def find_selected_handle_at_event(context, event) -> dict | None:
+    """現在の枠線選択に表示されている▲ハンドルをイベント位置から解決する."""
+    work = get_work(context)
+    if work is None or not getattr(work, "loaded", False):
+        return None
+    wm = getattr(context, "window_manager", None)
+    if wm is None:
+        return None
+    kind = getattr(wm, "bname_edge_select_kind", "none")
+    selection = {
+        "type": "border" if kind == "border" else "edge",
+        "page": int(getattr(wm, "bname_edge_select_page", -1)),
+        "panel": int(getattr(wm, "bname_edge_select_panel", -1)),
+        "edge": int(getattr(wm, "bname_edge_select_edge", -1)),
+    }
+    if kind not in {"edge", "border"}:
+        return None
+    view = _event_view_context(context, event)
+    if view is None:
+        return None
+    area, region, rv3d, mx, my = view
+    return _hit_selection_handle(context, work, selection, area, region, rv3d, mx, my)
 
 
 # ---------- Modal Operator ----------
@@ -872,17 +977,28 @@ class BNAME_OT_panel_edge_move(Operator):
                 if not self._is_inside_region(event):
                     return {"PASS_THROUGH"}
                 mx, my = self._to_window(event)
-                # 既に辺選択中ならハンドルヒットを優先
-                if self._selection is not None and self._selection.get("type") == "edge":
-                    edge_world = self._get_selected_edge_world()
-                    if edge_world is not None:
-                        h = _hit_handle(
-                            self._region, self._rv3d, edge_world[0], edge_world[1], mx, my,
-                        )
-                        if h != 0:
-                            self._do_extend(h)
-                            self._tag_redraw()
-                            return {"RUNNING_MODAL"}
+                # 既存選択の▲ハンドルを、辺/枠線全体選択のどちらでも最優先で拾う。
+                handle_hit = _hit_selection_handle(
+                    context,
+                    self._work,
+                    self._selection,
+                    self._area,
+                    self._region,
+                    self._rv3d,
+                    mx,
+                    my,
+                )
+                if handle_hit is not None:
+                    self._selection = {
+                        "type": "edge",
+                        "page": int(handle_hit["page"]),
+                        "panel": int(handle_hit["panel"]),
+                        "edge": int(handle_hit["edge"]),
+                    }
+                    self._update_wm_selection(context)
+                    self._do_extend(int(handle_hit["direction"]))
+                    self._tag_redraw()
+                    return {"RUNNING_MODAL"}
                 # 新規ピック
                 hit = _pick_edge_or_vertex(self._work, self._region, self._rv3d, mx, my)
                 now = time.time()
@@ -1455,6 +1571,81 @@ class BNAME_OT_panel_edge_move(Operator):
             _logger.exception("edge_move: save pages.json failed")
 
 
+class _EdgeExtendShim:
+    """モーダル外のオブジェクトツールから既存の枠線拡張処理を呼ぶための薄い実行文脈."""
+
+    def __init__(self, context, work, selection: dict) -> None:
+        self._context = context
+        self._work = work
+        self._selection = selection
+        self._original_geometry = None
+
+    def _save_changes(self) -> None:
+        work = self._work
+        if work is None or work.work_dir == "":
+            return
+        page_index = int(self._selection.get("page", -1))
+        if not (0 <= page_index < len(work.pages)):
+            return
+        work_dir = Path(work.work_dir)
+        page = work.pages[page_index]
+        try:
+            for panel in page.panels:
+                panel_io.save_panel_meta(work_dir, page.id, panel)
+            page_io.save_page_json(work_dir, page)
+            page_io.save_pages_json(work_dir, work)
+        except Exception:  # noqa: BLE001
+            _logger.exception("edge_move: save page %s failed", getattr(page, "id", ""))
+
+    def _push_undo_step(self, message: str) -> None:
+        try:
+            bpy.ops.ed.undo_push(message=message)
+        except Exception:  # noqa: BLE001
+            _logger.exception("edge_move: undo_push failed")
+
+    def report(self, _levels, message: str) -> None:
+        _logger.info(message)
+
+
+def extend_selected_handle_at_event(context, event) -> bool:
+    """オブジェクトツール等の通常クリックから、表示中の▲ハンドルを実行する."""
+    hit = find_selected_handle_at_event(context, event)
+    if hit is None:
+        return False
+    work = get_work(context)
+    if work is None or not getattr(work, "loaded", False):
+        return False
+    page_index = int(hit["page"])
+    panel_index = int(hit["panel"])
+    edge_index = int(hit["edge"])
+    if not (0 <= page_index < len(work.pages)):
+        return False
+    page = work.pages[page_index]
+    if not (0 <= panel_index < len(page.panels)):
+        return False
+    page.active_panel_index = panel_index
+    scene = getattr(context, "scene", None)
+    if scene is not None and hasattr(scene, "bname_active_layer_kind"):
+        scene.bname_active_layer_kind = "panel"
+    edge_selection.set_selection(
+        context,
+        "edge",
+        page_index=page_index,
+        panel_index=panel_index,
+        edge_index=edge_index,
+    )
+    selection = {
+        "type": "edge",
+        "page": page_index,
+        "panel": panel_index,
+        "edge": edge_index,
+    }
+    shim = _EdgeExtendShim(context, work, selection)
+    BNAME_OT_panel_edge_move._do_extend(shim, int(hit["direction"]))
+    _tag_view3d_redraw(context)
+    return True
+
+
 # ---------- POST_PIXEL 描画 ----------
 
 
@@ -1480,6 +1671,7 @@ def _draw_callback(op: "BNAME_OT_panel_edge_move") -> None:
         except Exception:  # noqa: BLE001
             pass
         verts: list[tuple[float, float]] = []
+        screen_edges: list[tuple[tuple[float, float], tuple[float, float]]] = []
         n = len(poly)
         for i in range(n):
             a = poly[i]
@@ -1490,6 +1682,7 @@ def _draw_callback(op: "BNAME_OT_panel_edge_move") -> None:
                 continue
             verts.append(ap)
             verts.append(bp)
+            screen_edges.append((ap, bp))
         if verts:
             batch = batch_for_shader(shader, "LINES", {"pos": verts})
             shader.bind()
@@ -1499,6 +1692,25 @@ def _draw_callback(op: "BNAME_OT_panel_edge_move") -> None:
             gpu.state.line_width_set(1.0)
         except Exception:  # noqa: BLE001
             pass
+        for ap, bp in screen_edges:
+            _draw_square_marker(shader, ap, COLOR_SELECTED_VERTEX)
+            _draw_square_marker(shader, bp, COLOR_SELECTED_VERTEX)
+            h1 = h2 = None
+            # screen_edges はすでに画面座標なので、描画用の中心計算だけ直接行う。
+            mx = (ap[0] + bp[0]) * 0.5
+            my = (ap[1] + bp[1]) * 0.5
+            dx = bp[0] - ap[0]
+            dy = bp[1] - ap[1]
+            length = math.hypot(dx, dy)
+            if length >= 1.0e-6:
+                nx = -dy / length
+                ny = dx / length
+                h1 = (mx + nx * HANDLE_OFFSET_PX, my + ny * HANDLE_OFFSET_PX)
+                h2 = (mx - nx * HANDLE_OFFSET_PX, my - ny * HANDLE_OFFSET_PX)
+            for handle, dir_idx in ((h1, 1), (h2, 2)):
+                if handle is None:
+                    continue
+                _draw_triangle_handle(shader, handle, ap, bp, dir_idx)
         return
 
     if sel["type"] == "edge":

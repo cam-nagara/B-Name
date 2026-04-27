@@ -35,7 +35,7 @@ except ImportError:  # pragma: no cover - 古い Blender
 
 from ..core.mode import MODE_PAGE, MODE_PANEL, get_mode
 from ..core.work import get_active_page, get_work
-from ..utils import border_geom, color_space, log, page_browser, viewport_colors
+from ..utils import border_geom, color_space, log, page_browser, text_style, viewport_colors
 from ..utils.geom import Rect, bleed_rect, mm_to_m
 from . import overlay_balloon
 from . import overlay_effect_line
@@ -61,6 +61,7 @@ _WORK_INFO_DEBUG_TICK = 0
 # OS のシステムフォントから日本語対応フォントを load しておく。
 # 値が None = 未試行、-1 = ロード失敗 (font_id=0 fallback)、0 以上 = ロード済み。
 _JP_FONT_ID: Optional[int] = None
+_FONT_ID_BY_PATH: dict[str, int] = {}
 
 # 作品情報とは独立した、ビューポート用のページ識別番号。
 _PAGE_HEADER_GAP_MM = 6.0
@@ -109,6 +110,25 @@ def _get_jp_font_id() -> int:
     _JP_FONT_ID = -1
     _logger.warning("blf JP font load failed; falling back to font_id=0 (ASCII only)")
     return 0
+
+
+def _get_font_id_for_path(font_path: str) -> int:
+    resolved = text_style.resolve_font_path(font_path)
+    if not resolved:
+        return _get_jp_font_id()
+    key = resolved.lower()
+    cached = _FONT_ID_BY_PATH.get(key)
+    if cached is not None:
+        return cached if cached >= 0 else _get_jp_font_id()
+    try:
+        fid = blf.load(resolved)
+        if fid is not None and fid != -1:
+            _FONT_ID_BY_PATH[key] = int(fid)
+            return int(fid)
+    except Exception:  # noqa: BLE001
+        pass
+    _FONT_ID_BY_PATH[key] = -1
+    return _get_jp_font_id()
 
 
 # ---------- 低レベル描画ヘルパ ----------
@@ -606,6 +626,7 @@ def _draw_text_in_rect(context, rect, entry_or_text, color=(0, 0, 0, 1)) -> None
     except Exception:  # noqa: BLE001
         pass
     for glyph in result.placements:
+        glyph_font_id = _get_font_id_for_path(text_style.font_for_index(entry, glyph.index))
         coord = location_3d_to_region_2d(
             region,
             rv3d,
@@ -615,11 +636,21 @@ def _draw_text_in_rect(context, rect, entry_or_text, color=(0, 0, 0, 1)) -> None
             continue
         size_px = glyph.size_pt * px_per_mm * 25.4 / 72.0
         try:
-            blf.size(font_id, max(1, int(size_px)))
+            blf.size(glyph_font_id, max(1, int(size_px)))
         except Exception:  # noqa: BLE001
             pass
-        blf.position(font_id, float(coord.x), float(coord.y), 0.0)
-        blf.draw(font_id, glyph.ch)
+        try:
+            blf.color(
+                glyph_font_id,
+                float(entry_color[0]),
+                float(entry_color[1]),
+                float(entry_color[2]),
+                float(entry_color[3]),
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        blf.position(glyph_font_id, float(coord.x), float(coord.y), 0.0)
+        blf.draw(glyph_font_id, glyph.ch)
 
 
 def _draw_panels(
@@ -854,15 +885,19 @@ def _draw_page_overlay(
         _draw_frame_with_hole(canvas_r, safe_r, color)
 
     # 枠線群はビューポート上で常に 1px 表示にする。
-    _draw_rect_outline(canvas_r, viewport_colors.PAPER_GUIDE_DIM, line_width=1.0)
+    if getattr(paper, "show_canvas_frame", True):
+        _draw_rect_outline(canvas_r, viewport_colors.PAPER_GUIDE_DIM, line_width=1.0)
     # 裁ち落とし枠 (= 仕上がり枠 + 裁ち落とし幅)
-    if paper.bleed_mm > 0.0:
+    if paper.bleed_mm > 0.0 and getattr(paper, "show_bleed_frame", True):
         _draw_rect_outline(bleed_r, viewport_colors.PAPER_GUIDE_DIM, line_width=1.0)
-    _draw_rect_outline(finish_r, viewport_colors.PAPER_GUIDE_LIGHT, line_width=1.0)
-    _draw_rect_outline(inner_r, viewport_colors.PAPER_GUIDE, line_width=1.0)
-    _draw_rect_outline(safe_r, viewport_colors.SAFE_LINE, line_width=1.0)
+    if getattr(paper, "show_finish_frame", True):
+        _draw_rect_outline(finish_r, viewport_colors.PAPER_GUIDE_LIGHT, line_width=1.0)
+    if getattr(paper, "show_inner_frame", True):
+        _draw_rect_outline(inner_r, viewport_colors.PAPER_GUIDE, line_width=1.0)
+    if getattr(paper, "show_safe_line", True):
+        _draw_rect_outline(safe_r, viewport_colors.SAFE_LINE, line_width=1.0)
     # トンボ (四隅 + 各辺中央センタートンボ) を仕上がり枠 / 裁ち落とし枠基準で描画
-    if paper.bleed_mm > 0.0:
+    if paper.bleed_mm > 0.0 and getattr(paper, "show_trim_marks", True):
         _draw_trim_marks(finish_r, bleed_r)
 
     # 画像レイヤー (アクティブページのみ — 全ページ一覧時は負荷とレイヤーの per-scene 制約で省略)

@@ -56,6 +56,14 @@ class BNameRubySpan(bpy.types.PropertyGroup):
     )
 
 
+class BNameTextFontSpan(bpy.types.PropertyGroup):
+    """本文内の一部範囲に適用するフォント指定."""
+
+    start: IntProperty(name="開始", default=0, min=0)  # type: ignore[valid-type]
+    length: IntProperty(name="長さ", default=1, min=1)  # type: ignore[valid-type]
+    font: StringProperty(name="フォント", default="", subtype="FILE_PATH")  # type: ignore[valid-type]
+
+
 class BNameTextEntry(bpy.types.PropertyGroup):
     """1 つのテキストオブジェクト.
 
@@ -86,7 +94,7 @@ class BNameTextEntry(bpy.types.PropertyGroup):
     )
     speaker_name: StringProperty(name="話者", default="")  # type: ignore[valid-type]
 
-    font: StringProperty(name="フォント", default="")  # type: ignore[valid-type]
+    font: StringProperty(name="基本フォント", default="", subtype="FILE_PATH")  # type: ignore[valid-type]
     font_size_q: FloatProperty(  # type: ignore[valid-type]
         name="サイズ (Q)",
         description="文字サイズを Q 数 (1 Q = 0.25 mm) で指定",
@@ -112,12 +120,16 @@ class BNameTextEntry(bpy.types.PropertyGroup):
     # ルビ (複数スパン)
     ruby_spans: CollectionProperty(type=BNameRubySpan)  # type: ignore[valid-type]
 
+    # 部分フォント。font が空の範囲は基本フォントに戻す扱い。
+    font_spans: CollectionProperty(type=BNameTextFontSpan)  # type: ignore[valid-type]
+
     # 縦中横 (horizontal-in-vertical): 指定した範囲を縦書き内で横向きに
     tatechuyoko_ranges: CollectionProperty(type=BNameRubySpan)  # type: ignore[valid-type]
 
 
 _CLASSES = (
     BNameRubySpan,
+    BNameTextFontSpan,
     BNameTextEntry,
 )
 
@@ -125,10 +137,19 @@ _CLASSES = (
 def register() -> None:
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
+    bpy.types.Scene.bname_text_selection_font = StringProperty(
+        name="選択範囲フォント",
+        default="",
+        subtype="FILE_PATH",
+    )
     _logger.debug("text_entry registered")
 
 
 def unregister() -> None:
+    try:
+        del bpy.types.Scene.bname_text_selection_font
+    except AttributeError:
+        pass
     for cls in reversed(_CLASSES):
         try:
             bpy.utils.unregister_class(cls)

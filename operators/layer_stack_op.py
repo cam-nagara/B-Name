@@ -965,12 +965,13 @@ class BNAME_OT_layer_stack_detail(Operator):
     index: IntProperty(default=-1)  # type: ignore[valid-type]
     uid: StringProperty(default="", options={"HIDDEN"})  # type: ignore[valid-type]
     preserve_edge_selection: BoolProperty(default=False, options={"HIDDEN"})  # type: ignore[valid-type]
+    offset_from_selection: BoolProperty(default=False, options={"HIDDEN"})  # type: ignore[valid-type]
 
     @classmethod
     def poll(cls, context):
         return getattr(context.scene, "bname_layer_stack", None) is not None
 
-    def invoke(self, context, _event):
+    def invoke(self, context, event):
         stack = layer_stack_utils.sync_layer_stack(context, preserve_active_index=True)
         if stack is None or not (0 <= self.index < len(stack)):
             self.report({"ERROR"}, "詳細設定を開くレイヤーが見つかりません")
@@ -980,6 +981,7 @@ class BNAME_OT_layer_stack_detail(Operator):
         layer_stack_utils.select_stack_index(context, self.index)
         self._restore_edge_selection_if_needed(context, stack[self.index], edge_state)
         layer_stack_utils.tag_view3d_redraw(context)
+        self._offset_cursor_for_selection_popup(context, event)
         return context.window_manager.invoke_props_dialog(self, width=520)
 
     def execute(self, context):
@@ -1010,6 +1012,43 @@ class BNAME_OT_layer_stack_detail(Operator):
             layout.label(text="詳細設定を描画できません", icon="ERROR")
             layout.label(text=str(exc)[:80])
         layer_stack_utils.tag_view3d_redraw(context)
+
+    def _offset_cursor_for_selection_popup(self, context, event) -> None:
+        if not bool(getattr(self, "offset_from_selection", False)):
+            return
+        window = getattr(context, "window", None)
+        if window is None or event is None:
+            return
+        try:
+            original_x = int(getattr(event, "mouse_x", 0))
+            original_y = int(getattr(event, "mouse_y", 0))
+            if original_x <= 0 and original_y <= 0:
+                return
+            width = int(getattr(window, "width", 0))
+            height = int(getattr(window, "height", 0))
+            offset_x = 360
+            target_x = original_x + offset_x
+            if width > 0:
+                target_x = min(max(20, target_x), max(20, width - 20))
+            target_y = original_y
+            if height > 0:
+                target_y = min(max(20, target_y), max(20, height - 20))
+            if target_x == original_x and target_y == original_y:
+                return
+            window.cursor_warp(target_x, target_y)
+
+            def _restore_cursor():
+                try:
+                    current_window = getattr(bpy.context, "window", None)
+                    if current_window is not None:
+                        current_window.cursor_warp(original_x, original_y)
+                except Exception:  # noqa: BLE001
+                    pass
+                return None
+
+            bpy.app.timers.register(_restore_cursor, first_interval=0.05)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _resolve_item(self, stack):
         if self.uid:

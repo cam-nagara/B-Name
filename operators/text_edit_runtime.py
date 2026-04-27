@@ -2,8 +2,20 @@
 
 from __future__ import annotations
 
+import sys
 import math
+import time
 
+if sys.platform == "win32":
+    import ctypes
+    from ctypes import wintypes
+    _LRESULT = ctypes.c_ssize_t
+else:  # pragma: no cover - Windows IME bridge is only available on Windows.
+    ctypes = None
+    wintypes = None
+    _LRESULT = None
+
+from ..utils import text_style
 from ..utils.geom import Rect, q_to_mm
 
 _TEXT_PADDING_MM = 1.0
@@ -27,6 +39,171 @@ _IME_CONTROL_TYPES = {
     "LANGUAGE",
     "OSKEY",
 }
+_WM_CHAR = 0x0102
+_WM_IME_COMPOSITION = 0x010F
+_GCS_RESULTSTR = 0x0800
+_GWL_WNDPROC = -4
+_IME_CAPTURE_HWND = None
+_IME_CAPTURE_OLD_PROC = None
+_IME_CAPTURE_PROC = None
+_IME_TEXT_QUEUE: list[str] = []
+_IME_LAST_APPEND = ("", 0.0)
+_USER32 = None
+_IMM32 = None
+
+
+def _clean_ime_text(value: str) -> str:
+    text = str(value or "").replace("\x00", "").replace("\r", "")
+    return "".join(ch for ch in text if ch == "\n" or ord(ch) >= 32)
+
+
+def _append_ime_text(text: str) -> None:
+    global _IME_LAST_APPEND
+    cleaned = _clean_ime_text(text)
+    if not cleaned:
+        return
+    now = time.monotonic()
+    previous, previous_time = _IME_LAST_APPEND
+    # 一部IMEは確定時に WM_IME_COMPOSITION と WM_CHAR の両方を送る。
+    if cleaned == previous and now - previous_time < 0.08:
+        return
+    _IME_TEXT_QUEUE.append(cleaned)
+    _IME_LAST_APPEND = (cleaned, now)
+
+
+def poll_ime_text() -> str:
+    """Return committed IME text captured outside Blender modal key events."""
+    if not _IME_TEXT_QUEUE:
+        return ""
+    text = "".join(_IME_TEXT_QUEUE)
+    _IME_TEXT_QUEUE.clear()
+    return text
+
+
+def _clear_ime_text_queue() -> None:
+    global _IME_LAST_APPEND
+    _IME_TEXT_QUEUE.clear()
+    _IME_LAST_APPEND = ("", 0.0)
+
+
+def _ensure_win32_ime_api() -> bool:
+    global _USER32, _IMM32
+    if ctypes is None or wintypes is None:
+        return False
+    if _USER32 is not None and _IMM32 is not None:
+        return True
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        imm32 = ctypes.WinDLL("imm32", use_last_error=True)
+        user32.GetForegroundWindow.argtypes = []
+        user32.GetForegroundWindow.restype = wintypes.HWND
+        user32.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
+        user32.SetWindowLongPtrW.restype = ctypes.c_void_p
+        user32.CallWindowProcW.argtypes = [
+            ctypes.c_void_p,
+            wintypes.HWND,
+            wintypes.UINT,
+            wintypes.WPARAM,
+            wintypes.LPARAM,
+        ]
+        user32.CallWindowProcW.restype = _LRESULT
+        imm32.ImmGetContext.argtypes = [wintypes.HWND]
+        imm32.ImmGetContext.restype = wintypes.HANDLE
+        imm32.ImmReleaseContext.argtypes = [wintypes.HWND, wintypes.HANDLE]
+        imm32.ImmReleaseContext.restype = wintypes.BOOL
+        imm32.ImmGetCompositionStringW.argtypes = [
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+        ]
+        imm32.ImmGetCompositionStringW.restype = wintypes.LONG
+    except Exception:  # noqa: BLE001
+        return False
+    _USER32 = user32
+    _IMM32 = imm32
+    return True
+
+
+def _read_ime_result_string(hwnd, lparam) -> str:
+    if _IMM32 is None or not (int(lparam) & _GCS_RESULTSTR):
+        return ""
+    himc = _IMM32.ImmGetContext(hwnd)
+    if not himc:
+        return ""
+    try:
+        byte_count = int(_IMM32.ImmGetCompositionStringW(himc, _GCS_RESULTSTR, None, 0))
+        if byte_count <= 0:
+            return ""
+        buffer = ctypes.create_unicode_buffer(byte_count // 2 + 1)
+        read_count = int(
+            _IMM32.ImmGetCompositionStringW(
+                himc,
+                _GCS_RESULTSTR,
+                ctypes.cast(buffer, ctypes.c_void_p),
+                byte_count,
+            )
+        )
+        if read_count <= 0:
+            return ""
+        return buffer.value[: read_count // 2]
+    finally:
+        _IMM32.ImmReleaseContext(hwnd, himc)
+
+
+def begin_ime_capture() -> None:
+    """Capture Windows IME committed text while inline text editing is active."""
+    global _IME_CAPTURE_HWND, _IME_CAPTURE_OLD_PROC, _IME_CAPTURE_PROC
+    if not _ensure_win32_ime_api():
+        return
+    hwnd = _USER32.GetForegroundWindow()
+    if not hwnd:
+        return
+    if _IME_CAPTURE_HWND == hwnd and _IME_CAPTURE_OLD_PROC:
+        return
+    end_ime_capture()
+
+    wndproc_type = ctypes.WINFUNCTYPE(
+        _LRESULT,
+        wintypes.HWND,
+        wintypes.UINT,
+        wintypes.WPARAM,
+        wintypes.LPARAM,
+    )
+
+    def _ime_wnd_proc(hwnd_arg, msg, wparam, lparam):
+        try:
+            if msg == _WM_IME_COMPOSITION:
+                _append_ime_text(_read_ime_result_string(hwnd_arg, lparam))
+            elif msg == _WM_CHAR:
+                char_code = int(wparam)
+                if char_code >= 128:
+                    _append_ime_text(chr(char_code))
+        except Exception:  # noqa: BLE001
+            pass
+        return _USER32.CallWindowProcW(_IME_CAPTURE_OLD_PROC, hwnd_arg, msg, wparam, lparam)
+
+    callback = wndproc_type(_ime_wnd_proc)
+    old_proc = _USER32.SetWindowLongPtrW(hwnd, _GWL_WNDPROC, ctypes.cast(callback, ctypes.c_void_p))
+    if not old_proc:
+        return
+    _IME_CAPTURE_HWND = hwnd
+    _IME_CAPTURE_OLD_PROC = old_proc
+    _IME_CAPTURE_PROC = callback
+
+
+def end_ime_capture() -> None:
+    """Restore the Blender window procedure after inline text editing."""
+    global _IME_CAPTURE_HWND, _IME_CAPTURE_OLD_PROC, _IME_CAPTURE_PROC
+    if _USER32 is not None and _IME_CAPTURE_HWND and _IME_CAPTURE_OLD_PROC:
+        try:
+            _USER32.SetWindowLongPtrW(_IME_CAPTURE_HWND, _GWL_WNDPROC, _IME_CAPTURE_OLD_PROC)
+        except Exception:  # noqa: BLE001
+            pass
+    _IME_CAPTURE_HWND = None
+    _IME_CAPTURE_OLD_PROC = None
+    _IME_CAPTURE_PROC = None
+    _clear_ime_text_queue()
 
 
 def text_body(entry) -> str:
@@ -159,9 +336,11 @@ def replace_selection(entry, cursor_index: int, selection_anchor: int, text: str
     bounds = selection_bounds(cursor_index, selection_anchor)
     if bounds is None:
         index = clamp_cursor(entry, cursor_index)
+        text_style.adjust_font_spans_for_replace(entry, index, index, len(text))
         entry.body = body[:index] + text + body[index:]
         return index + len(text)
     start, end = bounds
+    text_style.adjust_font_spans_for_replace(entry, start, end, len(text))
     entry.body = body[:start] + text + body[end:]
     return start + len(text)
 
@@ -171,11 +350,13 @@ def delete_backward(entry, cursor_index: int, selection_anchor: int) -> int:
     bounds = selection_bounds(cursor_index, selection_anchor)
     if bounds is not None:
         start, end = bounds
+        text_style.adjust_font_spans_for_replace(entry, start, end, 0)
         entry.body = body[:start] + body[end:]
         return start
     index = clamp_cursor(entry, cursor_index)
     if index <= 0:
         return 0
+    text_style.adjust_font_spans_for_replace(entry, index - 1, index, 0)
     entry.body = body[: index - 1] + body[index:]
     return index - 1
 
@@ -185,11 +366,13 @@ def delete_forward(entry, cursor_index: int, selection_anchor: int) -> int:
     bounds = selection_bounds(cursor_index, selection_anchor)
     if bounds is not None:
         start, end = bounds
+        text_style.adjust_font_spans_for_replace(entry, start, end, 0)
         entry.body = body[:start] + body[end:]
         return start
     index = clamp_cursor(entry, cursor_index)
     if index >= len(body):
         return index
+    text_style.adjust_font_spans_for_replace(entry, index, index + 1, 0)
     entry.body = body[:index] + body[index + 1:]
     return index
 
