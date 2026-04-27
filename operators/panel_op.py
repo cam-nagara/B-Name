@@ -10,6 +10,7 @@ from bpy.types import Operator
 
 from ..core.work import get_active_page, get_work
 from ..io import page_io, panel_io, schema
+from ..utils import layer_stack as layer_stack_utils
 from ..utils import log, paths
 from .panel_knife_cut_op import _panel_polygon, _polygon_area, _set_panel_polygon, _split_convex_polygon_by_line
 from . import panel_modal_state
@@ -33,6 +34,13 @@ def _save_page_and_pages(work, page, work_dir: Path) -> None:
     page_io.save_page_json(work_dir, page)
     page.panel_count = len(page.panels)
     page_io.save_pages_json(work_dir, work)
+
+
+def _sync_layer_stack_after_panel_change(context) -> None:
+    layer_stack_utils.sync_layer_stack_after_data_change(
+        context,
+        align_panel_order=True,
+    )
 
 
 def _selected_edge_panel_target(context):
@@ -238,6 +246,7 @@ class BNAME_OT_panel_add(Operator):
             page_io.save_pages_json(work_dir, work)
             if hasattr(context.scene, "bname_active_layer_kind"):
                 context.scene.bname_active_layer_kind = "panel"
+            _sync_layer_stack_after_panel_change(context)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("panel_add failed")
             self.report({"ERROR"}, f"コマ追加失敗: {exc}")
@@ -279,6 +288,7 @@ class BNAME_OT_panel_remove(Operator):
             elif idx >= len(page.panels):
                 page.active_panel_index = len(page.panels) - 1
             _save_page_and_pages(work, page, work_dir)
+            _sync_layer_stack_after_panel_change(context)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("panel_remove failed")
             self.report({"ERROR"}, f"コマ削除失敗: {exc}")
@@ -327,6 +337,7 @@ class BNAME_OT_panel_duplicate(Operator):
                 context.scene.bname_active_layer_kind = "panel"
             panel_io.save_panel_meta(work_dir, page.id, new_entry)
             _save_page_and_pages(work, page, work_dir)
+            _sync_layer_stack_after_panel_change(context)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("panel_duplicate failed")
             self.report({"ERROR"}, f"コマ複製失敗: {exc}")
@@ -437,6 +448,7 @@ class BNAME_OT_panel_move_to_page(Operator):
             page.panel_count = len(page.panels)
             target_page.panel_count = len(target_page.panels)
             page_io.save_pages_json(work_dir, work)
+            _sync_layer_stack_after_panel_change(context)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("panel_move_to_page failed")
             self.report({"ERROR"}, f"コマ移動失敗: {exc}")
@@ -490,6 +502,7 @@ class BNAME_OT_panel_z_order(Operator):
         try:
             panel_io.save_panel_meta(work_dir, page.id, page.panels[idx])
             page_io.save_page_json(work_dir, page)
+            _sync_layer_stack_after_panel_change(context)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("panel_z_order failed")
             self.report({"ERROR"}, f"Z順序変更失敗: {exc}")
@@ -636,6 +649,7 @@ class BNAME_OT_panel_split_template(Operator):
             page.active_panel_index = first_new_index if len(page.panels) > first_new_index else -1
             work.active_page_index = page_index
             _save_page_and_pages(work, page, work_dir)
+            _sync_layer_stack_after_panel_change(context)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("panel_split_template failed")
             self.report({"ERROR"}, f"分割失敗: {exc}")

@@ -612,9 +612,19 @@ def _draw_panels(
     自動くり抜きは Phase 2 段階では未実装。
     """
     active_stem = ""
-    active_idx = int(getattr(page, "active_panel_index", -1))
-    if 0 <= active_idx < len(page.panels):
-        active_stem = str(getattr(page.panels[active_idx], "panel_stem", "") or "")
+    scene = getattr(bpy.context, "scene", None)
+    active_kind = getattr(scene, "bname_active_layer_kind", "") if scene is not None else ""
+    active_page_idx = int(getattr(work, "active_page_index", -1))
+    active_page = work.pages[active_page_idx] if 0 <= active_page_idx < len(work.pages) else None
+    is_active_page = (
+        active_kind == "panel"
+        and active_page is not None
+        and str(getattr(active_page, "id", "") or "") == str(getattr(page, "id", "") or "")
+    )
+    if is_active_page:
+        active_idx = int(getattr(page, "active_panel_index", -1))
+        if 0 <= active_idx < len(page.panels):
+            active_stem = str(getattr(page.panels[active_idx], "panel_stem", "") or "")
     sorted_panels = sorted(page.panels, key=lambda p: p.z_order)
     for entry in sorted_panels:
         # ポリゴン頂点リスト (mm) を取得 — rect なら 4 隅、polygon なら vertices

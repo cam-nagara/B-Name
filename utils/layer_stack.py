@@ -278,7 +278,26 @@ def _add_target_to_stack(stack, target: LayerTarget) -> None:
         stack.move(from_index, to_index)
 
 
-def _normalize_tree_order(stack) -> None:
+def _ordered_items_by_uid(items, uid_order: list[str] | None):
+    if uid_order is None:
+        return items
+    ordered = []
+    used_uids: set[str] = set()
+    for uid in uid_order:
+        for item in items:
+            if stack_item_uid(item) == uid and uid not in used_uids:
+                ordered.append(item)
+                used_uids.add(uid)
+                break
+    ordered.extend(item for item in items if stack_item_uid(item) not in used_uids)
+    return ordered
+
+
+def _normalize_tree_order(
+    stack,
+    page_key_order: list[str] | None = None,
+    panel_key_order_by_page: dict[str, list[str]] | None = None,
+) -> None:
     """ページ/コマを常にツリー構造へ戻す。
 
     UIList のD&Dは親子制約を知らないため、ページが子階層へ落ちたり
@@ -288,6 +307,10 @@ def _normalize_tree_order(stack) -> None:
     desired: list[str] = []
 
     page_items = [item for item in stack if item.kind == PAGE_KIND]
+    page_uid_order = None
+    if page_key_order is not None:
+        page_uid_order = [target_uid(PAGE_KIND, key) for key in page_key_order]
+    page_items = _ordered_items_by_uid(page_items, page_uid_order)
     for page_item in page_items:
         page_uid = stack_item_uid(page_item)
         desired.append(page_uid)
@@ -297,6 +320,13 @@ def _normalize_tree_order(stack) -> None:
             for item in stack
             if item.kind == PANEL_KIND and split_child_key(item.key)[0] == page_key
         ]
+        panel_uid_order = None
+        if panel_key_order_by_page is not None:
+            panel_uid_order = [
+                target_uid(PANEL_KIND, key)
+                for key in panel_key_order_by_page.get(page_key, [])
+            ]
+        panel_items = _ordered_items_by_uid(panel_items, panel_uid_order)
         for panel_item in panel_items:
             panel_uid = stack_item_uid(panel_item)
             desired.append(panel_uid)
@@ -315,7 +345,13 @@ def _normalize_tree_order(stack) -> None:
             stack.move(current_index, target_index)
 
 
-def sync_layer_stack(context, *, preserve_active_index: bool = False):
+def sync_layer_stack(
+    context,
+    *,
+    preserve_active_index: bool = False,
+    align_page_order: bool = False,
+    align_panel_order: bool = False,
+):
     """統合レイヤーリストを実データに同期する。
 
     既存行の並びは維持し、消えた実体だけを削除、新規実体だけを前面側へ
@@ -346,7 +382,20 @@ def sync_layer_stack(context, *, preserve_active_index: bool = False):
     missing = [target for target in targets if target.uid not in existing]
     for target in missing:
         _add_target_to_stack(stack, target)
-    _normalize_tree_order(stack)
+    page_key_order = None
+    if align_page_order:
+        work = get_work(context)
+        if work is not None and getattr(work, "loaded", False):
+            page_key_order = [page_stack_key(page) for page in work.pages]
+    panel_key_order_by_page = None
+    if align_panel_order:
+        panel_key_order_by_page = {}
+        for target in targets:
+            if target.kind != PANEL_KIND:
+                continue
+            page_key, _stem = split_child_key(target.key)
+            panel_key_order_by_page.setdefault(page_key, []).append(target.key)
+    _normalize_tree_order(stack, page_key_order, panel_key_order_by_page)
 
     if preserve_active_index and old_active_uid:
         for i, item in enumerate(stack):
@@ -378,6 +427,30 @@ def _remember_stack_signature(context) -> None:
     except Exception:  # noqa: BLE001
         scene_key = id(scene)
     _draw_stack_signatures[scene_key] = _stack_signature(scene)
+
+
+def remember_layer_stack_signature(context) -> None:
+    """現在の UIList 並びを既知状態として記録する。Operator からの同期後に使う."""
+    _remember_stack_signature(context)
+
+
+def sync_layer_stack_after_data_change(
+    context,
+    *,
+    align_page_order: bool = False,
+    align_panel_order: bool = False,
+) -> None:
+    """Operator で実データを更新した直後に、UIList と既知シグネチャを揃える."""
+    try:
+        sync_layer_stack(
+            context,
+            align_page_order=align_page_order,
+            align_panel_order=align_panel_order,
+        )
+        _remember_stack_signature(context)
+        tag_view3d_redraw(context)
+    except Exception:  # noqa: BLE001
+        _logger.exception("layer stack sync after data change failed")
 
 
 def schedule_layer_stack_draw_maintenance(context) -> None:
