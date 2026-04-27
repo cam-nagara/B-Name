@@ -988,9 +988,13 @@ def _draw_text_at_position(context, anchor_rect, item, text: str) -> None:
     blf.draw(font_id, text)
 
 
-def _format_page_header_number(page_index: int) -> str:
-    """ページ順を 001 形式にする。作品情報側の開始番号とは独立。"""
-    return f"{max(0, int(page_index)) + 1:03d}"
+def _format_page_header_number(page_index: int, work=None) -> str:
+    """作品の開始番号に従って、ページ番号を 001 形式にする。"""
+    try:
+        start = int(getattr(getattr(work, "work_info", None), "page_number_start", 1))
+    except Exception:  # noqa: BLE001
+        start = 1
+    return f"{max(0, start + int(page_index)):03d}"
 
 
 def _draw_bold_pixel_text(
@@ -1053,7 +1057,7 @@ def _draw_page_header_number_pixel(
     if not (-300 < coord.x < region.width + 300 and -300 < coord.y < region.height + 300):
         return
 
-    text = _format_page_header_number(page_index)
+    text = _format_page_header_number(page_index, get_work(context))
     font_id = _get_jp_font_id()
     try:
         blf.size(font_id, _PAGE_HEADER_FONT_SIZE_PX)

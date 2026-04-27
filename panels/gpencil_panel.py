@@ -73,7 +73,16 @@ def _zero_based_layer_name(prefix: str, value: str, width: int) -> str:
     return f"{prefix}{number:0{width}d}"
 
 
-def _page_layer_name(target) -> str:
+def _page_layer_name(target, work=None) -> str:
+    if work is not None and target is not None:
+        try:
+            start = int(getattr(work.work_info, "page_number_start", 1))
+        except Exception:  # noqa: BLE001
+            start = 1
+        target_id = str(getattr(target, "id", "") or "")
+        for i, page in enumerate(getattr(work, "pages", [])):
+            if str(getattr(page, "id", "") or "") == target_id:
+                return f"p{max(0, start + i):03d}"
     return _zero_based_layer_name("p", str(getattr(target, "id", "") or ""), 3)
 
 
@@ -102,7 +111,9 @@ def _select_icon(row, index: int, icon: str) -> None:
 
 
 def _select_name(row, index: int, text: str) -> None:
-    op = row.operator(
+    cell = row.row(align=True)
+    cell.alignment = "LEFT"
+    op = cell.operator(
         "bname.layer_stack_select",
         text=text or "",
         emboss=False,
@@ -111,7 +122,9 @@ def _select_name(row, index: int, text: str) -> None:
 
 
 def _select_icon_name(row, index: int, text: str, icon: str) -> None:
-    op = row.operator(
+    cell = row.row(align=True)
+    cell.alignment = "LEFT"
+    op = cell.operator(
         "bname.layer_stack_select",
         text=text or "",
         icon=icon,
@@ -193,6 +206,21 @@ def _draw_type_icon(row, index: int, icon: str) -> None:
     _select_icon(row, index, icon)
 
 
+def _draw_right_lock(row, target, prop_name: str = "lock") -> None:
+    if not hasattr(target, prop_name):
+        return
+    locked = bool(getattr(target, prop_name))
+    cell = row.row(align=True)
+    cell.ui_units_x = 1.0
+    cell.prop(
+        target,
+        prop_name,
+        text="",
+        emboss=False,
+        icon="LOCKED" if locked else "UNLOCKED",
+    )
+
+
 def _draw_gp_color_swatches(row, obj, layer) -> None:
     mat = None
     try:
@@ -223,7 +251,7 @@ def _draw_square_placeholder(row) -> None:
     cell.label(text="")
 
 
-def _draw_stack_gp_row(row, item, resolved, index: int) -> None:
+def _draw_stack_gp_row(row, right, item, resolved, index: int) -> None:
     target = resolved.get("target") if resolved is not None else None
     if target is None:
         _draw_type_icon(row, index, _kind_icon(item.kind))
@@ -233,33 +261,28 @@ def _draw_stack_gp_row(row, item, resolved, index: int) -> None:
     _draw_type_icon(row, index, _kind_icon(item.kind))
     _select_name(row, index, target.name)
     if item.kind == "gp":
-        _draw_gp_color_swatches(row, obj, target)
-    if hasattr(target, "lock"):
-        row.prop(
-            target,
-            "lock",
-            text="",
-            emboss=False,
-            icon="LOCKED" if target.lock else "UNLOCKED",
-        )
+        _draw_gp_color_swatches(right, obj, target)
+    _draw_right_lock(right, target)
 
 
-def _draw_stack_page_row(row, item, resolved, index: int) -> None:
+def _draw_stack_page_row(row, item, resolved, index: int, work=None) -> None:
     target = resolved.get("target") if resolved is not None else None
     if target is None:
         _select_icon_name(row, index, item.label, _kind_icon(item.kind))
         return
     icon = "DOCUMENTS" if target.spread else "FILE_BLANK"
-    _select_icon_name(row, index, _page_layer_name(target), icon)
+    _select_icon_name(row, index, _page_layer_name(target, work), icon)
 
 
-def _draw_stack_panel_row(row, item, resolved, index: int) -> None:
+def _draw_stack_panel_row(row, right, item, resolved, index: int) -> None:
     target = resolved.get("target") if resolved is not None else None
     if target is None:
         _select_icon_name(row, index, item.label, _kind_icon(item.kind))
         return
     _select_icon_name(row, index, _panel_layer_name(target), "MOD_WIREFRAME")
-    op = row.operator(
+    cell = right.row(align=True)
+    cell.ui_units_x = 1.0
+    op = cell.operator(
         "bname.layer_stack_enter_panel",
         text="",
         icon="PLAY",
@@ -268,7 +291,7 @@ def _draw_stack_panel_row(row, item, resolved, index: int) -> None:
     op.stack_index = index
 
 
-def _draw_stack_data_row(row, item, resolved, index: int) -> None:
+def _draw_stack_data_row(row, right, item, resolved, index: int) -> None:
     target = resolved.get("target") if resolved is not None else None
     if target is None:
         _draw_type_icon(row, index, _kind_icon(item.kind))
@@ -277,13 +300,7 @@ def _draw_stack_data_row(row, item, resolved, index: int) -> None:
     if item.kind == "image":
         _draw_type_icon(row, index, "IMAGE_DATA")
         _select_name(row, index, getattr(target, "title", "") or item.label)
-        row.prop(
-            target,
-            "locked",
-            text="",
-            emboss=False,
-            icon="LOCKED" if target.locked else "UNLOCKED",
-        )
+        _draw_right_lock(right, target, "locked")
     elif item.kind == "balloon":
         _draw_type_icon(row, index, "MOD_FLUID")
         _select_name(row, index, target.id)
@@ -292,7 +309,7 @@ def _draw_stack_data_row(row, item, resolved, index: int) -> None:
         _draw_type_icon(row, index, "FONT_DATA")
         _select_name(row, index, getattr(target, "body", "") or item.label)
     elif item.kind == "effect":
-        _draw_stack_gp_row(row, item, resolved, index)
+        _draw_stack_gp_row(row, right, item, resolved, index)
     else:
         _draw_type_icon(row, index, _kind_icon(item.kind))
         _select_name(row, index, item.label)
@@ -325,14 +342,19 @@ class BNAME_UL_layer_stack(UIList):
         _draw_visibility_slot(row, item, target, index)
         _draw_selection_slot(row, index, active)
         _draw_hierarchy_slot(row, item, target, index)
+        content = row.split(factor=0.72, align=True)
+        left = content.row(align=True)
+        left.alignment = "LEFT"
+        right = content.row(align=True)
+        right.alignment = "RIGHT"
         if item.kind == "page":
-            _draw_stack_page_row(row, item, resolved, index)
+            _draw_stack_page_row(left, item, resolved, index, get_work(context))
         elif item.kind == "panel":
-            _draw_stack_panel_row(row, item, resolved, index)
+            _draw_stack_panel_row(left, right, item, resolved, index)
         elif item.kind in {"gp", "gp_folder", "effect"}:
-            _draw_stack_gp_row(row, item, resolved, index)
+            _draw_stack_gp_row(left, right, item, resolved, index)
         else:
-            _draw_stack_data_row(row, item, resolved, index)
+            _draw_stack_data_row(left, right, item, resolved, index)
 
 
 def _draw_gp_selected_settings(box, obj, active_layer) -> None:
@@ -595,7 +617,10 @@ def _draw_effect_selected_settings(box, context, obj, active_layer) -> None:
 
 def _draw_page_selected_settings(box, context, entry) -> None:
     settings = box.column(align=True)
-    settings.label(text=f"選択中: {_page_layer_name(entry)} (ページ)", icon="FILE_BLANK")
+    settings.label(
+        text=f"選択中: {_page_layer_name(entry, get_work(context))} (ページ)",
+        icon="FILE_BLANK",
+    )
     settings.prop(entry, "title", text="表示名")
     if hasattr(entry, "visible"):
         settings.prop(entry, "visible", text="表示")
