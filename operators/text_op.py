@@ -8,6 +8,9 @@
 
 from __future__ import annotations
 
+import math
+import time
+
 import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, StringProperty
 from bpy.types import Operator
@@ -25,6 +28,8 @@ _TEXT_DEFAULT_HEIGHT_MM = 15.0
 _TEXT_HANDLE_HIT_MM = 2.5
 _TEXT_MIN_SIZE_MM = 2.0
 _TEXT_DRAG_EPS_MM = 0.05
+_TEXT_DOUBLE_CLICK_SECONDS = 0.45
+_TEXT_DOUBLE_CLICK_DISTANCE_MM = 3.0
 
 
 _SPEAKER_TYPE_ITEMS = (
@@ -572,6 +577,11 @@ class BNAME_OT_text_tool(Operator):
     _drag_orig_w: float
     _drag_orig_h: float
     _drag_moved: bool
+    _last_click_time: float
+    _last_click_page_id: str
+    _last_click_text_id: str
+    _last_click_x: float
+    _last_click_y: float
 
     @classmethod
     def poll(cls, context):
@@ -595,6 +605,7 @@ class BNAME_OT_text_tool(Operator):
         self._page_id = ""
         self._text_id = ""
         self._clear_drag_state()
+        self._clear_click_state()
         context.window_manager.modal_handler_add(self)
         panel_modal_state.set_active("text_tool", self, context)
         self.report({"INFO"}, "テキストツール: クリック位置にテキストを追加")
@@ -632,10 +643,13 @@ class BNAME_OT_text_tool(Operator):
         if work is None or page is None:
             return {"PASS_THROUGH"}
         if hit_entry is not None and hit_index >= 0:
+            is_double_click = event.value == "DOUBLE_CLICK" or self._is_text_double_click(page, hit_entry, lx, ly)
             _select_text_index(context, work, page, hit_index)
-            if event.value == "DOUBLE_CLICK":
+            if is_double_click:
+                self._clear_click_state()
                 self._start_editing_existing(context, page, hit_entry)
                 return {"RUNNING_MODAL"}
+            self._remember_text_click(page, hit_entry, lx, ly)
             self._start_text_drag(page, hit_entry, hit_part, lx, ly)
             return {"RUNNING_MODAL"}
         if not can_create or lx is None or ly is None:
@@ -662,6 +676,7 @@ class BNAME_OT_text_tool(Operator):
         self._edit_original_body = ""
         self._page_id = getattr(page, "id", "")
         self._text_id = getattr(entry, "id", "")
+        self._clear_click_state()
         self.report({"INFO"}, "本文を入力してください (Enter: 確定 / Esc: キャンセル)")
         return {"RUNNING_MODAL"}
 
@@ -725,6 +740,7 @@ class BNAME_OT_text_tool(Operator):
         self._edit_original_body = ""
         self._page_id = ""
         self._text_id = ""
+        self._clear_click_state()
         self.report({"INFO"}, "テキストツール: クリック位置にテキストを追加")
         layer_stack_utils.tag_view3d_redraw(context)
 
@@ -735,6 +751,7 @@ class BNAME_OT_text_tool(Operator):
         self._page_id = getattr(page, "id", "")
         self._text_id = getattr(entry, "id", "")
         self._clear_drag_state()
+        self._clear_click_state()
         self.report({"INFO"}, "本文を入力してください (Enter: 確定 / Esc: キャンセル)")
         layer_stack_utils.tag_view3d_redraw(context)
 
@@ -764,6 +781,38 @@ class BNAME_OT_text_tool(Operator):
         self._drag_orig_h = 0.0
         self._drag_moved = False
 
+    def _clear_click_state(self) -> None:
+        self._last_click_time = 0.0
+        self._last_click_page_id = ""
+        self._last_click_text_id = ""
+        self._last_click_x = 0.0
+        self._last_click_y = 0.0
+
+    def _remember_text_click(self, page, entry, x_mm: float | None, y_mm: float | None) -> None:
+        if x_mm is None or y_mm is None:
+            self._clear_click_state()
+            return
+        self._last_click_time = time.monotonic()
+        self._last_click_page_id = str(getattr(page, "id", "") or "")
+        self._last_click_text_id = str(getattr(entry, "id", "") or "")
+        self._last_click_x = float(x_mm)
+        self._last_click_y = float(y_mm)
+
+    def _is_text_double_click(self, page, entry, x_mm: float | None, y_mm: float | None) -> bool:
+        if x_mm is None or y_mm is None:
+            return False
+        previous_time = float(getattr(self, "_last_click_time", 0.0) or 0.0)
+        if previous_time <= 0.0:
+            return False
+        if time.monotonic() - previous_time > _TEXT_DOUBLE_CLICK_SECONDS:
+            return False
+        if str(getattr(page, "id", "") or "") != str(getattr(self, "_last_click_page_id", "") or ""):
+            return False
+        if str(getattr(entry, "id", "") or "") != str(getattr(self, "_last_click_text_id", "") or ""):
+            return False
+        distance = math.hypot(float(x_mm) - self._last_click_x, float(y_mm) - self._last_click_y)
+        return distance <= _TEXT_DOUBLE_CLICK_DISTANCE_MM
+
     def _modal_dragging(self, context, event):
         if event.type == "MOUSEMOVE":
             self._update_text_drag(context, event)
@@ -781,6 +830,7 @@ class BNAME_OT_text_tool(Operator):
             moved = bool(getattr(self, "_drag_moved", False))
             self._clear_drag_state()
             if moved:
+                self._clear_click_state()
                 self._push_undo_step("B-Name: テキスト移動/リサイズ")
                 layer_stack_utils.sync_layer_stack_after_data_change(context)
             else:
@@ -911,6 +961,7 @@ class BNAME_OT_text_tool(Operator):
         self._editing_created_new = False
         self._edit_original_body = ""
         self._clear_drag_state()
+        self._clear_click_state()
 
     def finish_from_external(self, context, *, keep_selection: bool) -> None:
         _ = keep_selection

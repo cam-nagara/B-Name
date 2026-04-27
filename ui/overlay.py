@@ -869,6 +869,7 @@ def _draw_page_overlay(
                 )
         overlay_text.draw_text_guides(
             page,
+            context=context,
             ox_mm=ox_mm,
             oy_mm=oy_mm,
             active=active_text_guides,
