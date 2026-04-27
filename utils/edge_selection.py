@@ -15,6 +15,30 @@ def tag_view3d_redraw(context) -> None:
                 pass
 
 
+def _sync_active_panel_stack_item(context, work, page, panel) -> None:
+    scene = getattr(context, "scene", None)
+    if scene is None or page is None or panel is None:
+        return
+    try:
+        from . import layer_stack as layer_stack_utils
+        from .layer_hierarchy import PANEL_KIND, panel_stack_key
+
+        if hasattr(scene, "bname_active_layer_kind"):
+            scene.bname_active_layer_kind = PANEL_KIND
+        if hasattr(scene, "bname_active_gp_folder_key"):
+            scene.bname_active_gp_folder_key = ""
+        stack = layer_stack_utils.sync_layer_stack(context, preserve_active_index=True)
+        uid = layer_stack_utils.target_uid(PANEL_KIND, panel_stack_key(page, panel))
+        if stack is not None:
+            for i, item in enumerate(stack):
+                if layer_stack_utils.stack_item_uid(item) == uid:
+                    layer_stack_utils.set_active_stack_index_silently(context, i)
+                    break
+        layer_stack_utils.remember_layer_stack_signature(context)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def set_selection(
     context,
     kind: str,
@@ -51,6 +75,7 @@ def set_selection(
                 page = work.pages[int(page_index)]
                 if 0 <= int(panel_index) < len(page.panels):
                     page.active_panel_index = int(panel_index)
+                    _sync_active_panel_stack_item(context, work, page, page.panels[int(panel_index)])
         except Exception:  # noqa: BLE001
             pass
     if sync_style and kind != "none":

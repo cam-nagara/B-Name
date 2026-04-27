@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import bpy
-from bpy.props import EnumProperty, IntProperty, StringProperty
+from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty
 from bpy.types import Menu, Operator
 from bpy_extras.io_utils import ImportHelper
 
@@ -964,6 +964,7 @@ class BNAME_OT_layer_stack_detail(Operator):
 
     index: IntProperty(default=-1)  # type: ignore[valid-type]
     uid: StringProperty(default="", options={"HIDDEN"})  # type: ignore[valid-type]
+    preserve_edge_selection: BoolProperty(default=False, options={"HIDDEN"})  # type: ignore[valid-type]
 
     @classmethod
     def poll(cls, context):
@@ -974,8 +975,10 @@ class BNAME_OT_layer_stack_detail(Operator):
         if stack is None or not (0 <= self.index < len(stack)):
             self.report({"ERROR"}, "詳細設定を開くレイヤーが見つかりません")
             return {"CANCELLED"}
+        edge_state = self._capture_edge_selection(context)
         self.uid = layer_stack_utils.stack_item_uid(stack[self.index])
         layer_stack_utils.select_stack_index(context, self.index)
+        self._restore_edge_selection_if_needed(context, stack[self.index], edge_state)
         layer_stack_utils.tag_view3d_redraw(context)
         return context.window_manager.invoke_props_dialog(self, width=520)
 
@@ -1016,6 +1019,45 @@ class BNAME_OT_layer_stack_detail(Operator):
         if 0 <= self.index < len(stack):
             return stack[self.index]
         return None
+
+    def _capture_edge_selection(self, context) -> tuple[str, int, int, int, int]:
+        wm = getattr(context, "window_manager", None)
+        if wm is None:
+            return ("none", -1, -1, -1, -1)
+        return (
+            str(getattr(wm, "bname_edge_select_kind", "none") or "none"),
+            int(getattr(wm, "bname_edge_select_page", -1)),
+            int(getattr(wm, "bname_edge_select_panel", -1)),
+            int(getattr(wm, "bname_edge_select_edge", -1)),
+            int(getattr(wm, "bname_edge_select_vertex", -1)),
+        )
+
+    def _restore_edge_selection_if_needed(self, context, item, edge_state) -> None:
+        if not bool(getattr(self, "preserve_edge_selection", False)):
+            return
+        if item.kind != PANEL_KIND:
+            return
+        kind, page_index, panel_index, edge_index, vertex_index = edge_state
+        if kind not in {"edge", "vertex", "border"}:
+            return
+        resolved = layer_stack_utils.resolve_stack_item(context, item)
+        if resolved is None:
+            return
+        if (
+            int(resolved.get("page_index", -2)) != page_index
+            or int(resolved.get("index", -2)) != panel_index
+        ):
+            return
+        from ..utils import edge_selection
+
+        edge_selection.set_selection(
+            context,
+            kind,
+            page_index=page_index,
+            panel_index=panel_index,
+            edge_index=edge_index,
+            vertex_index=vertex_index,
+        )
 
 
 _CLASSES = (
