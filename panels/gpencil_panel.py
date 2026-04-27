@@ -4,7 +4,7 @@
 - 作品全体で 1 つの master GP オブジェクト (bname_master_sketch)
 - 各レイヤーは複数ページに横断的に存在 (CSP のレイヤーパネル感覚)
 - 「ページ GP 一覧」は廃止 (master GP 1 つだけなので不要)
-- 選択中レイヤーの不透明度 / 線色 / 塗り色をレイヤーリスト下部で調整
+- レイヤー行の詳細設定ボタンから各種設定ダイアログを開く
 - マテリアルは内部実装として隠し、ユーザーにはレイヤー設定だけを見せる
 """
 
@@ -221,6 +221,18 @@ def _draw_right_lock(row, target, prop_name: str = "lock") -> None:
     )
 
 
+def _draw_detail_button(row, index: int) -> None:
+    cell = row.row(align=True)
+    cell.ui_units_x = 1.0
+    op = cell.operator(
+        "bname.layer_stack_detail",
+        text="",
+        icon="INFO",
+        emboss=False,
+    )
+    op.index = index
+
+
 def _draw_gp_color_swatches(row, obj, layer) -> None:
     mat = None
     try:
@@ -355,6 +367,7 @@ class BNAME_UL_layer_stack(UIList):
             _draw_stack_gp_row(left, right, item, resolved, index)
         else:
             _draw_stack_data_row(left, right, item, resolved, index)
+        _draw_detail_button(right, index)
 
 
 def _draw_gp_selected_settings(box, obj, active_layer) -> None:
@@ -635,49 +648,44 @@ def _draw_panel_selected_settings(box, context, entry) -> None:
     settings.prop(entry, "title", text="表示名")
     if hasattr(entry, "visible"):
         settings.prop(entry, "visible", text="表示")
-    row = settings.row(align=True)
-    row.prop(entry, "rect_x_mm", text="X")
-    row.prop(entry, "rect_y_mm", text="Y")
-    row = settings.row(align=True)
-    row.prop(entry, "rect_width_mm", text="幅")
-    row.prop(entry, "rect_height_mm", text="高さ")
     box.operator("bname.enter_panel_mode", text="コマ編集へ", icon="PLAY")
 
+    from . import panel_detail_panel
 
-def _draw_selected_stack_settings(box, context) -> bool:
-    scene = context.scene
-    stack = getattr(scene, "bname_layer_stack", None)
-    idx = int(getattr(scene, "bname_active_layer_stack_index", -1))
-    if stack is None or not (0 <= idx < len(stack)):
-        return False
-    item = stack[idx]
-    resolved = layer_stack_utils.resolve_stack_item(context, item)
+    shape_box = box.box()
+    shape_box.label(text="形状")
+    panel_detail_panel.draw_panel_shape_settings(shape_box, context, entry)
+
+    border_box = box.box()
+    border_box.label(text="枠線")
+    panel_detail_panel.draw_panel_border_settings(border_box, context, entry)
+
+    white_box = box.box()
+    white_box.label(text="白フチ")
+    panel_detail_panel.draw_panel_white_margin_settings(white_box, entry)
+
+
+def draw_stack_item_detail(layout, context, item, resolved) -> bool:
     if resolved is None or resolved.get("target") is None:
         return False
+    box = layout.box()
     kind = item.kind
     target = resolved["target"]
     obj = resolved.get("object")
     if kind == "page":
         _draw_page_selected_settings(box, context, target)
-        box.separator()
     elif kind == "panel":
         _draw_panel_selected_settings(box, context, target)
-        box.separator()
     elif kind == "gp":
         _draw_gp_selected_settings(box, obj, target)
-        box.separator()
     elif kind == "image":
         _draw_image_selected_settings(box, target)
-        box.separator()
     elif kind == "balloon":
         _draw_balloon_selected_settings(box, context, target)
-        box.separator()
     elif kind == "text":
         _draw_text_selected_settings(box, context, target)
-        box.separator()
     elif kind == "effect":
         _draw_effect_selected_settings(box, context, obj, target)
-        box.separator()
     elif kind == "gp_folder":
         box.label(text=f"選択中: {target.name} (フォルダ)", icon="FILE_FOLDER")
         box.prop(target, "name", text="名前")
@@ -685,7 +693,6 @@ def _draw_selected_stack_settings(box, context) -> bool:
             box.prop(target, "hide", text="非表示")
         if hasattr(target, "lock"):
             box.prop(target, "lock", text="ロック")
-        box.separator()
     return True
 
 
@@ -728,8 +735,6 @@ def _draw_layer_stack_box(layout, context) -> None:
         op.direction = "DOWN"
         op = col.operator("bname.layer_stack_move", text="", icon="TRIA_DOWN_BAR")
         op.direction = "BACK"
-
-    _draw_selected_stack_settings(box, context)
 
 
 class BNAME_PT_layer_stack(Panel):

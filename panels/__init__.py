@@ -74,6 +74,9 @@ def _unregister_legacy_tool_panels() -> None:
         "BNAME_UL_panels",
         "BNAME_PT_panels",
         "BNAME_PT_panel_tools",
+        "BNAME_PT_panel_shape",
+        "BNAME_PT_panel_border",
+        "BNAME_PT_panel_white_margin",
     ):
         cls = getattr(bpy.types, class_name, None)
         if cls is None:

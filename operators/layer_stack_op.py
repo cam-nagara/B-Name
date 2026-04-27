@@ -818,6 +818,67 @@ class BNAME_OT_layer_stack_enter_panel(Operator):
         return bpy.ops.bname.enter_panel_mode("EXEC_DEFAULT")
 
 
+class BNAME_OT_layer_stack_detail(Operator):
+    bl_idname = "bname.layer_stack_detail"
+    bl_label = "詳細設定"
+    bl_options = {"REGISTER"}
+
+    index: IntProperty(default=-1)  # type: ignore[valid-type]
+    uid: StringProperty(default="", options={"HIDDEN"})  # type: ignore[valid-type]
+
+    @classmethod
+    def poll(cls, context):
+        return getattr(context.scene, "bname_layer_stack", None) is not None
+
+    def invoke(self, context, _event):
+        stack = layer_stack_utils.sync_layer_stack(context, preserve_active_index=True)
+        if stack is None or not (0 <= self.index < len(stack)):
+            self.report({"ERROR"}, "詳細設定を開くレイヤーが見つかりません")
+            return {"CANCELLED"}
+        self.uid = layer_stack_utils.stack_item_uid(stack[self.index])
+        layer_stack_utils.select_stack_index(context, self.index)
+        layer_stack_utils.tag_view3d_redraw(context)
+        return context.window_manager.invoke_props_dialog(self, width=520)
+
+    def execute(self, context):
+        layer_stack_utils.tag_view3d_redraw(context)
+        return {"FINISHED"}
+
+    def check(self, context):
+        layer_stack_utils.tag_view3d_redraw(context)
+        return True
+
+    def draw(self, context):
+        layout = self.layout
+        stack = getattr(context.scene, "bname_layer_stack", None)
+        if stack is None:
+            layout.label(text="レイヤー一覧が未初期化です", icon="ERROR")
+            return
+        item = self._resolve_item(stack)
+        if item is None:
+            layout.label(text="レイヤーが見つかりません", icon="ERROR")
+            return
+        resolved = layer_stack_utils.resolve_stack_item(context, item)
+        try:
+            from ..panels import gpencil_panel
+
+            if not gpencil_panel.draw_stack_item_detail(layout, context, item, resolved):
+                layout.label(text="このレイヤーの詳細を表示できません", icon="ERROR")
+        except Exception as exc:  # noqa: BLE001
+            layout.label(text="詳細設定を描画できません", icon="ERROR")
+            layout.label(text=str(exc)[:80])
+        layer_stack_utils.tag_view3d_redraw(context)
+
+    def _resolve_item(self, stack):
+        if self.uid:
+            for item in stack:
+                if layer_stack_utils.stack_item_uid(item) == self.uid:
+                    return item
+        if 0 <= self.index < len(stack):
+            return stack[self.index]
+        return None
+
+
 _CLASSES = (
     BNAME_OT_layer_stack_select,
     BNAME_OT_layer_stack_move,
@@ -828,6 +889,7 @@ _CLASSES = (
     BNAME_OT_layer_stack_toggle_expanded,
     BNAME_OT_layer_stack_delete,
     BNAME_OT_layer_stack_enter_panel,
+    BNAME_OT_layer_stack_detail,
 )
 
 
