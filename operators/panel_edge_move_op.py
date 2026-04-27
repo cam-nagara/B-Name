@@ -791,10 +791,27 @@ class BNAME_OT_panel_edge_move(Operator):
             self.finish_from_external(context, keep_selection=True)
             return {"FINISHED"}
 
+        if (
+            event.value == "PRESS"
+            and event.type == "K"
+            and not event.ctrl
+            and not event.alt
+            and not event.shift
+        ):
+            if not self._is_inside_region(event):
+                return {"PASS_THROUGH"}
+            self.finish_from_external(context, keep_selection=True)
+            try:
+                with context.temp_override(area=self._area, region=self._region):
+                    bpy.ops.bname.layer_move_tool("INVOKE_DEFAULT")
+            except Exception:  # noqa: BLE001
+                _logger.exception("edge_move: failed to switch to layer_move")
+            return {"FINISHED"}
+
         # B-Name の他ツール/モード切替ショートカットで modal を終了して譲る
         if (
             event.value == "PRESS"
-            and event.type in {"O", "P", "COMMA", "PERIOD"}
+            and event.type in {"O", "P", "COMMA", "PERIOD", "Z", "X"}
             and not event.ctrl
             and not event.alt
         ):

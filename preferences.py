@@ -245,9 +245,10 @@ class BNamePreferences(bpy.types.AddonPreferences):
         kbox.separator()
         info = kbox.column(align=True)
         info.scale_y = 0.85
-        info.label(text="キー名は Blender のイベント名 (例: SPACE, O, P, COMMA, PERIOD, A〜Z, F1〜F12)", icon="INFO")
+        info.label(text="キー名は Blender のイベント名 (例: SPACE, O, P, COMMA, PERIOD, F1〜F12)", icon="INFO")
         info.label(text="ナビゲートのモード切替はキー押下中の Shift=回転 / Ctrl=ズーム (固定)")
-        info.label(text="ズーム中の LMB クリック=25%イン / Alt+LMB クリック=25%アウト (固定)")
+        info.label(text="B-Name使用中は Z=Undo / X=Redo (固定)")
+        info.label(text="ズーム中の LMB クリック=40%イン / Alt+LMB クリック=40%アウト (固定)")
         info.label(text="描画モード中: Space=ナビゲート / C=ブラシシェルフ表示切替 (Blender既定の入れ替え)")
 
         box = layout.box()

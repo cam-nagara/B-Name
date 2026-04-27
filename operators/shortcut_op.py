@@ -5,6 +5,9 @@ Preferences でキー割当を変更可能なショートカット:
 - bname.set_mode_draw    : P 既定 → アクティブ GP を Draw モードへ
 - bname.page_next        : COMMA 既定 → 次のページへフォーカス
 - bname.page_prev        : PERIOD 既定 → 前のページへフォーカス
+- bname.undo             : Z → Undo
+- bname.redo             : X → Redo
+- bname.toggle_eraser_brush : E → Eraser Hard / Eraser Stroke 切替
 """
 
 from __future__ import annotations
@@ -23,6 +26,28 @@ from ..utils.page_grid import (
 )
 
 _logger = log.get_logger(__name__)
+
+_GP_ERASER_HARD_ASSET = (
+    "brushes/essentials_brushes-gp_draw.blend/Brush/Eraser Hard"
+)
+_GP_ERASER_STROKE_ASSET = (
+    "brushes/essentials_brushes-gp_draw.blend/Brush/Eraser Stroke"
+)
+
+
+def _bname_work_loaded(context) -> bool:
+    work = get_work(context)
+    return bool(work is not None and work.loaded)
+
+
+def _active_gp_paint_brush(context):
+    obj = context.view_layer.objects.active if context.view_layer else None
+    if obj is None or getattr(obj, "type", "") != "GREASEPENCIL":
+        return None
+    if getattr(obj, "mode", "") != "PAINT_GREASE_PENCIL":
+        return None
+    paint = getattr(context.tool_settings, "gpencil_paint", None)
+    return getattr(paint, "brush", None) if paint is not None else None
 
 
 # ---------- モード切替 ----------
@@ -200,6 +225,106 @@ class BNAME_OT_page_prev(Operator):
         work.active_page_index = new_idx
         _focus_view_to_page(context, work, new_idx)
         return {"FINISHED"}
+
+
+class BNAME_OT_undo(Operator):
+    """B-Name 有効時の単独 Z: Undo."""
+
+    bl_idname = "bname.undo"
+    bl_label = "戻る"
+    bl_options = {"REGISTER"}
+
+    def _run(self, context):
+        if not bpy.ops.ed.undo.poll():
+            return {"CANCELLED"}
+        try:
+            result = bpy.ops.ed.undo()
+        except Exception as exc:  # noqa: BLE001
+            _logger.exception("bname undo failed")
+            self.report({"WARNING"}, f"Undo失敗: {exc}")
+            return {"CANCELLED"}
+        return {"FINISHED"} if "FINISHED" in result else {"CANCELLED"}
+
+    def invoke(self, context, event):
+        if not _bname_work_loaded(context):
+            return {"PASS_THROUGH"}
+        return self._run(context)
+
+    def execute(self, context):
+        if not _bname_work_loaded(context):
+            return {"CANCELLED"}
+        return self._run(context)
+
+
+class BNAME_OT_redo(Operator):
+    """B-Name 有効時の単独 X: Redo."""
+
+    bl_idname = "bname.redo"
+    bl_label = "進む"
+    bl_options = {"REGISTER"}
+
+    def _run(self, context):
+        if not bpy.ops.ed.redo.poll():
+            return {"CANCELLED"}
+        try:
+            result = bpy.ops.ed.redo()
+        except Exception as exc:  # noqa: BLE001
+            _logger.exception("bname redo failed")
+            self.report({"WARNING"}, f"Redo失敗: {exc}")
+            return {"CANCELLED"}
+        return {"FINISHED"} if "FINISHED" in result else {"CANCELLED"}
+
+    def invoke(self, context, event):
+        if not _bname_work_loaded(context):
+            return {"PASS_THROUGH"}
+        return self._run(context)
+
+    def execute(self, context):
+        if not _bname_work_loaded(context):
+            return {"CANCELLED"}
+        return self._run(context)
+
+
+class BNAME_OT_toggle_eraser_brush(Operator):
+    """B-Name GP描画時の単独 E: Eraser Hard / Eraser Stroke を切替."""
+
+    bl_idname = "bname.toggle_eraser_brush"
+    bl_label = "消しゴム切替"
+    bl_options = {"REGISTER"}
+
+    def _run(self, context):
+        brush = _active_gp_paint_brush(context)
+        if brush is None:
+            return {"CANCELLED"}
+        current_name = getattr(brush, "name", "")
+        next_asset = (
+            _GP_ERASER_STROKE_ASSET
+            if current_name == "Eraser Hard"
+            else _GP_ERASER_HARD_ASSET
+        )
+        try:
+            result = bpy.ops.brush.asset_activate(
+                asset_library_type="ESSENTIALS",
+                relative_asset_identifier=next_asset,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _logger.exception("toggle_eraser_brush failed")
+            self.report({"WARNING"}, f"消しゴム切替失敗: {exc}")
+            return {"CANCELLED"}
+        return {"FINISHED"} if "FINISHED" in result else {"CANCELLED"}
+
+    def invoke(self, context, event):
+        if not _bname_work_loaded(context):
+            return {"PASS_THROUGH"}
+        brush = _active_gp_paint_brush(context)
+        if brush is None:
+            return {"PASS_THROUGH"}
+        return self._run(context)
+
+    def execute(self, context):
+        if not _bname_work_loaded(context):
+            return {"CANCELLED"}
+        return self._run(context)
 
 
 class BNAME_OT_toggle_lasso_tool(Operator):
@@ -394,7 +519,7 @@ class BNAME_OT_gp_paste_to_new_layer(Operator):
 
 
 class BNAME_OT_toggle_asset_shelf(Operator):
-    """3D View のアセットシェルフ表示をトグル.
+    """3D View のブラシアセットシェルフをカーソル位置に表示.
 
     Blender 5.x の Grease Pencil 描画モードで Space に既定割り当てされている
     ブラシ Asset Shelf を、C キー側に移すための wrapper。
@@ -403,6 +528,67 @@ class BNAME_OT_toggle_asset_shelf(Operator):
     bl_idname = "bname.toggle_asset_shelf"
     bl_label = "アセットシェルフ表示切替"
     bl_options = {"REGISTER"}
+
+    @staticmethod
+    def _shelf_name_from_context(context) -> str | None:
+        mode_map = {
+            "SCULPT": "VIEW3D_AST_brush_sculpt",
+            "PAINT_VERTEX": "VIEW3D_AST_brush_vertex_paint",
+            "PAINT_WEIGHT": "VIEW3D_AST_brush_weight_paint",
+            "PAINT_TEXTURE": "VIEW3D_AST_brush_texture_paint",
+            "PAINT_GREASE_PENCIL": "VIEW3D_AST_brush_gpencil_paint",
+            "SCULPT_GREASE_PENCIL": "VIEW3D_AST_brush_gpencil_sculpt",
+            "WEIGHT_GREASE_PENCIL": "VIEW3D_AST_brush_gpencil_weight",
+            "VERTEX_GREASE_PENCIL": "VIEW3D_AST_brush_gpencil_vertex",
+        }
+        mode = getattr(context, "mode", "")
+        if mode in mode_map:
+            return mode_map[mode]
+        obj = getattr(context, "object", None)
+        obj_mode = getattr(obj, "mode", "")
+        if obj_mode == "PAINT_GREASE_PENCIL":
+            return "VIEW3D_AST_brush_gpencil_paint"
+        if obj_mode == "SCULPT_GREASE_PENCIL":
+            return "VIEW3D_AST_brush_gpencil_sculpt"
+        if obj_mode == "WEIGHT_GREASE_PENCIL":
+            return "VIEW3D_AST_brush_gpencil_weight"
+        if obj_mode == "VERTEX_GREASE_PENCIL":
+            return "VIEW3D_AST_brush_gpencil_vertex"
+        return None
+
+    @staticmethod
+    def _find_view3d_area_region(context):
+        area = context.area if context.area and context.area.type == "VIEW_3D" else None
+        if area is None and context.screen is not None:
+            for candidate in context.screen.areas:
+                if candidate.type == "VIEW_3D":
+                    area = candidate
+                    break
+        if area is None:
+            return None, None
+        region = context.region if context.region and context.region.type == "WINDOW" else None
+        if region is None:
+            for candidate in area.regions:
+                if candidate.type == "WINDOW":
+                    region = candidate
+                    break
+        return area, region
+
+    def invoke(self, context, event):
+        shelf_name = self._shelf_name_from_context(context)
+        area, region = self._find_view3d_area_region(context)
+        if shelf_name and area is not None and region is not None:
+            try:
+                with context.temp_override(area=area, region=region):
+                    result = bpy.ops.wm.call_asset_shelf_popover(
+                        "INVOKE_DEFAULT",
+                        name=shelf_name,
+                    )
+                if "FINISHED" in result:
+                    return {"FINISHED"}
+            except Exception:  # noqa: BLE001
+                _logger.exception("toggle_asset_shelf: popup failed")
+        return self.execute(context)
 
     def execute(self, context):
         area = context.area
@@ -444,6 +630,9 @@ _CLASSES = (
     BNAME_OT_set_mode_draw,
     BNAME_OT_page_next,
     BNAME_OT_page_prev,
+    BNAME_OT_undo,
+    BNAME_OT_redo,
+    BNAME_OT_toggle_eraser_brush,
     BNAME_OT_toggle_asset_shelf,
     BNAME_OT_toggle_lasso_tool,
     BNAME_OT_gp_cut_to_new_layer,

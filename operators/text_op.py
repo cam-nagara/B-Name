@@ -338,7 +338,7 @@ class BNAME_OT_text_tool(Operator):
             return {"FINISHED"}
         if (
             event.value == "PRESS"
-            and event.type in {"O", "P", "F", "G", "COMMA", "PERIOD"}
+            and event.type in {"O", "P", "F", "G", "K", "COMMA", "PERIOD", "Z", "X"}
             and not event.ctrl
             and not event.alt
         ):

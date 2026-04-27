@@ -101,36 +101,19 @@ def _gp_hidden(target) -> bool:
 def _select_icon(row, index: int, icon: str) -> None:
     cell = row.row(align=True)
     cell.ui_units_x = 1.0
-    op = cell.operator(
-        "bname.layer_stack_select",
-        text="",
-        icon=icon,
-        emboss=False,
-    )
-    op.index = index
+    cell.label(text="", icon=icon)
 
 
 def _select_name(row, index: int, text: str) -> None:
     cell = row.row(align=True)
     cell.alignment = "LEFT"
-    op = cell.operator(
-        "bname.layer_stack_select",
-        text=text or "",
-        emboss=False,
-    )
-    op.index = index
+    cell.label(text=text or "")
 
 
 def _select_icon_name(row, index: int, text: str, icon: str) -> None:
     cell = row.row(align=True)
     cell.alignment = "LEFT"
-    op = cell.operator(
-        "bname.layer_stack_select",
-        text=text or "",
-        icon=icon,
-        emboss=False,
-    )
-    op.index = index
+    cell.label(text=text or "", icon=icon)
 
 
 def _visibility_button(row, index: int, hidden: bool) -> None:
@@ -171,12 +154,17 @@ def _draw_selection_slot(row, index: int, active: bool) -> None:
     _select_icon(row, index, "RADIOBUT_ON" if active else "RADIOBUT_OFF")
 
 
-def _draw_drag_handle(row) -> None:
+def _draw_drag_handle(row, index: int) -> None:
     cell = row.row(align=True)
-    cell.ui_units_x = 1.0
-    # UIList の標準D&Dは、行内の非ボタン領域から始める必要がある。
-    # ここを operator にすると Blender 側でドラッグ開始イベントがボタンに吸われる。
-    cell.label(text="", icon="GRIP")
+    cell.ui_units_x = 1.35
+    cell.operator_context = "INVOKE_DEFAULT"
+    op = cell.operator(
+        "bname.layer_stack_drag",
+        text="",
+        icon="GRIP",
+        emboss=False,
+    )
+    op.index = index
 
 
 def _draw_hierarchy_slot(row, item, target, index: int) -> None:
@@ -386,7 +374,7 @@ class BNAME_UL_layer_stack(UIList):
         active = int(getattr(context.scene, "bname_active_layer_stack_index", -1)) == index
         resolved = layer_stack_utils.resolve_stack_item(context, item)
         target = resolved.get("target") if resolved is not None else None
-        _draw_drag_handle(row)
+        _draw_drag_handle(row, index)
         _draw_visibility_slot(row, item, target, index)
         _draw_selection_slot(row, index, active)
         _draw_hierarchy_slot(row, item, target, index)
@@ -757,6 +745,7 @@ def _draw_layer_stack_box(layout, context) -> None:
             scene,
             "bname_active_layer_stack_index",
             rows=8,
+            sort_lock=False,
         )
         col = row.column(align=True)
         add_menu = col.operator("wm.call_menu", text="", icon="ADD")

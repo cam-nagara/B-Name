@@ -202,7 +202,9 @@ class KeymapState:
         """Grease Pencil Paint / Edit モードキーマップに先取り登録.
 
         - Space → bname.view_navigate (ブラシ Asset Shelf の先取り)
-        - C     → bname.toggle_asset_shelf (元の機能を C 側に移設)
+        - C     → wm.call_asset_shelf_popover (元の機能を C 側に移設)
+        - E     → bname.toggle_eraser_brush (Eraser Hard / Stroke 切替)
+        - K     → bname.layer_move_tool (レイヤー移動ツール)
         - Ctrl+Alt+LMB → bname.brush_size_drag (ブラシサイズ調整)
         - L     → bname.toggle_lasso_tool (投げ縄 ⇔ Box トグル)
         - Ctrl+X → bname.gp_cut_to_new_layer (Paste で新レイヤー化フラグを立てる)
@@ -225,11 +227,30 @@ class KeymapState:
                     f"[B-Name][KEYMAP] + {idname} ({km_name}) {key}"
                     f" shift={kmi.shift} ctrl={kmi.ctrl} alt={kmi.alt}"
                 )
+                return kmi
             except Exception as exc:  # noqa: BLE001
                 print(f"[B-Name][KEYMAP] {km_name} {key} override failed: {exc!r}")
+                return None
 
         _add("bname.view_navigate", nav_key)
-        _add("bname.toggle_asset_shelf", "C")
+        shelf_name = None
+        if "Weight" in km_name:
+            shelf_name = "VIEW3D_AST_brush_gpencil_weight"
+        elif "Vertex" in km_name:
+            shelf_name = "VIEW3D_AST_brush_gpencil_vertex"
+        elif "Draw" in km_name or "Paint" in km_name:
+            shelf_name = "VIEW3D_AST_brush_gpencil_paint"
+        if shelf_name is not None:
+            kmi = _add("wm.call_asset_shelf_popover", "C")
+            if kmi is not None:
+                try:
+                    kmi.properties.name = shelf_name
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[B-Name][KEYMAP] set asset shelf name failed: {exc!r}")
+        else:
+            _add("bname.toggle_asset_shelf", "C")
+        _add("bname.toggle_eraser_brush", "E")
+        _add("bname.layer_move_tool", "K")
         _add("bname.brush_size_drag", "LEFTMOUSE", ctrl=True, alt=True)
         _add("bname.toggle_lasso_tool", "L")
         _add("bname.gp_cut_to_new_layer", "X", ctrl=True)
@@ -270,15 +291,19 @@ class KeymapState:
             except Exception as exc:  # noqa: BLE001
                 print(f"[B-Name][KEYMAP] window override {label}+{nav_key} failed: {exc!r}")
 
-        # F/G/T → B-Name ツール (Window kc に登録して
+        # Z/X → Undo/Redo、E → 消しゴム切替、F/G/K/T → B-Name ツール (Window kc に登録して
         # 他アドオンに先取りさせる)。
         # 注: exit_panel_mode の Esc は 3D View kc のみに限定し、Window kc には
         # 登録しない。Window kc に Esc を載せると Outliner / Image Editor 等の
         # area で MODE_PANEL 中に Esc を押した際、本来期待される area 固有の
         # cancel 動作 (検索キャンセル等) を奪ってしまうため。
         for op_id, key in (
+            ("bname.undo", "Z"),
+            ("bname.redo", "X"),
+            ("bname.toggle_eraser_brush", "E"),
             ("bname.panel_knife_cut", "F"),
             ("bname.panel_edge_move", "G"),
+            ("bname.layer_move_tool", "K"),
             ("bname.text_tool", "T"),
         ):
             try:
@@ -346,8 +371,15 @@ class KeymapState:
         _add("bname.panel_knife_cut", "F")
         # G → 枠線選択ツール
         _add("bname.panel_edge_move", "G")
+        # K → レイヤー移動ツール
+        _add("bname.layer_move_tool", "K")
         # T → テキストツール
         _add("bname.text_tool", "T")
+        # Z / X → Undo / Redo (B-Name work が開かれている時だけ実行)
+        _add("bname.undo", "Z")
+        _add("bname.redo", "X")
+        # E → Eraser Hard / Eraser Stroke 切替 (GP描画中のみ実行)
+        _add("bname.toggle_eraser_brush", "E")
         # Esc → コマ編集モードを抜けて全ページ一覧 (work.blend) に戻る
         # poll が MODE_PANEL を要求するため、紙面編集モード中は Blender 既定の
         # Esc 動作が走り (kmi が match しても poll で skip される)、干渉しない。
@@ -413,15 +445,15 @@ class KeymapState:
     # ---------- 衝突キー無効化 (他アドオン対策) ----------
 
     # B-Name が単独修飾なしで予約するキー (他アドオンに奪われる対象)
-    _BNAME_RESERVED_SINGLE_KEYS: tuple[str, ...] = ("F", "G", "T")
+    _BNAME_RESERVED_SINGLE_KEYS: tuple[str, ...] = ("F", "G", "K", "T")
 
     def disable_conflicting_keys(self) -> int:
-        """他アドオンが addon kc に登録した F / G の単独キー kmi を無効化.
+        """他アドオンが addon kc に登録した B-Name 予約単独キー kmi を無効化.
 
         Fluent 等の addon が同じキーを別 keymap (例: "Mesh", "Object Mode") に
         登録している場合、Blender はその kmi を B-Name の "3D View" / "Window"
         kmi より先に評価し、B-Name のショートカットが発火しない。
-        ここで addon kc 全体を走査し、B-Name 以外で type ∈ {F, G} かつ修飾なしの
+        ここで addon kc 全体を走査し、B-Name 以外で予約キーかつ修飾なしの
         active な kmi を無効化する。退避情報は ``self.saved_conflicts`` に保存し、
         unregister 時に元の active 状態へ復元する。
 
@@ -437,6 +469,7 @@ class KeymapState:
         bname_idnames = {
             "bname.panel_knife_cut",
             "bname.panel_edge_move",
+            "bname.layer_move_tool",
             "bname.text_tool",
             "bname.exit_panel_mode",
         }
@@ -483,7 +516,7 @@ class KeymapState:
                 except (ReferenceError, AttributeError):
                     continue
         if disabled > 0:
-            _logger.info("disabled %d conflicting addon kc kmis (F/G)", disabled)
+            _logger.info("disabled %d conflicting addon kc kmis", disabled)
         return disabled
 
     def restore_conflicting_keys(self) -> None:

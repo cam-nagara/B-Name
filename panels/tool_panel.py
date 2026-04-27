@@ -59,6 +59,7 @@ class BNAME_PT_tools(Panel):
         op.mode = "EDIT"
 
         row.separator()
+        row.operator_context = "INVOKE_DEFAULT"
         row.operator(
             "bname.panel_knife_cut",
             text="",

@@ -142,9 +142,9 @@ class BNAME_OT_view_navigate(Operator):
     bl_options = {"REGISTER"}
 
     # ズームの感度 (1px ドラッグあたりの log スケール).
-    # 0.006 だと 1px 動くだけで 0.6% ズームし、マウスの 1px ジッターでも
-    # 目に見える震えになっていた。0.003 + デッドゾーンでブレを抑える。
-    _ZOOM_SENSITIVITY = 0.003
+    # デッドゾーンで起点周辺の手ブレを吸収しつつ、CSP 風に少ない移動量で
+    # 大きく倍率が変わるようにする。
+    _ZOOM_SENSITIVITY = 0.006
     # この px 数未満の dx は無視 (ズーム開始位置周辺の手ブレ抑制)
     _ZOOM_DEADZONE_PX = 3.0
     # ダブルクリック判定の最大間隔 (秒). modal 中は Blender が
@@ -153,8 +153,8 @@ class BNAME_OT_view_navigate(Operator):
     # クリック判定の最大移動距離 (px). PRESS から RELEASE までこれ以下
     # しか動かなければ「クリック」、それを超えればドラッグ扱い。
     _CLICK_MAX_TRAVEL_PX = 4.0
-    # ズームモード時のクリックステップ倍率 (25%)
-    _ZOOM_CLICK_STEP = 1.25
+    # ズームモード時のクリックステップ倍率 (40%)
+    _ZOOM_CLICK_STEP = 1.4
 
     def invoke(self, context, event):
         print(
@@ -454,8 +454,8 @@ class BNAME_OT_view_navigate(Operator):
     def _step_zoom_at_press(self, direction: str) -> None:
         """LMB クリック (動かさず離した) でステップズーム.
 
-        - direction "IN":  view_distance を 1/_ZOOM_CLICK_STEP (= 約 -12.5%)
-        - direction "OUT": view_distance を *_ZOOM_CLICK_STEP (= 約 +12.5%)
+        - direction "IN":  view_distance を 1/_ZOOM_CLICK_STEP (= 約 -29%)
+        - direction "OUT": view_distance を *_ZOOM_CLICK_STEP (= 約 +40%)
 
         ピボットは PRESS 位置 (self._press_mx/my) を維持。
         """

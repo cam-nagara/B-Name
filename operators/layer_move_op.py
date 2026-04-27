@@ -119,6 +119,7 @@ class BNAME_OT_layer_move_tool(Operator):
     _target: dict | None
     _snapshots: list[tuple[str, object, object]]
     _dragging: bool
+    _moved: bool
     _externally_finished: bool
     _cursor_modal_set: bool
 
@@ -129,26 +130,22 @@ class BNAME_OT_layer_move_tool(Operator):
 
     def invoke(self, context, event):
         if panel_modal_state.get_active("layer_move") is not None:
-            panel_modal_state.finish_active("layer_move", context, keep_selection=True)
+            # レイヤー移動ツールは選択式ツールとして扱う。同じボタン/キーを
+            # 再度押しても解除せず、他ツール切替または ESC/RMB まで維持する。
             return {"FINISHED"}
-        item = layer_stack_utils.active_stack_item(context)
-        resolved = layer_stack_utils.resolve_stack_item(context, item)
-        if item is None or resolved is None or resolved.get("target") is None:
-            self.report({"WARNING"}, "移動するレイヤーを選択してください")
-            return {"CANCELLED"}
         panel_modal_state.finish_active("knife_cut", context, keep_selection=False)
         panel_modal_state.finish_active("edge_move", context, keep_selection=True)
         panel_modal_state.finish_active("text_tool", context, keep_selection=True)
-        coords = panel_picker._event_world_mm(context, event)
-        self._last_world = coords
-        self._target = resolved
+        self._last_world = None
+        self._target = None
         self._snapshots = []
-        self._dragging = coords is not None and event.type == "LEFTMOUSE"
-        self._capture_snapshot(item.kind, resolved)
+        self._dragging = False
+        self._moved = False
         self._externally_finished = False
         self._cursor_modal_set = panel_modal_state.set_modal_cursor(context, "SCROLL_XY")
         context.window_manager.modal_handler_add(self)
         panel_modal_state.set_active("layer_move", self, context)
+        self.report({"INFO"}, "レイヤー移動ツール: ビューポート上でドラッグ")
         return {"RUNNING_MODAL"}
 
     def modal(self, context, event):
@@ -202,7 +199,15 @@ class BNAME_OT_layer_move_tool(Operator):
             return {"FINISHED"}
         if (
             event.value == "PRESS"
-            and event.type in {"O", "P", "COMMA", "PERIOD"}
+            and event.type == "K"
+            and not event.ctrl
+            and not event.alt
+            and not event.shift
+        ):
+            return {"RUNNING_MODAL"}
+        if (
+            event.value == "PRESS"
+            and event.type in {"O", "P", "COMMA", "PERIOD", "Z", "X"}
             and not event.ctrl
             and not event.alt
         ):
@@ -220,17 +225,22 @@ class BNAME_OT_layer_move_tool(Operator):
             coords = panel_picker._event_world_mm(context, event)
             if coords is None:
                 return {"PASS_THROUGH"}
-            self._last_world = coords
-            self._dragging = True
+            if not self._begin_drag(context, coords):
+                return {"RUNNING_MODAL"}
             return {"RUNNING_MODAL"}
         if event.type == "LEFTMOUSE" and event.value == "RELEASE":
             if not self._dragging and panel_picker._event_world_mm(context, event) is None:
                 return {"PASS_THROUGH"}
             if self._dragging:
-                layer_stack_utils.sync_layer_stack(context)
-                self._cleanup(context)
-                panel_modal_state.clear_active("layer_move", self, context)
-                return {"FINISHED"}
+                if self._moved:
+                    self._push_undo_step()
+                    layer_stack_utils.sync_layer_stack(context)
+                self._target = None
+                self._snapshots = []
+                self._last_world = None
+                self._dragging = False
+                self._moved = False
+                return {"RUNNING_MODAL"}
             return {"RUNNING_MODAL"}
         if event.type != "MOUSEMOVE":
             return {"RUNNING_MODAL"}
@@ -243,10 +253,31 @@ class BNAME_OT_layer_move_tool(Operator):
             return {"RUNNING_MODAL"}
         if self._apply_delta(context, dx, dy):
             self._last_world = coords
+            self._moved = True
             layer_stack_utils.apply_stack_order(context)
             page_grid.apply_page_collection_transforms(context, get_work(context))
             layer_stack_utils.tag_view3d_redraw(context)
         return {"RUNNING_MODAL"}
+
+    def _begin_drag(self, context, coords: tuple[float, float]) -> bool:
+        item = layer_stack_utils.active_stack_item(context)
+        resolved = layer_stack_utils.resolve_stack_item(context, item)
+        if item is None or resolved is None or resolved.get("target") is None:
+            self.report({"WARNING"}, "移動するレイヤーを選択してください")
+            return False
+        self._target = resolved
+        self._snapshots = []
+        self._capture_snapshot(item.kind, resolved)
+        self._last_world = coords
+        self._dragging = True
+        self._moved = False
+        return True
+
+    def _push_undo_step(self) -> None:
+        try:
+            bpy.ops.ed.undo_push(message="B-Name: レイヤー移動")
+        except Exception:  # noqa: BLE001
+            pass
 
     def _cleanup(self, context) -> None:
         if getattr(self, "_cursor_modal_set", False):

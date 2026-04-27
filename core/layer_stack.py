@@ -42,6 +42,7 @@ class BNameLayerStackItem(bpy.types.PropertyGroup):
     """
 
     kind: EnumProperty(name="種別", items=LAYER_KIND_ITEMS, default="gp")  # type: ignore[valid-type]
+    name: StringProperty(name="名前", default="")  # type: ignore[valid-type]
     key: StringProperty(name="参照キー", default="")  # type: ignore[valid-type]
     label: StringProperty(name="表示名", default="")  # type: ignore[valid-type]
     parent_key: StringProperty(name="親キー", default="")  # type: ignore[valid-type]

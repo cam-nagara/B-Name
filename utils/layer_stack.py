@@ -241,6 +241,7 @@ def collect_targets(context) -> list[LayerTarget]:
 
 def _set_item_from_target(item, target: LayerTarget) -> None:
     item.kind = target.kind
+    item.name = target.label
     item.key = target.key
     item.label = target.label
     item.parent_key = target.parent_key
@@ -476,6 +477,76 @@ def _find_stack_item(stack, kind: str, key: str):
         if getattr(item, "kind", "") == kind and getattr(item, "key", "") == key:
             return item
     return None
+
+
+def _same_move_scope(a, b) -> bool:
+    """右側の順序ボタンで同じ移動単位として扱える行かを返す."""
+    a_kind = getattr(a, "kind", "")
+    b_kind = getattr(b, "kind", "")
+    if a_kind == PAGE_KIND or b_kind == PAGE_KIND:
+        return a_kind == b_kind == PAGE_KIND
+    if a_kind == PANEL_KIND or b_kind == PANEL_KIND:
+        return (
+            a_kind == b_kind == PANEL_KIND
+            and split_child_key(getattr(a, "key", ""))[0]
+            == split_child_key(getattr(b, "key", ""))[0]
+        )
+    if a_kind in {"gp", "gp_folder"} or b_kind in {"gp", "gp_folder"}:
+        return (
+            a_kind in {"gp", "gp_folder"}
+            and b_kind in {"gp", "gp_folder"}
+            and str(getattr(a, "parent_key", "") or "")
+            == str(getattr(b, "parent_key", "") or "")
+        )
+    return (
+        a_kind == b_kind
+        and str(getattr(a, "parent_key", "") or "")
+        == str(getattr(b, "parent_key", "") or "")
+    )
+
+
+def _move_scope_indices(stack, item) -> list[int]:
+    return [i for i, candidate in enumerate(stack) if _same_move_scope(item, candidate)]
+
+
+def _direction_from_target_index(from_index: int, to_index: int, stack_len: int) -> str:
+    if to_index <= 0:
+        return "FRONT"
+    if to_index >= stack_len - 1:
+        return "BACK"
+    return "UP" if to_index < from_index else "DOWN"
+
+
+def _target_index_for_stack_move(
+    stack,
+    from_index: int,
+    to_index: int | None = None,
+    direction: str = "",
+) -> int:
+    if stack is None or not (0 <= from_index < len(stack)):
+        return -1
+    if not direction:
+        if to_index is None:
+            return -1
+        direction = _direction_from_target_index(from_index, int(to_index), len(stack))
+    direction = str(direction or "").upper()
+    siblings = _move_scope_indices(stack, stack[from_index])
+    if from_index not in siblings:
+        return -1
+    pos = siblings.index(from_index)
+    if direction == "FRONT":
+        target_pos = 0
+    elif direction == "BACK":
+        target_pos = len(siblings) - 1
+    elif direction == "UP":
+        target_pos = pos - 1
+    elif direction == "DOWN":
+        target_pos = pos + 1
+    else:
+        return -1
+    if not (0 <= target_pos < len(siblings)):
+        return -1
+    return siblings[target_pos]
 
 
 def _gp_parent_key_from_flat_drop(stack, moved_index: int) -> str:
@@ -963,22 +1034,33 @@ def select_stack_index(context, index: int) -> bool:
     return True
 
 
-def move_stack_item(context, from_index: int, to_index: int) -> bool:
+def move_stack_item(
+    context,
+    from_index: int,
+    to_index: int | None = None,
+    *,
+    direction: str = "",
+) -> bool:
     stack = sync_layer_stack(context, preserve_active_index=True)
     if stack is None or len(stack) == 0:
         return False
-    to_index = max(0, min(to_index, len(stack) - 1))
-    if not (0 <= from_index < len(stack)) or from_index == to_index:
+    if not (0 <= from_index < len(stack)):
+        return False
+    target_index = _target_index_for_stack_move(stack, from_index, to_index, direction)
+    if target_index < 0 or from_index == target_index:
         return False
     moved_uid = stack_item_uid(stack[from_index])
-    stack.move(from_index, to_index)
-    context.scene.bname_active_layer_stack_index = to_index
+    stack.move(from_index, target_index)
+    moved_index = _find_stack_index_by_uid(stack, moved_uid)
+    if moved_index >= 0:
+        context.scene.bname_active_layer_stack_index = moved_index
     apply_stack_order(context)
     sync_layer_stack(context, preserve_active_index=True)
     for i, item in enumerate(context.scene.bname_layer_stack):
         if stack_item_uid(item) == moved_uid:
             select_stack_index(context, i)
             break
+    remember_layer_stack_signature(context)
     return True
 
 

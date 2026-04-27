@@ -300,17 +300,135 @@ class BNAME_OT_layer_stack_move(Operator):
         idx = int(getattr(context.scene, "bname_active_layer_stack_index", -1))
         if not (0 <= idx < len(stack)):
             return {"CANCELLED"}
-        if self.direction == "FRONT":
-            new_idx = 0
-        elif self.direction == "BACK":
-            new_idx = len(stack) - 1
-        elif self.direction == "UP":
-            new_idx = idx - 1
-        else:
-            new_idx = idx + 1
-        if not layer_stack_utils.move_stack_item(context, idx, new_idx):
+        if not layer_stack_utils.move_stack_item(context, idx, direction=self.direction):
             return {"CANCELLED"}
         return {"FINISHED"}
+
+
+class BNAME_OT_layer_stack_drag(Operator):
+    bl_idname = "bname.layer_stack_drag"
+    bl_label = "レイヤーをドラッグ移動"
+    bl_options = {"REGISTER", "UNDO", "BLOCKING"}
+
+    index: IntProperty(default=-1)  # type: ignore[valid-type]
+
+    _moved_uid: str
+    _initial_order: tuple[str, ...]
+    _start_y: float
+    _row_height: float
+    _current_index: int
+    _dragged: bool
+
+    @classmethod
+    def poll(cls, context):
+        stack = getattr(context.scene, "bname_layer_stack", None)
+        return stack is not None and len(stack) > 0
+
+    def invoke(self, context, event):
+        stack = layer_stack_utils.sync_layer_stack(context, preserve_active_index=True)
+        if stack is None or not (0 <= self.index < len(stack)):
+            return {"CANCELLED"}
+        self._moved_uid = layer_stack_utils.stack_item_uid(stack[self.index])
+        self._initial_order = tuple(layer_stack_utils.stack_item_uid(item) for item in stack)
+        self._start_y = float(getattr(event, "mouse_region_y", 0.0))
+        self._row_height = self._estimate_row_height(context)
+        self._current_index = self.index
+        self._dragged = False
+        context.scene.bname_active_layer_stack_index = self.index
+        layer_stack_utils.remember_layer_stack_signature(context)
+        context.window_manager.modal_handler_add(self)
+        self._tag_ui_redraw(context)
+        return {"RUNNING_MODAL"}
+
+    def modal(self, context, event):
+        if event.type in {"ESC", "RIGHTMOUSE"} and event.value == "PRESS":
+            self._restore_initial_order(context)
+            self._finish(context, apply_order=True)
+            return {"CANCELLED"}
+        if event.type == "MOUSEMOVE":
+            self._drag_to_event(context, event)
+            return {"RUNNING_MODAL"}
+        if event.type == "LEFTMOUSE" and event.value == "RELEASE":
+            self._finish(context, apply_order=True)
+            return {"FINISHED" if self._dragged else "CANCELLED"}
+        return {"RUNNING_MODAL"}
+
+    def _estimate_row_height(self, context) -> float:
+        scale = 1.0
+        prefs = getattr(context, "preferences", None)
+        view = getattr(prefs, "view", None) if prefs is not None else None
+        try:
+            scale = float(getattr(view, "ui_scale", 1.0))
+        except Exception:  # noqa: BLE001
+            scale = 1.0
+        return max(16.0, 22.0 * max(0.5, scale))
+
+    def _drag_to_event(self, context, event) -> None:
+        stack = getattr(context.scene, "bname_layer_stack", None)
+        if stack is None or len(stack) == 0 or not self._moved_uid:
+            return
+        current_index = self._find_moved_index(stack)
+        if current_index < 0:
+            return
+        offset = int(round((self._start_y - float(getattr(event, "mouse_region_y", self._start_y))) / self._row_height))
+        target_index = max(0, min(len(stack) - 1, self.index + offset))
+        if target_index == current_index:
+            return
+        stack.move(current_index, target_index)
+        self._dragged = True
+        self._current_index = target_index
+        context.scene.bname_active_layer_stack_index = target_index
+        layer_stack_utils.apply_stack_order_if_ui_changed(context, moved_uid=self._moved_uid)
+        layer_stack_utils.sync_layer_stack(context, preserve_active_index=True)
+        self._current_index = self._find_moved_index(context.scene.bname_layer_stack)
+        if self._current_index >= 0:
+            context.scene.bname_active_layer_stack_index = self._current_index
+        layer_stack_utils.remember_layer_stack_signature(context)
+        self._tag_ui_redraw(context)
+
+    def _find_moved_index(self, stack) -> int:
+        for i, item in enumerate(stack or []):
+            if layer_stack_utils.stack_item_uid(item) == self._moved_uid:
+                return i
+        return -1
+
+    def _restore_initial_order(self, context) -> None:
+        stack = getattr(context.scene, "bname_layer_stack", None)
+        if stack is None or not self._initial_order:
+            return
+        for target_index, uid in enumerate(self._initial_order):
+            current_index = next(
+                (
+                    i
+                    for i, item in enumerate(stack)
+                    if layer_stack_utils.stack_item_uid(item) == uid
+                ),
+                -1,
+            )
+            if current_index >= 0 and current_index != target_index:
+                stack.move(current_index, target_index)
+        moved_index = self._find_moved_index(stack)
+        if moved_index >= 0:
+            context.scene.bname_active_layer_stack_index = moved_index
+
+    def _finish(self, context, *, apply_order: bool) -> None:
+        if apply_order:
+            layer_stack_utils.apply_stack_order(context)
+        layer_stack_utils.sync_layer_stack(context, preserve_active_index=True)
+        moved_index = self._find_moved_index(context.scene.bname_layer_stack)
+        if moved_index >= 0:
+            layer_stack_utils.select_stack_index(context, moved_index)
+        layer_stack_utils.remember_layer_stack_signature(context)
+        self._tag_ui_redraw(context)
+
+    def _tag_ui_redraw(self, context) -> None:
+        area = getattr(context, "area", None)
+        if area is not None:
+            try:
+                area.tag_redraw()
+            except Exception:  # noqa: BLE001
+                pass
+        layer_stack_utils.tag_view3d_redraw(context)
 
 
 class BNAME_MT_layer_stack_add(Menu):
@@ -882,6 +1000,7 @@ class BNAME_OT_layer_stack_detail(Operator):
 _CLASSES = (
     BNAME_OT_layer_stack_select,
     BNAME_OT_layer_stack_move,
+    BNAME_OT_layer_stack_drag,
     BNAME_MT_layer_stack_add,
     BNAME_OT_layer_stack_add,
     BNAME_OT_layer_stack_duplicate,
