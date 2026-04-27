@@ -8,7 +8,7 @@ from bpy.types import Operator
 from ..core.mode import MODE_PANEL, MODE_PAGE, get_mode
 from ..core.work import get_active_page, get_work
 from ..utils import geom, layer_stack as layer_stack_utils, page_grid
-from . import panel_picker
+from . import panel_modal_state, panel_picker
 
 
 def _move_panel(panel, dx_mm: float, dy_mm: float) -> None:
@@ -119,6 +119,8 @@ class BNAME_OT_layer_move_tool(Operator):
     _target: dict | None
     _snapshots: list[tuple[str, object, object]]
     _dragging: bool
+    _externally_finished: bool
+    _cursor_modal_set: bool
 
     @classmethod
     def poll(cls, context):
@@ -126,34 +128,92 @@ class BNAME_OT_layer_move_tool(Operator):
         return bool(work and work.loaded and getattr(context.scene, "bname_layer_stack", None) is not None)
 
     def invoke(self, context, event):
+        if panel_modal_state.get_active("layer_move") is not None:
+            panel_modal_state.finish_active("layer_move", context, keep_selection=True)
+            return {"FINISHED"}
         item = layer_stack_utils.active_stack_item(context)
         resolved = layer_stack_utils.resolve_stack_item(context, item)
         if item is None or resolved is None or resolved.get("target") is None:
             self.report({"WARNING"}, "移動するレイヤーを選択してください")
             return {"CANCELLED"}
+        panel_modal_state.finish_active("knife_cut", context, keep_selection=False)
+        panel_modal_state.finish_active("edge_move", context, keep_selection=True)
         coords = panel_picker._event_world_mm(context, event)
         self._last_world = coords
         self._target = resolved
         self._snapshots = []
         self._dragging = coords is not None and event.type == "LEFTMOUSE"
         self._capture_snapshot(item.kind, resolved)
+        self._externally_finished = False
+        self._cursor_modal_set = panel_modal_state.set_modal_cursor(context, "SCROLL_XY")
         context.window_manager.modal_handler_add(self)
+        panel_modal_state.set_active("layer_move", self, context)
         return {"RUNNING_MODAL"}
 
     def modal(self, context, event):
+        if getattr(self, "_externally_finished", False):
+            panel_modal_state.clear_active("layer_move", self, context)
+            return {"FINISHED", "PASS_THROUGH"}
+        if (
+            event.value == "PRESS"
+            and event.type == "F"
+            and not event.ctrl
+            and not event.alt
+            and not event.shift
+        ):
+            if panel_picker._event_world_mm(context, event) is None:
+                return {"PASS_THROUGH"}
+            self.finish_from_external(context, keep_selection=True)
+            try:
+                bpy.ops.bname.panel_knife_cut("INVOKE_DEFAULT")
+            except Exception:  # noqa: BLE001
+                pass
+            return {"FINISHED"}
+        if (
+            event.value == "PRESS"
+            and event.type == "G"
+            and not event.ctrl
+            and not event.alt
+            and not event.shift
+        ):
+            if panel_picker._event_world_mm(context, event) is None:
+                return {"PASS_THROUGH"}
+            self.finish_from_external(context, keep_selection=True)
+            try:
+                bpy.ops.bname.panel_edge_move("INVOKE_DEFAULT")
+            except Exception:  # noqa: BLE001
+                pass
+            return {"FINISHED"}
+        if (
+            event.value == "PRESS"
+            and event.type in {"O", "P", "COMMA", "PERIOD"}
+            and not event.ctrl
+            and not event.alt
+        ):
+            if panel_picker._event_world_mm(context, event) is None:
+                return {"PASS_THROUGH"}
+            self.finish_from_external(context, keep_selection=True)
+            return {"FINISHED", "PASS_THROUGH"}
         if event.type in {"ESC", "RIGHTMOUSE"}:
             self._restore_snapshots(context)
             layer_stack_utils.tag_view3d_redraw(context)
+            self._cleanup(context)
+            panel_modal_state.clear_active("layer_move", self, context)
             return {"CANCELLED"}
         if event.type == "LEFTMOUSE" and event.value == "PRESS":
             coords = panel_picker._event_world_mm(context, event)
-            if coords is not None:
-                self._last_world = coords
-                self._dragging = True
+            if coords is None:
+                return {"PASS_THROUGH"}
+            self._last_world = coords
+            self._dragging = True
             return {"RUNNING_MODAL"}
         if event.type == "LEFTMOUSE" and event.value == "RELEASE":
+            if not self._dragging and panel_picker._event_world_mm(context, event) is None:
+                return {"PASS_THROUGH"}
             if self._dragging:
                 layer_stack_utils.sync_layer_stack(context)
+                self._cleanup(context)
+                panel_modal_state.clear_active("layer_move", self, context)
                 return {"FINISHED"}
             return {"RUNNING_MODAL"}
         if event.type != "MOUSEMOVE":
@@ -171,6 +231,19 @@ class BNAME_OT_layer_move_tool(Operator):
             page_grid.apply_page_collection_transforms(context, get_work(context))
             layer_stack_utils.tag_view3d_redraw(context)
         return {"RUNNING_MODAL"}
+
+    def _cleanup(self, context) -> None:
+        if getattr(self, "_cursor_modal_set", False):
+            panel_modal_state.restore_modal_cursor(context)
+            self._cursor_modal_set = False
+
+    def finish_from_external(self, context, *, keep_selection: bool) -> None:
+        _ = keep_selection
+        if getattr(self, "_externally_finished", False):
+            return
+        self._externally_finished = True
+        self._cleanup(context)
+        panel_modal_state.clear_active("layer_move", self, context)
 
     def _capture_snapshot(self, kind: str, resolved: dict) -> None:
         target = resolved.get("target")

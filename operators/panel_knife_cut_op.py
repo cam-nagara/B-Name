@@ -428,6 +428,7 @@ class BNAME_OT_panel_knife_cut(Operator):
             )
             return {"FINISHED"}
         panel_modal_state.finish_active("edge_move", context, keep_selection=False)
+        panel_modal_state.finish_active("layer_move", context, keep_selection=False)
         self._area, self._region, self._rv3d = target
         self._work = get_work(context)
         if self._work is None or not self._work.loaded:
@@ -441,13 +442,15 @@ class BNAME_OT_panel_knife_cut(Operator):
         self._cut_count_total = 0
         self._externally_finished = False
         self._navigation_drag_passthrough = False
+        self._cursor_modal_set = False
 
         # POST_PIXEL でラバーバンドを描画
         self._draw_handler = bpy.types.SpaceView3D.draw_handler_add(
             _draw_callback, (self,), "WINDOW", "POST_PIXEL"
         )
         context.window_manager.modal_handler_add(self)
-        panel_modal_state.set_active("knife_cut", self)
+        self._cursor_modal_set = panel_modal_state.set_modal_cursor(context, "CROSSHAIR")
+        panel_modal_state.set_active("knife_cut", self, context)
         self._tag_redraw()
         self.report(
             {"INFO"},
@@ -511,7 +514,10 @@ class BNAME_OT_panel_knife_cut(Operator):
         if self._region is not None:
             self._region.tag_redraw()
 
-    def _cleanup(self) -> None:
+    def _cleanup(self, context=None) -> None:
+        if getattr(self, "_cursor_modal_set", False):
+            panel_modal_state.restore_modal_cursor(context)
+            self._cursor_modal_set = False
         h = getattr(self, "_draw_handler", None)
         if h is not None:
             try:
@@ -526,12 +532,12 @@ class BNAME_OT_panel_knife_cut(Operator):
         if getattr(self, "_externally_finished", False):
             return
         self._externally_finished = True
-        self._cleanup()
-        panel_modal_state.clear_active("knife_cut", self)
+        self._cleanup(context)
+        panel_modal_state.clear_active("knife_cut", self, context)
 
     def modal(self, context, event):
         if getattr(self, "_externally_finished", False):
-            panel_modal_state.clear_active("knife_cut", self)
+            panel_modal_state.clear_active("knife_cut", self, context)
             return {"FINISHED", "PASS_THROUGH"}
         if getattr(self, "_navigation_drag_passthrough", False):
             if event.type == "LEFTMOUSE" and event.value == "RELEASE":

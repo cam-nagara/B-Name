@@ -556,6 +556,7 @@ class BNAME_OT_panel_split_template(Operator):
         page.active_panel_index = panel_index
         panel_modal_state.finish_active("knife_cut", context, keep_selection=False)
         panel_modal_state.finish_active("edge_move", context, keep_selection=True)
+        panel_modal_state.finish_active("layer_move", context, keep_selection=True)
         return context.window_manager.invoke_props_dialog(self)
 
     def execute(self, context):
@@ -585,6 +586,7 @@ class BNAME_OT_panel_split_template(Operator):
         work_dir = Path(work.work_dir)
         panel_modal_state.finish_active("knife_cut", context, keep_selection=False)
         panel_modal_state.finish_active("edge_move", context, keep_selection=True)
+        panel_modal_state.finish_active("layer_move", context, keep_selection=True)
         gap_v = work.panel_gap.vertical_mm
         gap_h = work.panel_gap.horizontal_mm
         rows, cols = self.rows, self.cols

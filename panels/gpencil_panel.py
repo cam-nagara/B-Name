@@ -715,6 +715,14 @@ class BNAME_OT_gpencil_master_mode_set(bpy.types.Operator):
     mode: bpy.props.StringProperty(default="OBJECT")  # type: ignore[valid-type]
 
     def execute(self, context):
+        try:
+            from ..operators import panel_modal_state
+
+            panel_modal_state.finish_active("knife_cut", context, keep_selection=False)
+            panel_modal_state.finish_active("edge_move", context, keep_selection=True)
+            panel_modal_state.finish_active("layer_move", context, keep_selection=True)
+        except Exception:  # noqa: BLE001
+            pass
         obj = gp_utils.get_master_gpencil()
         if obj is None:
             try:

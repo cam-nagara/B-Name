@@ -74,6 +74,15 @@ def _find_view3d(context):
     return area, region, rv3d
 
 
+def _tag_view3d_redraw(context) -> None:
+    screen = getattr(context, "screen", None)
+    if screen is None:
+        return
+    for area in screen.areas:
+        if area.type == "VIEW_3D":
+            area.tag_redraw()
+
+
 def _region_to_world_mm(region, rv3d, mx, my) -> tuple[float, float] | None:
     loc = region_2d_to_location_3d(region, rv3d, (mx, my), (0.0, 0.0, 0.0))
     if loc is None:
@@ -150,6 +159,8 @@ def _line_intersect(
 
 # drag 中のスナップしきい値 (mm)
 DRAG_SNAP_TOL_MM = 1.5
+VERTEX_DIRECTION_SNAP_TOL_MM = 4.0
+VERTEX_DIRECTION_SNAP_MIN_MM = 0.2
 MIN_PANEL_AREA_MM2 = 0.01
 
 
@@ -382,7 +393,7 @@ def _find_adjacent_edges(
         lo = max(0.0, min(t1, t2))
         hi = min(edge_len, max(t1, t2))
         overlap = max(0.0, hi - lo)
-        if overlap < ADJACENCY_OVERLAP_RATIO * edge_len:
+        if overlap < ADJACENCY_OVERLAP_RATIO * min(edge_len, l2):
             continue
         adj.append((pi2, panel_i2, ei2))
     return adj
@@ -439,10 +450,47 @@ def _find_overlapping_panel_edges(
             lo = max(0.0, min(t1, t2))
             hi = min(edge_len, max(t1, t2))
             overlap = max(0.0, hi - lo)
-            if overlap < edge_len * min_overlap_ratio:
+            if overlap < min(edge_len, l2) * min_overlap_ratio:
                 continue
             overlaps.append((panel_i2, ei2))
     return overlaps
+
+
+def _snap_vertex_delta_to_incident_edge(
+    poly: list[tuple[float, float]],
+    vertex_idx: int,
+    dx: float,
+    dy: float,
+) -> tuple[float, float]:
+    """頂点ドラッグ量を、元頂点から伸びる2辺方向へ近距離だけ吸着する."""
+    n = len(poly)
+    if n < 3:
+        return dx, dy
+    move_len = math.hypot(dx, dy)
+    if move_len < VERTEX_DIRECTION_SNAP_MIN_MM:
+        return dx, dy
+    origin = poly[vertex_idx]
+    candidates: list[tuple[float, float, float]] = []
+    for neighbor_idx in ((vertex_idx - 1) % n, (vertex_idx + 1) % n):
+        neighbor = poly[neighbor_idx]
+        ex = neighbor[0] - origin[0]
+        ey = neighbor[1] - origin[1]
+        edge_len = math.hypot(ex, ey)
+        if edge_len < 1e-6:
+            continue
+        ux = ex / edge_len
+        uy = ey / edge_len
+        along = dx * ux + dy * uy
+        snapped_dx = ux * along
+        snapped_dy = uy * along
+        off = math.hypot(dx - snapped_dx, dy - snapped_dy)
+        candidates.append((off, snapped_dx, snapped_dy))
+    if not candidates:
+        return dx, dy
+    off, snapped_dx, snapped_dy = min(candidates, key=lambda item: item[0])
+    if off <= VERTEX_DIRECTION_SNAP_TOL_MM:
+        return snapped_dx, snapped_dy
+    return dx, dy
 
 
 # ---------- ピック ----------
@@ -561,6 +609,7 @@ class BNAME_OT_panel_edge_move(Operator):
             )
             return {"FINISHED"}
         panel_modal_state.finish_active("knife_cut", context, keep_selection=False)
+        panel_modal_state.finish_active("layer_move", context, keep_selection=False)
         self._area, self._region, self._rv3d = target
         self._work = get_work(context)
         if self._work is None or not self._work.loaded:
@@ -573,6 +622,7 @@ class BNAME_OT_panel_edge_move(Operator):
         self._original_geometry: Optional[dict] = None
         self._externally_finished = False
         self._navigation_drag_passthrough = False
+        self._cursor_modal_set = False
         # シングル/ダブルクリック判定用
         self._last_press_time = 0.0
         self._last_press_edge: Optional[tuple[int, int, int]] = None
@@ -581,7 +631,8 @@ class BNAME_OT_panel_edge_move(Operator):
             _draw_callback, (self,), "WINDOW", "POST_PIXEL"
         )
         context.window_manager.modal_handler_add(self)
-        panel_modal_state.set_active("edge_move", self)
+        self._cursor_modal_set = panel_modal_state.set_modal_cursor(context, "CROSSHAIR")
+        panel_modal_state.set_active("edge_move", self, context)
         self._update_wm_selection(context)
         self._tag_redraw()
         self.report(
@@ -662,7 +713,10 @@ class BNAME_OT_panel_edge_move(Operator):
         if self._region is not None:
             self._region.tag_redraw()
 
-    def _cleanup(self) -> None:
+    def _cleanup(self, context=None) -> None:
+        if getattr(self, "_cursor_modal_set", False):
+            panel_modal_state.restore_modal_cursor(context)
+            self._cursor_modal_set = False
         h = getattr(self, "_draw_handler", None)
         if h is not None:
             try:
@@ -678,12 +732,12 @@ class BNAME_OT_panel_edge_move(Operator):
         self._externally_finished = True
         if not keep_selection:
             self._selection = None
-        self._cleanup()
+        self._cleanup(context)
         try:
             self._update_wm_selection(context)
         except Exception:  # noqa: BLE001
             pass
-        panel_modal_state.clear_active("edge_move", self)
+        panel_modal_state.clear_active("edge_move", self, context)
 
     def _push_undo_step(self, message: str) -> None:
         """modal 中の 1 操作を独立した undo step として記録."""
@@ -694,7 +748,7 @@ class BNAME_OT_panel_edge_move(Operator):
 
     def modal(self, context, event):
         if getattr(self, "_externally_finished", False):
-            panel_modal_state.clear_active("edge_move", self)
+            panel_modal_state.clear_active("edge_move", self, context)
             return {"FINISHED", "PASS_THROUGH"}
         if getattr(self, "_navigation_drag_passthrough", False):
             if event.type == "LEFTMOUSE" and event.value == "RELEASE":
@@ -1010,6 +1064,7 @@ class BNAME_OT_panel_edge_move(Operator):
         elif sel["type"] == "vertex":
             orig_poly = self._original_geometry["poly"]
             vi = sel["vertex"]
+            dx, dy = _snap_vertex_delta_to_incident_edge(orig_poly, vi, dx, dy)
             new_poly = list(orig_poly)
             new_poly[vi] = (orig_poly[vi][0] + dx, orig_poly[vi][1] + dy)
             if not _is_valid_panel_polygon(new_poly, reference_poly=orig_poly):
@@ -1031,7 +1086,7 @@ class BNAME_OT_panel_edge_move(Operator):
                     sel_a_world, sel_b_world, adj_st["params"]
                 )
                 if adj_line is None:
-                    return
+                    continue
                 page_i2 = adj_st["page"]
                 panel_i2 = adj_st["panel"]
                 key = (page_i2, panel_i2)
@@ -1045,7 +1100,7 @@ class BNAME_OT_panel_edge_move(Operator):
                 if np2 is None or not _is_valid_panel_polygon(
                     np2, reference_poly=adj_st["poly"]
                 ):
-                    return
+                    continue
                 panel_updates[key] = np2
                 updated_vertices.add((page_i2, panel_i2, adj_st["edge"]))
                 updated_vertices.add(
@@ -1064,7 +1119,7 @@ class BNAME_OT_panel_edge_move(Operator):
                 np2 = list(panel_updates.get(key, op2))
                 np2[vi2] = (op2[vi2][0] + dx, op2[vi2][1] + dy)
                 if not _is_valid_panel_polygon(np2, reference_poly=op2):
-                    return
+                    continue
                 panel_updates[key] = np2
             _set_panel_polygon(panel, new_poly)
             for (page_i2, panel_i2), poly2 in panel_updates.items():

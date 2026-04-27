@@ -6,6 +6,7 @@ import bpy
 from bpy.types import Panel
 
 from ..core.work import get_work
+from ..operators import panel_modal_state
 
 B_NAME_CATEGORY = "B-Name"
 
@@ -58,9 +59,24 @@ class BNAME_PT_tools(Panel):
         op.mode = "EDIT"
 
         row.separator()
-        row.operator("bname.panel_knife_cut", text="", icon="SCULPTMODE_HLT")
-        row.operator("bname.panel_edge_move", text="", icon="EMPTY_ARROWS")
-        row.operator("bname.layer_move_tool", text="", icon="DRIVER_TRANSFORM")
+        row.operator(
+            "bname.panel_knife_cut",
+            text="",
+            icon="SCULPTMODE_HLT",
+            depress=panel_modal_state.is_active("knife_cut"),
+        )
+        row.operator(
+            "bname.panel_edge_move",
+            text="",
+            icon="EMPTY_ARROWS",
+            depress=panel_modal_state.is_active("edge_move"),
+        )
+        row.operator(
+            "bname.layer_move_tool",
+            text="",
+            icon="DRIVER_TRANSFORM",
+            depress=panel_modal_state.is_active("layer_move"),
+        )
 
 
 _CLASSES = (BNAME_PT_tools,)
