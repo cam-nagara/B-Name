@@ -30,7 +30,7 @@ from gpu_extras.batch import batch_for_shader
 
 from ..core.work import get_active_page, get_work
 from ..io import page_io, panel_io
-from ..utils import geom, log
+from ..utils import geom, log, viewport_colors
 from . import panel_modal_state
 
 _logger = log.get_logger(__name__)
@@ -43,12 +43,12 @@ EDGE_HANDLE_SIZE_PX = 8.0  # 辺ハンドルの 1 辺
 HANDLE_HIT_PX = 15.0  # ヒット半径 (ピクセル)
 SNAP_THRESHOLD_MM = 2.0  # スナップしきい値 (mm)
 
-COLOR_VERTEX = (1.0, 1.0, 0.0, 1.0)  # 黄
-COLOR_VERTEX_HOVER = (1.0, 0.5, 0.0, 1.0)  # オレンジ
-COLOR_VERTEX_ACTIVE = (1.0, 0.0, 0.0, 1.0)  # 赤 (ドラッグ中)
-COLOR_EDGE = (0.2, 0.9, 1.0, 1.0)  # シアン
-COLOR_EDGE_HOVER = (0.0, 0.6, 1.0, 1.0)
-COLOR_SNAP_GUIDE = (0.0, 1.0, 0.2, 0.9)  # 緑
+COLOR_VERTEX = viewport_colors.HANDLE_FILL
+COLOR_VERTEX_HOVER = viewport_colors.SELECTION
+COLOR_VERTEX_ACTIVE = viewport_colors.SELECTION_STRONG
+COLOR_EDGE = viewport_colors.SELECTION
+COLOR_EDGE_HOVER = viewport_colors.SELECTION_STRONG
+COLOR_SNAP_GUIDE = viewport_colors.SAFE_LINE
 
 
 # ---- ヘルパ ----

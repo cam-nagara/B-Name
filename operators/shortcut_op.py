@@ -55,14 +55,14 @@ def _finish_modal_tools_for_mode_switch(context) -> None:
     panel_modal_state.finish_all(context)
 
 
-# ---------- モード切替 ----------
+# ---------- ツール切替 ----------
 
 
 class BNAME_OT_set_mode_object(Operator):
-    """アクティブオブジェクトを Object モードへ切替."""
+    """アクティブオブジェクトを Object ツールへ切替."""
 
     bl_idname = "bname.set_mode_object"
-    bl_label = "オブジェクトモード"
+    bl_label = "オブジェクトツール"
     bl_options = {"REGISTER"}
 
     @classmethod
@@ -85,14 +85,14 @@ class BNAME_OT_set_mode_object(Operator):
 
 
 class BNAME_OT_set_mode_draw(Operator):
-    """アクティブ GP を Draw モード (PAINT_GREASE_PENCIL) へ切替.
+    """アクティブ GP を描画ツール (PAINT_GREASE_PENCIL) へ切替.
 
     アクティブが GP でない場合は、現在ページの GP オブジェクトを active に
     してから切替える。GP が見つからない場合は no-op。
     """
 
     bl_idname = "bname.set_mode_draw"
-    bl_label = "描画モード"
+    bl_label = "描画ツール"
     bl_options = {"REGISTER"}
 
     @classmethod

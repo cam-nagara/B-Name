@@ -6,6 +6,7 @@ import math
 from collections.abc import Callable
 
 from ..utils.geom import Rect
+from ..utils import viewport_colors
 
 DrawRectOutline = Callable[..., None]
 DrawPolygonFill = Callable[[list[tuple[float, float]], tuple[float, float, float, float]], None]
@@ -104,13 +105,13 @@ def draw_balloons(
 
         selected = active and (i == active_idx or bool(getattr(entry, "selected", False)))
         if selected:
-            draw_rect_outline(rect.inset(-1.0), (1.0, 0.6, 0.0, 0.9), width_mm=0.50)
+            draw_rect_outline(rect.inset(-1.0), viewport_colors.SELECTION, width_mm=0.50)
             for handle in _handle_rects(rect):
                 draw_polygon_fill(
                     [(handle.x, handle.y), (handle.x2, handle.y), (handle.x2, handle.y2), (handle.x, handle.y2)],
-                    (1.0, 1.0, 1.0, 0.95),
+                    viewport_colors.HANDLE_FILL,
                 )
-                draw_rect_outline(handle, (1.0, 0.6, 0.0, 0.95), width_mm=0.25)
+                draw_rect_outline(handle, viewport_colors.HANDLE_OUTLINE, width_mm=0.25)
 
 
 def _outline_rect(rect: Rect) -> list[tuple[float, float]]:

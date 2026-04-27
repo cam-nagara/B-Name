@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from ..utils import viewport_colors
 from ..utils.geom import Rect
 from ..operators import text_edit_runtime
 
 EntryVisiblePredicate = Callable[[object], bool]
 _TEXT_HANDLE_SIZE_MM = 2.0
 _TEXT_CARET_MIN_THICKNESS_MM = 0.18
-_TEXT_CARET_COLOR = (1.0, 0.55, 0.0, 1.0)
+_TEXT_CARET_COLOR = viewport_colors.SELECTION_STRONG
 
 
 def _text_handle_rects(rect: Rect) -> list[Rect]:
@@ -171,10 +172,10 @@ def draw_text_guides(
         color = (0.2, 0.7, 1.0, 1.0) if entry.parent_balloon_id else (0.95, 0.85, 0.1, 1.0)
         draw_rect_outline(rect, color, width_mm=0.30)
         if i == active_idx:
-            draw_rect_outline(rect.inset(-1.0), (1.0, 0.6, 0.0, 1.0), width_mm=0.50)
+            draw_rect_outline(rect.inset(-1.0), viewport_colors.SELECTION_STRONG, width_mm=0.50)
             for handle in _text_handle_rects(rect):
-                draw_rect_fill(handle, (1.0, 1.0, 1.0, 0.95))
-                draw_rect_outline(handle, (1.0, 0.6, 0.0, 1.0), width_mm=0.25)
+                draw_rect_fill(handle, viewport_colors.HANDLE_FILL)
+                draw_rect_outline(handle, viewport_colors.HANDLE_OUTLINE, width_mm=0.25)
         editing_op = _editing_operator(context, page, entry)
         if editing_op is not None:
             for selection_rect in _selection_rects(
@@ -183,7 +184,7 @@ def draw_text_guides(
                 int(getattr(editing_op, "_cursor_index", 0)),
                 int(getattr(editing_op, "_selection_anchor", -1)),
             ):
-                draw_rect_fill(selection_rect, (0.2, 0.45, 1.0, 0.35))
+                draw_rect_fill(selection_rect, viewport_colors.SELECTION_FILL)
             caret = text_caret_rect(entry, rect, int(getattr(editing_op, "_cursor_index", 0)))
             draw_rect_fill(caret, _TEXT_CARET_COLOR)
 

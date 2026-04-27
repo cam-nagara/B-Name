@@ -35,7 +35,7 @@ except ImportError:  # pragma: no cover - 古い Blender
 
 from ..core.mode import MODE_PAGE, MODE_PANEL, get_mode
 from ..core.work import get_active_page, get_work
-from ..utils import border_geom, color_space, log, page_browser
+from ..utils import border_geom, color_space, log, page_browser, viewport_colors
 from ..utils.geom import Rect, bleed_rect, mm_to_m
 from . import overlay_balloon
 from . import overlay_effect_line
@@ -254,7 +254,7 @@ def _draw_line_segments(
 def _draw_trim_marks(
     finish: Rect,
     bleed: Rect,
-    color: tuple[float, float, float, float] = (0.05, 0.05, 0.05, 0.95),
+    color: tuple[float, float, float, float] = viewport_colors.PAPER_GUIDE_LIGHT,
     corner_arm_mm: float = 10.0,
     center_size_mm: float = 10.0,
     center_gap_mm: float = 5.0,
@@ -732,7 +732,7 @@ def _draw_panels(
                             (poly[i], poly[(i + 1) % len(poly)])
                             for i in range(len(poly))
                         ]
-                        _draw_segments_mm(segs, (1.0, 0.7, 0.0, 1.0), width_mm=1.20)
+                        _draw_segments_mm(segs, viewport_colors.SELECTION_STRONG, width_mm=1.20)
                     continue
             # edge_styles を index 辞書化
             override_map = {int(s.edge_index): s for s in entry.edge_styles}
@@ -755,7 +755,7 @@ def _draw_panels(
                 (poly[i], poly[(i + 1) % len(poly)])
                 for i in range(len(poly))
             ]
-            _draw_segments_mm(segs, (1.0, 0.7, 0.0, 1.0), width_mm=1.20)
+            _draw_segments_mm(segs, viewport_colors.SELECTION_STRONG, width_mm=1.20)
 
 
 def _translate_rect(r: Rect, ox_mm: float, oy_mm: float) -> Rect:
@@ -845,13 +845,13 @@ def _draw_page_overlay(
     # 枠線群 (mm 単位の太さ = ズーム連動、紙に追従)
     # B4 257×364mm の全紙ビューでは 1mm ≈ 数 px なので、視認用に 0.3-0.6mm
     # の太さで描画する (印刷用「実線太さ」より太いがビューポート視認性優先)
-    _draw_rect_outline(canvas_r, (0.4, 0.4, 0.4, 0.8), width_mm=0.30)
+    _draw_rect_outline(canvas_r, viewport_colors.PAPER_GUIDE_DIM, width_mm=0.30)
     # 裁ち落とし枠 (= 仕上がり枠 + 裁ち落とし幅)
     if paper.bleed_mm > 0.0:
-        _draw_rect_outline(bleed_r, (0.6, 0.4, 0.4, 0.7), width_mm=0.30)
-    _draw_rect_outline(finish_r, (0.8, 0.2, 0.2, 0.9), width_mm=0.50)
-    _draw_rect_outline(inner_r, (0.2, 0.6, 0.9, 0.9), width_mm=0.35)
-    _draw_rect_outline(safe_r, (0.2, 0.8, 0.4, 0.6), width_mm=0.30)
+        _draw_rect_outline(bleed_r, viewport_colors.PAPER_GUIDE_DIM, width_mm=0.30)
+    _draw_rect_outline(finish_r, viewport_colors.PAPER_GUIDE_LIGHT, width_mm=0.50)
+    _draw_rect_outline(inner_r, viewport_colors.PAPER_GUIDE, width_mm=0.35)
+    _draw_rect_outline(safe_r, viewport_colors.SAFE_LINE, width_mm=0.30)
     # トンボ (四隅 + 各辺中央センタートンボ) を仕上がり枠 / 裁ち落とし枠基準で描画
     if paper.bleed_mm > 0.0:
         _draw_trim_marks(finish_r, bleed_r)
@@ -1195,6 +1195,13 @@ def _draw_page_header_number_pixel(
     )
 
 
+def _should_highlight_active_page(context) -> bool:
+    scene = getattr(context, "scene", None)
+    if scene is None or not hasattr(scene, "bname_active_layer_kind"):
+        return True
+    return getattr(scene, "bname_active_layer_kind", "") == "page"
+
+
 def _draw_callback() -> None:
     context = bpy.context
     work = get_work(context)
@@ -1231,6 +1238,7 @@ def _draw_callback() -> None:
             start_side = getattr(paper, "start_side", "right")
             read_direction = getattr(paper, "read_direction", "left")
             active_idx = work.active_page_index
+            highlight_active_page = _should_highlight_active_page(context)
             for i, page in enumerate(work.pages):
                 if not overlay_visibility.page_visible(page):
                     continue
@@ -1246,10 +1254,10 @@ def _draw_callback() -> None:
                     is_left_half=left_half,
                 )
                 # アクティブページにハイライト枠 (ズーム連動)
-                if i == active_idx:
+                if highlight_active_page and i == active_idx:
                     canvas_r = _translate_rect(rects.canvas, ox, oy)
                     highlight = canvas_r.inset(-5.0)
-                    _draw_rect_outline(highlight, (1.0, 0.85, 0.0, 0.9), width_mm=1.00)
+                    _draw_rect_outline(highlight, viewport_colors.SELECTION, width_mm=1.00)
         elif mode == MODE_PANEL and len(work.pages) > 0:
             from ..utils.page_grid import (
                 is_left_half_page as _is_left_half,
@@ -1262,6 +1270,7 @@ def _draw_callback() -> None:
             start_side = getattr(paper, "start_side", "left")
             read_direction = getattr(paper, "read_direction", "left")
             active_idx = work.active_page_index
+            highlight_active_page = _should_highlight_active_page(context)
             for i, page in enumerate(work.pages):
                 if not overlay_visibility.page_visible(page):
                     continue
@@ -1275,10 +1284,10 @@ def _draw_callback() -> None:
                     ox_mm=ox, oy_mm=oy, draw_image_layers=False,
                     is_left_half=left_half,
                 )
-                if i == active_idx:
+                if highlight_active_page and i == active_idx:
                     canvas_r = _translate_rect(rects.canvas, ox, oy)
                     highlight = canvas_r.inset(-5.0)
-                    _draw_rect_outline(highlight, (1.0, 0.85, 0.0, 0.9), width_mm=1.00)
+                    _draw_rect_outline(highlight, viewport_colors.SELECTION, width_mm=1.00)
         else:
             from ..utils.page_grid import (
                 is_left_half_page as _is_left_half,

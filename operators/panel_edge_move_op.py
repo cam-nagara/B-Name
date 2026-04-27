@@ -26,7 +26,7 @@ from gpu_extras.batch import batch_for_shader
 from ..core.work import get_work
 from ..io import page_io, panel_io
 from . import panel_edge_style_op, panel_modal_state
-from ..utils import geom, log, page_grid, page_range, panel_edge_adjacency, polygon_geom
+from ..utils import geom, log, page_grid, page_range, panel_edge_adjacency, polygon_geom, viewport_colors
 
 _logger = log.get_logger(__name__)
 
@@ -39,10 +39,10 @@ ADJACENCY_GAP_TOLERANCE_MM = 0.2  # 隣接判定: 対応辺との垂直距離が
 ADJACENCY_OVERLAP_RATIO = 0.2  # 隣接判定: 重なり比率がこの値以上で連動
 DOUBLE_CLICK_INTERVAL = 0.4  # シングル/ダブル判定の閾値 (秒)
 
-COLOR_SELECTED_EDGE = (1.0, 0.5, 0.0, 1.0)  # 橙
-COLOR_SELECTED_BORDER = (1.0, 0.3, 0.0, 1.0)  # 濃橙 (枠線全体選択)
-COLOR_SELECTED_VERTEX = (1.0, 0.5, 0.0, 1.0)
-COLOR_HANDLE = (1.0, 0.85, 0.0, 1.0)  # 黄
+COLOR_SELECTED_EDGE = viewport_colors.SELECTION_STRONG
+COLOR_SELECTED_BORDER = viewport_colors.SELECTION
+COLOR_SELECTED_VERTEX = viewport_colors.HANDLE_OUTLINE
+COLOR_HANDLE = viewport_colors.HANDLE_FILL
 NAV_GIZMO_HITBOX_WIDTH_PX = 112.0
 NAV_GIZMO_HITBOX_HEIGHT_PX = 232.0
 NAV_GIZMO_HITBOX_MARGIN_PX = 8.0

@@ -891,7 +891,7 @@ class BNAME_OT_gpencil_master_ensure(bpy.types.Operator):
 
 
 class BNAME_OT_gpencil_master_mode_set(bpy.types.Operator):
-    """master GP を必ず active 化してからモード切替する wrapper.
+    """master GP を必ず active 化してからツールを切り替える wrapper.
 
     UI のモード切替ボタンは ``bpy.ops.object.mode_set`` を直接呼ぶと、
     view_layer.objects.active が master GP でない場合に意図しない
@@ -900,10 +900,21 @@ class BNAME_OT_gpencil_master_mode_set(bpy.types.Operator):
     """
 
     bl_idname = "bname.gpencil_master_mode_set"
-    bl_label = "マスター GP モード切替"
+    bl_label = "B-Nameツール切替"
     bl_options = {"REGISTER", "INTERNAL"}
 
     mode: bpy.props.StringProperty(default="OBJECT")  # type: ignore[valid-type]
+
+    @classmethod
+    def description(cls, _context, properties):
+        mode = getattr(properties, "mode", "OBJECT")
+        if mode == "OBJECT":
+            return "オブジェクトツールに切り替えます"
+        if mode == "PAINT_GREASE_PENCIL":
+            return "描画ツールに切り替えます"
+        if mode == "EDIT":
+            return "編集ツールに切り替えます"
+        return "B-Nameツールを切り替えます"
 
     def execute(self, context):
         try:

@@ -142,7 +142,7 @@ class BNamePreferences(bpy.types.AddonPreferences):
     )
 
     key_set_mode_object: StringProperty(  # type: ignore[valid-type]
-        name="オブジェクトモード切替",
+        name="オブジェクトツール切替",
         default="O",
         update=_on_keymap_settings_changed,
     )
@@ -157,7 +157,7 @@ class BNamePreferences(bpy.types.AddonPreferences):
     )
 
     key_set_mode_draw: StringProperty(  # type: ignore[valid-type]
-        name="描画モード切替",
+        name="描画ツール切替",
         default="P",
         update=_on_keymap_settings_changed,
     )
@@ -230,8 +230,8 @@ class BNamePreferences(bpy.types.AddonPreferences):
         row.prop(self, "key_navigate", text="")
 
         for label, key_attr, mod_prefix, icon in (
-            ("オブジェクトモード", "key_set_mode_object", "mod_set_mode_object", "OBJECT_DATAMODE"),
-            ("描画モード", "key_set_mode_draw", "mod_set_mode_draw", "GREASEPENCIL"),
+            ("オブジェクトツール", "key_set_mode_object", "mod_set_mode_object", "OBJECT_DATAMODE"),
+            ("描画ツール", "key_set_mode_draw", "mod_set_mode_draw", "GREASEPENCIL"),
             ("次のページ", "key_page_next", "mod_page_next", "TRIA_RIGHT"),
             ("前のページ", "key_page_prev", "mod_page_prev", "TRIA_LEFT"),
         ):
@@ -249,7 +249,7 @@ class BNamePreferences(bpy.types.AddonPreferences):
         info.label(text="ナビゲートのモード切替はキー押下中の Shift=回転 / Ctrl=ズーム (固定)")
         info.label(text="B-Name使用中は Z=Undo / X=Redo (固定)")
         info.label(text="ズーム中の LMB クリック=40%イン / Alt+LMB クリック=40%アウト (固定)")
-        info.label(text="描画モード中: Space=ナビゲート / C=ブラシシェルフ表示切替 (Blender既定の入れ替え)")
+        info.label(text="描画ツール中: Space=ナビゲート / C=ブラシシェルフ表示切替 (Blender既定の入れ替え)")
 
         box = layout.box()
         box.label(text="アセットライブラリ登録ガイド")

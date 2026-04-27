@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from ..utils import viewport_colors
 from ..utils.geom import Rect
 
 DrawRectFill = Callable[[Rect, tuple[float, float, float, float]], None]
@@ -47,7 +48,7 @@ def draw_active_effect_line_bounds(
     if bounds is None:
         return
     rect = Rect(float(bounds[0]), float(bounds[1]), float(bounds[2]), float(bounds[3]))
-    draw_rect_outline(rect.inset(-1.0), (1.0, 0.6, 0.0, 0.9), width_mm=0.50)
+    draw_rect_outline(rect.inset(-1.0), viewport_colors.SELECTION, width_mm=0.50)
     for handle in _handle_rects(rect):
-        draw_rect_fill(handle, (1.0, 1.0, 1.0, 0.95))
-        draw_rect_outline(handle, (1.0, 0.6, 0.0, 0.95), width_mm=0.25)
+        draw_rect_fill(handle, viewport_colors.HANDLE_FILL)
+        draw_rect_outline(handle, viewport_colors.HANDLE_OUTLINE, width_mm=0.25)
