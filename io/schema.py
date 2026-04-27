@@ -161,6 +161,7 @@ def work_info_to_dict(info) -> dict[str, Any]:
             "pageNumber": display_item_to_dict(info.display_page_number),
         },
         "pageNumberStart": int(info.page_number_start),
+        "pageNumberEnd": int(getattr(info, "page_number_end", info.page_number_start)),
     }
 
 
@@ -176,7 +177,10 @@ def work_info_from_dict(info, data: dict[str, Any]) -> None:
     display_item_from_dict(info.display_subtitle, disp.get("subtitle", {}))
     display_item_from_dict(info.display_author, disp.get("author", {}))
     display_item_from_dict(info.display_page_number, disp.get("pageNumber", {}))
-    info.page_number_start = int(data.get("pageNumberStart", 1))
+    start = int(data.get("pageNumberStart", 1))
+    info.page_number_start = start
+    if hasattr(info, "page_number_end"):
+        info.page_number_end = int(data.get("pageNumberEnd", start))
 
 
 def nombre_to_dict(n) -> dict[str, Any]:

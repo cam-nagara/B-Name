@@ -63,6 +63,7 @@ def load_work_json(work_dir: Path, work) -> dict[str, Any]:
         raise FileNotFoundError(f"work.json not found: {path}")
     data = json_io.read_json(path)
     _warn_if_unknown_schema(data.get("schemaVersion"), schema.WORK_SCHEMA_VERSION, "work.json")
+    work.loaded = False
     schema.work_from_dict(work, data)
     work.work_dir = str(Path(work_dir).resolve())
     work.loaded = True

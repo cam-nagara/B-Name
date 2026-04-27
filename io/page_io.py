@@ -63,6 +63,12 @@ def load_pages_json(work_dir: Path, work) -> dict:
         return {"pages": [], "totalPages": 0}
     data = json_io.read_json(path)
     schema.pages_from_dict(work, data)
+    try:
+        from ..utils import page_range
+
+        page_range.sync_end_number_to_existing_pages(work)
+    except Exception:  # noqa: BLE001
+        _logger.exception("page number end migration failed")
     _logger.info("pages.json loaded: %s (%d pages)", path, len(work.pages))
     return data
 

@@ -20,6 +20,30 @@ from bpy.props import (
 from ..utils import log
 
 _logger = log.get_logger(__name__)
+_page_range_update_depth = 0
+
+
+def _on_page_number_range_changed(self, context) -> None:
+    global _page_range_update_depth
+
+    if _page_range_update_depth > 0:
+        return
+    _page_range_update_depth += 1
+    try:
+        start = max(0, int(getattr(self, "page_number_start", 1)))
+        end = max(0, int(getattr(self, "page_number_end", start)))
+        if int(getattr(self, "page_number_start", start)) != start:
+            self.page_number_start = start
+        if end < start:
+            self.page_number_end = start
+        try:
+            from ..utils import page_range
+
+            page_range.ensure_pages_for_number_range(context)
+        except Exception:  # noqa: BLE001
+            _logger.exception("page number range sync failed")
+    finally:
+        _page_range_update_depth -= 1
 
 # 原稿上の 6 通り配置 (上下 × 左中右、middle 段は仕上がり枠外への配置で
 # 自然なアンカーが取りづらく実用性が低いため除外)
@@ -99,6 +123,15 @@ class BNameWorkInfo(bpy.types.PropertyGroup):
         default=1,
         min=0,
         soft_max=9999,
+        update=_on_page_number_range_changed,
+    )
+    page_number_end: IntProperty(  # type: ignore[valid-type]
+        name="終了番号",
+        description="作品のページ番号範囲の終了値。不足ページは自動作成されます",
+        default=1,
+        min=0,
+        soft_max=9999,
+        update=_on_page_number_range_changed,
     )
 
 

@@ -385,9 +385,9 @@ class BNAME_OT_layer_stack_add(Operator, ImportHelper):
 
     def _add_page(self, context) -> str:
         from ..core.work import get_work
-        from ..io import page_io
+        from ..io import page_io, work_io
         from ..utils import gpencil as gp_utils
-        from ..utils import page_grid
+        from ..utils import page_grid, page_range
         from .panel_op import create_basic_frame_panel
 
         work = get_work(context)
@@ -401,6 +401,8 @@ class BNAME_OT_layer_stack_add(Operator, ImportHelper):
         gp_utils.ensure_page_gpencil(context.scene, entry.id)
         page_grid.apply_page_collection_transforms(context, work)
         page_io.save_pages_json(work_dir, work)
+        page_range.sync_end_number_to_page_count(work)
+        work_io.save_work_json(work_dir, work)
         context.scene.bname_active_layer_kind = PAGE_KIND
         layer_stack_utils.sync_layer_stack_after_data_change(context, align_page_order=True)
         return layer_stack_utils.target_uid(PAGE_KIND, page_stack_key(entry))

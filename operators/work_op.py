@@ -41,6 +41,8 @@ def _apply_phase1_defaults(work) -> None:
     info.display_page_number.enabled = True
     info.display_page_number.position = "bottom-center"
     info.page_number_start = 1
+    if hasattr(info, "page_number_end"):
+        info.page_number_end = 1
     # 作者名が未入力なら OS のユーザー名で初期化 (上書きはしない)
     if not info.author:
         try:
@@ -49,7 +51,7 @@ def _apply_phase1_defaults(work) -> None:
         except Exception:  # noqa: BLE001
             pass
     # 既定プリセット適用 (見つからなくても既定値は PropertyGroup に入っている)
-    presets.load_default_preset(work.paper)
+    presets.load_default_preset_for_work(work)
     # セーフライン外塗りは新規作品ごとに既定値へ戻す。
     # PropertyGroup は同一 scene 内で前回値を保持するため、ここで明示的に初期化しないと
     # 「前の作品で変えた色」が新規作品へ漏れる。プリセット適用後に置き直して、

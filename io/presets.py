@@ -83,18 +83,47 @@ def _list_presets_in_dir(base: Path, *, source: str) -> list[PaperPreset]:
 # ---------- 適用・保存 ----------
 
 
+def _apply_display_on_canvas(data: dict[str, Any], work_info) -> None:
+    if not data or work_info is None:
+        return
+    schema.display_item_from_dict(work_info.display_work_name, data.get("workName", {}))
+    schema.display_item_from_dict(work_info.display_episode, data.get("episode", {}))
+    schema.display_item_from_dict(work_info.display_subtitle, data.get("subtitle", {}))
+    schema.display_item_from_dict(work_info.display_author, data.get("author", {}))
+    schema.display_item_from_dict(work_info.display_page_number, data.get("pageNumber", {}))
+
+
+def _display_on_canvas_to_dict(work_info) -> dict[str, Any]:
+    if work_info is None:
+        return {}
+    return {
+        "workName": schema.display_item_to_dict(work_info.display_work_name),
+        "episode": schema.display_item_to_dict(work_info.display_episode),
+        "subtitle": schema.display_item_to_dict(work_info.display_subtitle),
+        "author": schema.display_item_to_dict(work_info.display_author),
+        "pageNumber": schema.display_item_to_dict(work_info.display_page_number),
+    }
+
+
 def apply_preset_to_paper(preset: PaperPreset, paper) -> None:
     schema.paper_from_dict(paper, preset.data.get("paper", {}))
     paper.preset_name = preset.name
 
 
-def save_local_preset(work_dir: Path, paper, name: str, description: str = "") -> Path:
-    """現在の PaperSettings を作品ローカルプリセットとして保存."""
+def apply_preset_to_work(preset: PaperPreset, work) -> None:
+    apply_preset_to_paper(preset, work.paper)
+    _apply_display_on_canvas(preset.data.get("displayOnCanvas", {}), work.work_info)
+    if "panelGap" in preset.data:
+        schema.panel_gap_from_dict(work.panel_gap, preset.data.get("panelGap", {}))
+
+
+def save_local_preset(work_dir: Path, work, name: str, description: str = "") -> Path:
+    """現在の用紙関連設定を作品ローカルプリセットとして保存."""
     templates = paths.assets_dir(Path(work_dir)) / paths.ASSETS_TEMPLATES_DIR
     templates.mkdir(parents=True, exist_ok=True)
     safe_name = _sanitize_filename(name)
     out = templates / f"{safe_name}{PRESET_SUFFIX}"
-    paper_data = schema.paper_to_dict(paper)
+    paper_data = schema.paper_to_dict(work.paper)
     paper_data["presetName"] = name
     data = {
         "schemaVersion": 1,
@@ -102,6 +131,8 @@ def save_local_preset(work_dir: Path, paper, name: str, description: str = "") -
         "presetName": name,
         "description": description,
         "paper": paper_data,
+        "displayOnCanvas": _display_on_canvas_to_dict(work.work_info),
+        "panelGap": schema.panel_gap_to_dict(work.panel_gap),
     }
     json_io.write_json(out, data)
     _logger.info("local preset saved: %s", out)
@@ -120,6 +151,16 @@ def load_default_preset(paper) -> PaperPreset | None:
     for preset in list_global_presets():
         if preset.name == "集英社マンガ誌汎用":
             apply_preset_to_paper(preset, paper)
+            return preset
+    _logger.warning("default preset '集英社マンガ誌汎用' not found under %s", GLOBAL_PRESETS_DIR)
+    return None
+
+
+def load_default_preset_for_work(work) -> PaperPreset | None:
+    """既定の「集英社マンガ誌汎用」を用紙関連設定全体に適用."""
+    for preset in list_global_presets():
+        if preset.name == "集英社マンガ誌汎用":
+            apply_preset_to_work(preset, work)
             return preset
     _logger.warning("default preset '集英社マンガ誌汎用' not found under %s", GLOBAL_PRESETS_DIR)
     return None

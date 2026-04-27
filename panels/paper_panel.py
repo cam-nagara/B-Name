@@ -89,6 +89,31 @@ class BNAME_PT_paper(Panel):
         box.prop(p, "start_side")
         box.prop(p, "read_direction")
 
+        box = layout.box()
+        box.label(text="原稿上の表示")
+        info = work.work_info
+        _draw_display_item(box, "作品名", info.display_work_name)
+        _draw_display_item(box, "話数", info.display_episode)
+        _draw_display_item(box, "サブタイトル", info.display_subtitle)
+        _draw_display_item(box, "作者名", info.display_author)
+        _draw_display_item(box, "ページ番号", info.display_page_number)
+
+        box = layout.box()
+        box.label(text="コマ間隔")
+        g = work.panel_gap
+        row = box.row(align=True)
+        row.prop(g, "vertical_mm")
+        row.prop(g, "horizontal_mm")
+
+
+def _draw_display_item(layout, label: str, item) -> None:
+    row = layout.row(align=True)
+    row.prop(item, "enabled", text=label)
+    sub = row.row(align=True)
+    sub.enabled = item.enabled
+    sub.prop(item, "position", text="")
+    sub.prop(item, "font_size_q", text="")
+
 
 _CLASSES = (
     BNAME_PT_paper,

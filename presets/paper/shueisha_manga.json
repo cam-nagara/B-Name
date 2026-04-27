@@ -25,5 +25,41 @@
     "paperColorAlpha": 1.0,
     "colorProfile": "sRGB IEC61966-2.1",
     "presetName": "集英社マンガ誌汎用"
+  },
+  "displayOnCanvas": {
+    "workName": {
+      "enabled": true,
+      "position": "top-left",
+      "fontSizeQ": 20.0,
+      "color": "#000000"
+    },
+    "episode": {
+      "enabled": false,
+      "position": "top-center",
+      "fontSizeQ": 20.0,
+      "color": "#000000"
+    },
+    "subtitle": {
+      "enabled": false,
+      "position": "top-right",
+      "fontSizeQ": 20.0,
+      "color": "#000000"
+    },
+    "author": {
+      "enabled": true,
+      "position": "bottom-right",
+      "fontSizeQ": 20.0,
+      "color": "#000000"
+    },
+    "pageNumber": {
+      "enabled": true,
+      "position": "bottom-center",
+      "fontSizeQ": 20.0,
+      "color": "#000000"
+    }
+  },
+  "panelGap": {
+    "verticalMm": 7.3,
+    "horizontalMm": 2.1
   }
 }

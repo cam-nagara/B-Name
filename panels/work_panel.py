@@ -5,6 +5,7 @@ from __future__ import annotations
 import bpy
 from bpy.types import Panel
 
+from ..core.mode import MODE_PAGE, get_mode
 from ..core.work import get_work
 
 B_NAME_CATEGORY = "B-Name"
@@ -40,35 +41,11 @@ class BNAME_PT_work(Panel):
         box.prop(info, "episode_number")
         box.prop(info, "subtitle")
         box.prop(info, "author")
-
-        box = layout.box()
-        box.label(text="原稿上の表示")
-        _draw_display_item(box, "作品名", info.display_work_name)
-        _draw_display_item(box, "話数", info.display_episode)
-        _draw_display_item(box, "サブタイトル", info.display_subtitle)
-        _draw_display_item(box, "作者名", info.display_author)
-        # ページ番号 (旧ノンブル UI の後継)
-        _draw_display_item(box, "ページ番号", info.display_page_number)
-        sub = box.row(align=True)
-        sub.enabled = info.display_page_number.enabled
-        sub.prop(info, "page_number_start")
-
-        # コマ間隔 (作品共通、旧「コマ間隔」セクション)
-        box = layout.box()
-        box.label(text="コマ間隔")
-        g = work.panel_gap
+        box.label(text="ページ数")
         row = box.row(align=True)
-        row.prop(g, "vertical_mm")
-        row.prop(g, "horizontal_mm")
-
-
-def _draw_display_item(layout, label: str, item) -> None:
-    row = layout.row(align=True)
-    row.prop(item, "enabled", text=label)
-    sub = row.row(align=True)
-    sub.enabled = item.enabled
-    sub.prop(item, "position", text="")
-    sub.prop(item, "font_size_q", text="")
+        row.enabled = get_mode(context) == MODE_PAGE
+        row.prop(info, "page_number_start", text="開始")
+        row.prop(info, "page_number_end", text="終了")
 
 
 _CLASSES = (

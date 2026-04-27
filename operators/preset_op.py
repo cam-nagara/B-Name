@@ -51,7 +51,7 @@ def _on_paper_preset_selector_change(self, context):
     preset = presets.load_preset_by_name(name, work_dir)
     if preset is None:
         return
-    presets.apply_preset_to_paper(preset, work.paper)
+    presets.apply_preset_to_work(preset, work)
     _logger.info("paper preset applied via selector: %s", preset.name)
 
 
@@ -112,7 +112,7 @@ class BNAME_OT_paper_preset_apply(Operator):
         if preset is None:
             self.report({"ERROR"}, f"プリセットが見つかりません: {self.preset_name}")
             return {"CANCELLED"}
-        presets.apply_preset_to_paper(preset, work.paper)
+        presets.apply_preset_to_work(preset, work)
         sync_paper_preset_selector(context)
         self.report({"INFO"}, f"プリセット適用: {preset.name}")
         return {"FINISHED"}
@@ -152,7 +152,7 @@ class BNAME_OT_paper_preset_save_local(Operator):
         work_dir = Path(work.work_dir)
         try:
             out = presets.save_local_preset(
-                work_dir, work.paper, self.preset_name, self.description
+                work_dir, work, self.preset_name, self.description
             )
         except Exception as exc:  # noqa: BLE001
             _logger.exception("preset_save_local failed")

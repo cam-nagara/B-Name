@@ -16,10 +16,10 @@ from bpy.types import Operator
 
 from ..core.mode import MODE_PAGE, get_mode, set_mode
 from ..core.work import get_work
-from ..io import page_io
+from ..io import page_io, work_io
 from ..utils import gpencil as gp_utils
 from ..utils import layer_stack as layer_stack_utils
-from ..utils import log, page_grid, paths
+from ..utils import log, page_grid, page_range, paths
 
 _logger = log.get_logger(__name__)
 
@@ -38,6 +38,11 @@ def _sync_layer_stack_after_page_change(context, *, align_page_order: bool = Fal
         layer_stack_utils.tag_view3d_redraw(context)
     except Exception:  # noqa: BLE001
         _logger.exception("page op: layer stack sync failed")
+
+
+def _sync_page_number_range(work_dir: Path, work) -> None:
+    page_range.sync_end_number_to_page_count(work)
+    work_io.save_work_json(work_dir, work)
 
 
 class BNAME_OT_page_add(Operator):
@@ -70,6 +75,7 @@ class BNAME_OT_page_add(Operator):
             # 全ページの Collection transform を grid 位置に再配置
             page_grid.apply_page_collection_transforms(context, work)
             page_io.save_pages_json(work_dir, work)
+            _sync_page_number_range(work_dir, work)
             if hasattr(context.scene, "bname_active_layer_kind"):
                 context.scene.bname_active_layer_kind = "page"
             _sync_layer_stack_after_page_change(context, align_page_order=True)
@@ -123,6 +129,7 @@ class BNAME_OT_page_remove(Operator):
             # 残りページの Collection transform を再計算 (index が詰まるため)
             page_grid.apply_page_collection_transforms(context, work)
             page_io.save_pages_json(work_dir, work)
+            _sync_page_number_range(work_dir, work)
             if hasattr(context.scene, "bname_active_layer_kind"):
                 context.scene.bname_active_layer_kind = "page"
             _sync_layer_stack_after_page_change(context, align_page_order=True)
@@ -192,6 +199,7 @@ class BNAME_OT_page_duplicate(Operator):
             page_grid.apply_page_collection_transforms(context, work)
             page_io.save_page_json(work_dir, new_entry)
             page_io.save_pages_json(work_dir, work)
+            _sync_page_number_range(work_dir, work)
             if hasattr(context.scene, "bname_active_layer_kind"):
                 context.scene.bname_active_layer_kind = "page"
             _sync_layer_stack_after_page_change(context, align_page_order=True)
