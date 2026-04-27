@@ -21,6 +21,7 @@ from . import log, paths
 _logger = log.get_logger(__name__)
 
 _HANDLER_NAME = "_bname_on_load_post"
+_current_file_sync_generation = 0
 
 
 def _find_work_root(blend_path: Path) -> Path | None:
@@ -283,7 +284,32 @@ def register() -> None:
     _logger.debug("handlers registered")
 
 
+def schedule_current_file_sync(retries: int = 3, interval: float = 0.15) -> None:
+    """アドオン再読込時に、現在開いている B-Name .blend を load_post 相当に同期する."""
+    global _current_file_sync_generation
+    _current_file_sync_generation += 1
+    generation = _current_file_sync_generation
+    state = {"left": max(1, int(retries))}
+
+    def _tick():
+        if generation != _current_file_sync_generation:
+            return None
+        try:
+            _bname_on_load_post(str(getattr(bpy.data, "filepath", "") or ""))
+        except Exception:  # noqa: BLE001
+            _logger.exception("scheduled current file sync failed")
+        state["left"] -= 1
+        return interval if state["left"] > 0 else None
+
+    try:
+        bpy.app.timers.register(_tick, first_interval=interval)
+    except Exception:  # noqa: BLE001
+        _logger.exception("schedule current file sync failed")
+
+
 def unregister() -> None:
+    global _current_file_sync_generation
+    _current_file_sync_generation += 1
     for h in list(bpy.app.handlers.load_post):
         if getattr(h, "__name__", "") == _bname_on_load_post.__name__:
             try:

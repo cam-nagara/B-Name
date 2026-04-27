@@ -5,7 +5,7 @@ from __future__ import annotations
 import bpy
 from bpy.types import Panel
 
-from ..core.mode import MODE_PAGE, get_mode
+from ..core.mode import MODE_PAGE, MODE_PANEL, get_mode
 from ..core.work import get_work
 
 B_NAME_CATEGORY = "B-Name"
@@ -34,6 +34,11 @@ class BNAME_PT_work(Panel):
             layout.label(text="作品が開かれていません", icon="INFO")
             return
 
+        mode = get_mode(context)
+        if mode == MODE_PANEL:
+            row = layout.row()
+            row.operator("bname.exit_panel_mode", text="ページ一覧へ戻る", icon="BACK")
+
         box = layout.box()
         box.label(text="作品情報", icon="WORDWRAP_ON")
         info = work.work_info
@@ -43,7 +48,7 @@ class BNAME_PT_work(Panel):
         box.prop(info, "author")
         box.label(text="ページ数")
         row = box.row(align=True)
-        row.enabled = get_mode(context) == MODE_PAGE
+        row.enabled = mode == MODE_PAGE
         row.prop(info, "page_number_start", text="開始")
         row.prop(info, "page_number_end", text="終了")
 

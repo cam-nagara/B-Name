@@ -14,13 +14,13 @@ from . import log
 
 _logger = log.get_logger(__name__)
 
-_PAGE_COLLECTION_RE = re.compile(r"^page_\d{4}(?:-\d{4})?$")
+_PAGE_COLLECTION_RE = re.compile(r"^page_\d{4}(?:-\d{4})?(?:\.\d{3})?$")
 _PAGE_HELPER_OBJECT_RE = re.compile(
-    r"^page_\d{4}(?:-\d{4})?_(?:paper|sketch(?:_R)?)$"
+    r"^page_\d{4}(?:-\d{4})?_(?:paper|sketch(?:_R)?)(?:\.\d{3})?$"
 )
 _PAGE_OBJECT_RE = re.compile(r"^page_\d{4}(?:-\d{4})?_.+")
 _PAGE_HELPER_DATA_RE = re.compile(
-    r"^page_\d{4}(?:-\d{4})?_(?:paper_data|sketch_data(?:_R)?)$"
+    r"^page_\d{4}(?:-\d{4})?_(?:paper_data|sketch_data(?:_R)?)(?:\.\d{3})?$"
 )
 
 
@@ -294,14 +294,26 @@ def _purge_orphan_collection(blocks) -> None:
 
 
 def _is_internal_bname_collection(coll) -> bool:
-    return coll.name == gp_utils.ROOT_COLLECTION_NAME or bool(_PAGE_COLLECTION_RE.match(coll.name))
+    name = str(getattr(coll, "name", "") or "")
+    return (
+        name == gp_utils.ROOT_COLLECTION_NAME
+        or bool(re.match(rf"^{re.escape(gp_utils.ROOT_COLLECTION_NAME)}\.\d{{3}}$", name))
+        or bool(_PAGE_COLLECTION_RE.match(name))
+    )
 
 
 def _is_internal_bname_object(obj) -> bool:
-    if obj.name == gp_utils.MASTER_GP_OBJECT_NAME:
+    name = str(getattr(obj, "name", "") or "")
+    if name == gp_utils.MASTER_GP_OBJECT_NAME or bool(
+        re.match(rf"^{re.escape(gp_utils.MASTER_GP_OBJECT_NAME)}\.\d{{3}}$", name)
+    ):
         return True
-    return bool(_PAGE_HELPER_OBJECT_RE.match(obj.name) or _PAGE_OBJECT_RE.match(obj.name))
+    return bool(_PAGE_HELPER_OBJECT_RE.match(name) or _PAGE_OBJECT_RE.match(name))
 
 
 def _is_internal_bname_gp_data_name(name: str) -> bool:
-    return name == gp_utils.MASTER_GP_DATA_NAME or bool(_PAGE_HELPER_DATA_RE.match(name))
+    return (
+        name == gp_utils.MASTER_GP_DATA_NAME
+        or bool(re.match(rf"^{re.escape(gp_utils.MASTER_GP_DATA_NAME)}\.\d{{3}}$", name))
+        or bool(_PAGE_HELPER_DATA_RE.match(name))
+    )

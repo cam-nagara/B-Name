@@ -85,6 +85,10 @@ def register() -> None:
         for module in _MODULES:
             module.register()
             registered.append(module)
+        try:
+            utils.handlers.schedule_current_file_sync()
+        except Exception:
+            logger.exception("current B-Name file sync scheduling failed")
     except Exception:
         logger.exception("register failed; rolling back")
         for module in reversed(registered):
