@@ -662,16 +662,9 @@ class BNAME_OT_layer_stack_add(Operator, ImportHelper):
         return layer_stack_utils.target_uid("text", f"{page_stack_key(page)}:{entry.id}")
 
     def _add_effect(self, context) -> str:
-        from ..utils import gpencil as gp_utils
+        from .effect_line_op import _create_effect_layer
 
-        obj = gp_utils.ensure_gpencil_object(layer_stack_utils.EFFECT_GP_OBJECT_NAME)
-        existing = {layer.name for layer in obj.data.layers}
-        layer = obj.data.layers.new(_unique_name(existing, "effect"))
-        obj.data.layers.active = layer
-        gp_utils.ensure_active_frame(layer)
-        context.scene.bname_active_layer_kind = "effect"
-        context.scene.bname_active_effect_layer_name = layer_stack_utils._node_stack_key(layer)
-        layer_stack_utils.sync_layer_stack_after_data_change(context)
+        _obj, layer = _create_effect_layer(context)
         return layer_stack_utils.target_uid("effect", layer_stack_utils._node_stack_key(layer))
 
 

@@ -682,6 +682,7 @@ class BNAME_OT_balloon_tool(Operator):
         panel_modal_state.finish_active("edge_move", context, keep_selection=True)
         panel_modal_state.finish_active("layer_move", context, keep_selection=True)
         panel_modal_state.finish_active("text_tool", context, keep_selection=True)
+        panel_modal_state.finish_active("effect_line_tool", context, keep_selection=True)
         self._externally_finished = False
         self._cursor_modal_set = panel_modal_state.set_modal_cursor(context, "CROSSHAIR")
         self._clear_drag_state()

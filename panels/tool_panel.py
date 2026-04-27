@@ -91,6 +91,12 @@ class BNAME_PT_tools(Panel):
             icon="FONT_DATA",
             depress=panel_modal_state.is_active("text_tool"),
         )
+        row.operator(
+            "bname.effect_line_tool",
+            text="",
+            icon="STROKE",
+            depress=panel_modal_state.is_active("effect_line_tool"),
+        )
 
 
 _CLASSES = (BNAME_PT_tools,)

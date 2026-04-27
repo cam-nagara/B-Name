@@ -586,6 +586,7 @@ class BNAME_OT_text_tool(Operator):
         panel_modal_state.finish_active("edge_move", context, keep_selection=True)
         panel_modal_state.finish_active("layer_move", context, keep_selection=True)
         panel_modal_state.finish_active("balloon_tool", context, keep_selection=True)
+        panel_modal_state.finish_active("effect_line_tool", context, keep_selection=True)
         self._externally_finished = False
         self._cursor_modal_set = panel_modal_state.set_modal_cursor(context, "TEXT")
         self._editing = False

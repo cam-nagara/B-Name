@@ -141,6 +141,7 @@ def generate_speed_strokes(
     origin_xy_mm: tuple[float, float] = (40.0, 120.0),
     region_width_mm: float = 120.0,
     region_height_mm: float = 80.0,
+    length_mm: float | None = None,
     seed: int = 0,
 ) -> list[EffectLineStroke]:
     """流線 (speed) のストローク生成."""
@@ -153,18 +154,22 @@ def generate_speed_strokes(
     # 法線方向に等間隔配置
     nx = -dy
     ny = dx
+    length = max(0.1, float(length_mm if length_mm is not None else params.length_mm))
+    cx, cy = origin_xy_mm
     for i in range(count):
         t = (i / max(1, count - 1)) if count > 1 else 0.5
         offset = (t - 0.5) * region_height_mm
-        sx = origin_xy_mm[0] + nx * offset
-        sy = origin_xy_mm[1] + ny * offset
-        length_mm = _jitter(
-            params.length_mm,
+        line_length_mm = _jitter(
+            length,
             params.length_jitter_amount if params.length_jitter_enabled else 0.0,
             rng,
         )
-        ex = sx + dx * length_mm
-        ey = sy + dy * length_mm
+        mid_x = cx + nx * offset
+        mid_y = cy + ny * offset
+        sx = mid_x - dx * line_length_mm * 0.5
+        sy = mid_y - dy * line_length_mm * 0.5
+        ex = mid_x + dx * line_length_mm * 0.5
+        ey = mid_y + dy * line_length_mm * 0.5
         radius_mm = _jitter(
             params.brush_size_mm,
             params.brush_jitter_amount if params.brush_jitter_enabled else 0.0,
@@ -213,7 +218,14 @@ def generate_strokes(params, center_xy_mm=(110.0, 160.0), radius_xy_mm=(40.0, 50
     etype = params.effect_type
     rx, ry = radius_xy_mm
     if etype == "speed":
-        return generate_speed_strokes(params, origin_xy_mm=center_xy_mm, seed=seed)
+        return generate_speed_strokes(
+            params,
+            origin_xy_mm=center_xy_mm,
+            region_width_mm=rx * 2.0,
+            region_height_mm=ry * 2.0,
+            length_mm=max(params.length_mm, rx * 2.0),
+            seed=seed,
+        )
     if etype == "beta_flash":
         return generate_beta_flash_strokes(params, center_xy_mm, rx, ry, seed=seed)
     # focus / uni_flash は放射状生成 (uni_flash は基準図形がギザギザ + 放射)

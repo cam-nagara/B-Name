@@ -38,6 +38,7 @@ from ..core.work import get_active_page, get_work
 from ..utils import border_geom, color_space, log
 from ..utils.geom import Rect, bleed_rect, mm_to_m
 from . import overlay_balloon
+from . import overlay_effect_line
 from . import overlay_shared
 from . import overlay_text
 from . import overlay_visibility
@@ -1267,6 +1268,12 @@ def _draw_callback() -> None:
                 ox_mm=ox, oy_mm=oy, draw_image_layers=True,
                 is_left_half=left_half,
             )
+        overlay_effect_line.draw_active_effect_line_bounds(
+            context,
+            draw_rect_fill=_draw_rect_fill,
+            draw_rect_outline=_draw_rect_outline,
+            logger=_logger,
+        )
     finally:
         gpu.state.blend_set("NONE")
 

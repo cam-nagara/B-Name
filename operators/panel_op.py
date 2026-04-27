@@ -559,6 +559,7 @@ class BNAME_OT_panel_split_template(Operator):
         panel_modal_state.finish_active("layer_move", context, keep_selection=True)
         panel_modal_state.finish_active("balloon_tool", context, keep_selection=True)
         panel_modal_state.finish_active("text_tool", context, keep_selection=True)
+        panel_modal_state.finish_active("effect_line_tool", context, keep_selection=True)
         return context.window_manager.invoke_props_dialog(self)
 
     def execute(self, context):
@@ -591,6 +592,7 @@ class BNAME_OT_panel_split_template(Operator):
         panel_modal_state.finish_active("layer_move", context, keep_selection=True)
         panel_modal_state.finish_active("balloon_tool", context, keep_selection=True)
         panel_modal_state.finish_active("text_tool", context, keep_selection=True)
+        panel_modal_state.finish_active("effect_line_tool", context, keep_selection=True)
         gap_v = work.panel_gap.vertical_mm
         gap_h = work.panel_gap.horizontal_mm
         rows, cols = self.rows, self.cols

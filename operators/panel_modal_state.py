@@ -11,6 +11,7 @@ _ACTIVE_REFS: dict[str, weakref.ReferenceType | None] = {
     "layer_move": None,
     "balloon_tool": None,
     "text_tool": None,
+    "effect_line_tool": None,
 }
 
 
