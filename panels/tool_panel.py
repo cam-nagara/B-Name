@@ -77,6 +77,12 @@ class BNAME_PT_tools(Panel):
             icon="DRIVER_TRANSFORM",
             depress=panel_modal_state.is_active("layer_move"),
         )
+        row.operator(
+            "bname.text_tool",
+            text="",
+            icon="FONT_DATA",
+            depress=panel_modal_state.is_active("text_tool"),
+        )
 
 
 _CLASSES = (BNAME_PT_tools,)

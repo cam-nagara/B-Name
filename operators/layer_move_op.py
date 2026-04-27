@@ -138,6 +138,7 @@ class BNAME_OT_layer_move_tool(Operator):
             return {"CANCELLED"}
         panel_modal_state.finish_active("knife_cut", context, keep_selection=False)
         panel_modal_state.finish_active("edge_move", context, keep_selection=True)
+        panel_modal_state.finish_active("text_tool", context, keep_selection=True)
         coords = panel_picker._event_world_mm(context, event)
         self._last_world = coords
         self._target = resolved
@@ -181,6 +182,21 @@ class BNAME_OT_layer_move_tool(Operator):
             self.finish_from_external(context, keep_selection=True)
             try:
                 bpy.ops.bname.panel_edge_move("INVOKE_DEFAULT")
+            except Exception:  # noqa: BLE001
+                pass
+            return {"FINISHED"}
+        if (
+            event.value == "PRESS"
+            and event.type == "T"
+            and not event.ctrl
+            and not event.alt
+            and not event.shift
+        ):
+            if panel_picker._event_world_mm(context, event) is None:
+                return {"PASS_THROUGH"}
+            self.finish_from_external(context, keep_selection=True)
+            try:
+                bpy.ops.bname.text_tool("INVOKE_DEFAULT")
             except Exception:  # noqa: BLE001
                 pass
             return {"FINISHED"}

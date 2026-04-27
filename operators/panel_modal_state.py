@@ -9,6 +9,7 @@ _ACTIVE_REFS: dict[str, weakref.ReferenceType | None] = {
     "edge_move": None,
     "knife_cut": None,
     "layer_move": None,
+    "text_tool": None,
 }
 
 

@@ -58,6 +58,10 @@ def _kind_icon(kind: str) -> str:
     }.get(kind, "RENDERLAYERS")
 
 
+def _hide_icon(hidden: bool) -> str:
+    return "HIDE_ON" if hidden else "HIDE_OFF"
+
+
 def _draw_stack_gp_row(row, item, resolved) -> None:
     target = resolved.get("target") if resolved is not None else None
     if target is None:
@@ -82,7 +86,7 @@ def _draw_stack_gp_row(row, item, resolved) -> None:
             "hide",
             text="",
             emboss=False,
-            icon="HIDE_ON" if target.hide else "HIDE_OFF",
+            icon=_hide_icon(bool(target.hide)),
         )
     if hasattr(target, "lock"):
         row.prop(
@@ -140,7 +144,7 @@ def _draw_stack_data_row(row, item, resolved) -> None:
             "visible",
             text="",
             emboss=False,
-            icon="HIDE_OFF" if target.visible else "HIDE_ON",
+            icon=_hide_icon(not bool(target.visible)),
         )
         row.prop(
             target,
@@ -721,6 +725,7 @@ class BNAME_OT_gpencil_master_mode_set(bpy.types.Operator):
             panel_modal_state.finish_active("knife_cut", context, keep_selection=False)
             panel_modal_state.finish_active("edge_move", context, keep_selection=True)
             panel_modal_state.finish_active("layer_move", context, keep_selection=True)
+            panel_modal_state.finish_active("text_tool", context, keep_selection=True)
         except Exception:  # noqa: BLE001
             pass
         obj = gp_utils.get_master_gpencil()

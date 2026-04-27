@@ -232,9 +232,10 @@ class KeymapState:
         _add("bname.toggle_lasso_tool", "L")
         _add("bname.gp_cut_to_new_layer", "X", ctrl=True)
         _add("bname.gp_paste_to_new_layer", "V", ctrl=True)
-        # F → 枠線カットツール、G → 枠線選択ツール (GP モードでも先取り)
+        # F/G/T → B-Name ツール (GP モードでも先取り)
         _add("bname.panel_knife_cut", "F")
         _add("bname.panel_edge_move", "G")
+        _add("bname.text_tool", "T")
 
     def _populate_window_overrides(self, km) -> None:
         """Window キーマップに 修飾+ナビゲートキー / 枠線カット F を先取り登録.
@@ -267,7 +268,7 @@ class KeymapState:
             except Exception as exc:  # noqa: BLE001
                 print(f"[B-Name][KEYMAP] window override {label}+{nav_key} failed: {exc!r}")
 
-        # F → 枠線カットツール、G → 枠線選択ツール (Window kc に登録して
+        # F/G/T → B-Name ツール (Window kc に登録して
         # 他アドオンに先取りさせる)。
         # 注: exit_panel_mode の Esc は 3D View kc のみに限定し、Window kc には
         # 登録しない。Window kc に Esc を載せると Outliner / Image Editor 等の
@@ -276,6 +277,7 @@ class KeymapState:
         for op_id, key in (
             ("bname.panel_knife_cut", "F"),
             ("bname.panel_edge_move", "G"),
+            ("bname.text_tool", "T"),
         ):
             try:
                 kmi = km.keymap_items.new(op_id, key, "PRESS")
@@ -342,6 +344,8 @@ class KeymapState:
         _add("bname.panel_knife_cut", "F")
         # G → 枠線選択ツール
         _add("bname.panel_edge_move", "G")
+        # T → テキストツール
+        _add("bname.text_tool", "T")
         # Esc → コマ編集モードを抜けて全ページ一覧 (work.blend) に戻る
         # poll が MODE_PANEL を要求するため、紙面編集モード中は Blender 既定の
         # Esc 動作が走り (kmi が match しても poll で skip される)、干渉しない。
@@ -405,7 +409,7 @@ class KeymapState:
     # ---------- 衝突キー無効化 (他アドオン対策) ----------
 
     # B-Name が単独修飾なしで予約するキー (他アドオンに奪われる対象)
-    _BNAME_RESERVED_SINGLE_KEYS: tuple[str, ...] = ("F", "G")
+    _BNAME_RESERVED_SINGLE_KEYS: tuple[str, ...] = ("F", "G", "T")
 
     def disable_conflicting_keys(self) -> int:
         """他アドオンが addon kc に登録した F / G の単独キー kmi を無効化.
@@ -429,6 +433,7 @@ class KeymapState:
         bname_idnames = {
             "bname.panel_knife_cut",
             "bname.panel_edge_move",
+            "bname.text_tool",
             "bname.exit_panel_mode",
         }
         target_keys = set(self._BNAME_RESERVED_SINGLE_KEYS)

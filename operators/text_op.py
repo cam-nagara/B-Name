@@ -9,11 +9,12 @@
 from __future__ import annotations
 
 import bpy
-from bpy.props import EnumProperty, FloatProperty, StringProperty
+from bpy.props import BoolProperty, EnumProperty, FloatProperty, StringProperty
 from bpy.types import Operator
 
 from ..core.work import get_active_page, get_work
-from ..utils import log
+from ..utils import layer_stack as layer_stack_utils, log
+from . import panel_modal_state
 
 _logger = log.get_logger(__name__)
 
@@ -45,6 +46,85 @@ def _resolve_page_from_event(context, event):
     return balloon_op._resolve_page_from_event(context, event)
 
 
+def _creation_blocked(context, page, x_mm: float, y_mm: float, width_mm: float, height_mm: float) -> bool:
+    try:
+        from .balloon_op import _creation_violates_layer_scope
+
+        return bool(_creation_violates_layer_scope(context, page, x_mm, y_mm, width_mm, height_mm))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _create_text_entry(
+    context,
+    page,
+    *,
+    body: str,
+    speaker_type: str,
+    x_mm: float,
+    y_mm: float,
+    width_mm: float,
+    height_mm: float,
+    parent_balloon_id: str = "",
+):
+    entry = page.texts.add()
+    entry.id = _allocate_text_id(page)
+    entry.body = body
+    entry.speaker_type = speaker_type
+    entry.x_mm = x_mm
+    entry.y_mm = y_mm
+    entry.width_mm = width_mm
+    entry.height_mm = height_mm
+
+    missing_parent = ""
+    if parent_balloon_id:
+        for b in page.balloons:
+            if b.id == parent_balloon_id:
+                entry.parent_balloon_id = parent_balloon_id
+                entry.x_mm = b.x_mm + (b.width_mm - entry.width_mm) / 2.0
+                entry.y_mm = b.y_mm + (b.height_mm - entry.height_mm) / 2.0
+                break
+        else:
+            missing_parent = parent_balloon_id
+
+    page.active_text_index = len(page.texts) - 1
+    if hasattr(context.scene, "bname_active_layer_kind"):
+        context.scene.bname_active_layer_kind = "text"
+    layer_stack_utils.sync_layer_stack_after_data_change(context)
+    return entry, missing_parent
+
+
+def _find_page_by_id(context, page_id: str):
+    work = get_work(context)
+    if work is None:
+        return None
+    for page in work.pages:
+        if getattr(page, "id", "") == page_id:
+            return page
+    return None
+
+
+def _find_text_index(page, text_id: str) -> int:
+    for i, entry in enumerate(page.texts):
+        if getattr(entry, "id", "") == text_id:
+            return i
+    return -1
+
+
+def _remove_text_by_id(context, page_id: str, text_id: str) -> None:
+    page = _find_page_by_id(context, page_id)
+    if page is None:
+        return
+    idx = _find_text_index(page, text_id)
+    if idx < 0:
+        return
+    page.texts.remove(idx)
+    page.active_text_index = min(idx, len(page.texts) - 1) if len(page.texts) else -1
+    if len(page.texts) == 0 and hasattr(context.scene, "bname_active_layer_kind"):
+        context.scene.bname_active_layer_kind = "gp"
+    layer_stack_utils.sync_layer_stack_after_data_change(context)
+
+
 class BNAME_OT_text_add(Operator):
     """アクティブページにテキストを追加. マウス位置から座標決定."""
 
@@ -67,13 +147,24 @@ class BNAME_OT_text_add(Operator):
         description="同じページの BNameBalloonEntry.id を指定 (空で独立テキスト)",
         default="",
     )
+    use_explicit_position: BoolProperty(default=False, options={"HIDDEN"})  # type: ignore[valid-type]
 
     @classmethod
     def poll(cls, context):
         work = get_work(context)
         return work is not None and work.loaded and get_active_page(context) is not None
 
+    def draw(self, _context):
+        layout = self.layout
+        layout.prop(self, "body")
+        layout.prop(self, "speaker_type")
+        row = layout.row(align=True)
+        row.prop(self, "width_mm")
+        row.prop(self, "height_mm")
+
     def invoke(self, context, event):
+        if self.use_explicit_position:
+            return context.window_manager.invoke_props_dialog(self)
         work, page, lx, ly = _resolve_page_from_event(context, event)
         if work is None or page is None:
             self.report({"ERROR"}, "ページが選択されていません")
@@ -92,41 +183,25 @@ class BNAME_OT_text_add(Operator):
         if page is None:
             self.report({"ERROR"}, "ページが選択されていません")
             return {"CANCELLED"}
-        try:
-            from .balloon_op import _creation_violates_layer_scope
-
-            blocked = _creation_violates_layer_scope(
-                context, page, self.x_mm, self.y_mm, self.width_mm, self.height_mm
-            )
-        except Exception:  # noqa: BLE001
-            blocked = False
-        if blocked:
+        if _creation_blocked(context, page, self.x_mm, self.y_mm, self.width_mm, self.height_mm):
             self.report({"ERROR"}, "このモードではその位置にテキストを作成できません")
             return {"CANCELLED"}
-        entry = page.texts.add()
-        entry.id = _allocate_text_id(page)
-        entry.body = self.body
-        entry.speaker_type = self.speaker_type
-        entry.x_mm = self.x_mm
-        entry.y_mm = self.y_mm
-        entry.width_mm = self.width_mm
-        entry.height_mm = self.height_mm
-        # 親フキダシ指定があれば、対応フキダシの位置に追従する (中央合わせ)
-        if self.parent_balloon_id:
-            for b in page.balloons:
-                if b.id == self.parent_balloon_id:
-                    entry.parent_balloon_id = self.parent_balloon_id
-                    entry.x_mm = b.x_mm + (b.width_mm - entry.width_mm) / 2.0
-                    entry.y_mm = b.y_mm + (b.height_mm - entry.height_mm) / 2.0
-                    break
-            else:
-                self.report(
-                    {"WARNING"},
-                    f"親フキダシ {self.parent_balloon_id} が見つかりません (独立テキストとして追加)",
-                )
-        page.active_text_index = len(page.texts) - 1
-        if hasattr(context.scene, "bname_active_layer_kind"):
-            context.scene.bname_active_layer_kind = "text"
+        entry, missing_parent = _create_text_entry(
+            context,
+            page,
+            body=self.body,
+            speaker_type=self.speaker_type,
+            x_mm=self.x_mm,
+            y_mm=self.y_mm,
+            width_mm=self.width_mm,
+            height_mm=self.height_mm,
+            parent_balloon_id=self.parent_balloon_id,
+        )
+        if missing_parent:
+            self.report(
+                {"WARNING"},
+                f"親フキダシ {missing_parent} が見つかりません (独立テキストとして追加)",
+            )
         self.report({"INFO"}, f"テキスト追加: {entry.id}")
         return {"FINISHED"}
 
@@ -158,6 +233,7 @@ class BNAME_OT_text_remove(Operator):
             page.active_text_index = len(page.texts) - 1
         if len(page.texts) == 0 and hasattr(context.scene, "bname_active_layer_kind"):
             context.scene.bname_active_layer_kind = "gp"
+        layer_stack_utils.sync_layer_stack_after_data_change(context)
         self.report({"INFO"}, f"テキスト削除: {tid}")
         return {"FINISHED"}
 
@@ -196,6 +272,7 @@ class BNAME_OT_text_attach_to_balloon(Operator):
         target_id = self.balloon_id.strip()
         if not target_id:
             txt.parent_balloon_id = ""
+            layer_stack_utils.sync_layer_stack_after_data_change(context)
             self.report({"INFO"}, "テキストを独立化しました")
             return {"FINISHED"}
         # 指定 ID のフキダシが同じページに存在するか確認
@@ -205,16 +282,175 @@ class BNAME_OT_text_attach_to_balloon(Operator):
                 # 位置を当該フキダシの中央に合わせる
                 txt.x_mm = b.x_mm + (b.width_mm - txt.width_mm) / 2.0
                 txt.y_mm = b.y_mm + (b.height_mm - txt.height_mm) / 2.0
+                layer_stack_utils.sync_layer_stack_after_data_change(context)
                 self.report({"INFO"}, f"テキストを紐付け: {target_id}")
                 return {"FINISHED"}
         self.report({"ERROR"}, f"フキダシが見つかりません: {target_id}")
         return {"CANCELLED"}
 
 
+class BNAME_OT_text_tool(Operator):
+    """クリック位置へテキストレイヤーを作成し、インライン入力を開始する."""
+
+    bl_idname = "bname.text_tool"
+    bl_label = "テキストツール"
+    bl_options = {"REGISTER", "UNDO", "BLOCKING"}
+
+    _externally_finished: bool
+    _cursor_modal_set: bool
+    _editing: bool
+    _page_id: str
+    _text_id: str
+
+    @classmethod
+    def poll(cls, context):
+        work = get_work(context)
+        return work is not None and work.loaded and get_active_page(context) is not None
+
+    def invoke(self, context, _event):
+        if panel_modal_state.get_active("text_tool") is not None:
+            panel_modal_state.finish_active("text_tool", context, keep_selection=True)
+            return {"FINISHED"}
+        panel_modal_state.finish_active("knife_cut", context, keep_selection=False)
+        panel_modal_state.finish_active("edge_move", context, keep_selection=True)
+        panel_modal_state.finish_active("layer_move", context, keep_selection=True)
+        self._externally_finished = False
+        self._cursor_modal_set = panel_modal_state.set_modal_cursor(context, "TEXT")
+        self._editing = False
+        self._page_id = ""
+        self._text_id = ""
+        context.window_manager.modal_handler_add(self)
+        panel_modal_state.set_active("text_tool", self, context)
+        self.report({"INFO"}, "テキストツール: クリック位置にテキストを追加")
+        return {"RUNNING_MODAL"}
+
+    def modal(self, context, event):
+        if getattr(self, "_externally_finished", False):
+            panel_modal_state.clear_active("text_tool", self, context)
+            return {"FINISHED", "PASS_THROUGH"}
+        if getattr(self, "_editing", False):
+            return self._modal_editing(context, event)
+        if event.type in {"ESC", "RIGHTMOUSE"} and event.value == "PRESS":
+            self.finish_from_external(context, keep_selection=True)
+            return {"FINISHED"}
+        if event.type == "T" and event.value == "PRESS" and not event.ctrl and not event.alt:
+            self.finish_from_external(context, keep_selection=True)
+            return {"FINISHED"}
+        if (
+            event.value == "PRESS"
+            and event.type in {"O", "P", "F", "G", "COMMA", "PERIOD"}
+            and not event.ctrl
+            and not event.alt
+        ):
+            self.finish_from_external(context, keep_selection=True)
+            return {"FINISHED", "PASS_THROUGH"}
+        if event.type != "LEFTMOUSE" or event.value != "PRESS":
+            return {"RUNNING_MODAL"}
+        work, page, lx, ly = _resolve_page_from_event(context, event)
+        if work is None or page is None or lx is None or ly is None:
+            return {"PASS_THROUGH"}
+        width = 30.0
+        height = 15.0
+        x_mm = lx - width / 2.0
+        y_mm = ly - height / 2.0
+        if _creation_blocked(context, page, x_mm, y_mm, width, height):
+            self.report({"ERROR"}, "このモードではその位置にテキストを作成できません")
+            return {"RUNNING_MODAL"}
+        entry, _missing_parent = _create_text_entry(
+            context,
+            page,
+            body="",
+            speaker_type="normal",
+            x_mm=x_mm,
+            y_mm=y_mm,
+            width_mm=width,
+            height_mm=height,
+        )
+        self._editing = True
+        self._page_id = getattr(page, "id", "")
+        self._text_id = getattr(entry, "id", "")
+        self.report({"INFO"}, "本文を入力してください (Enter: 確定 / Esc: キャンセル)")
+        return {"RUNNING_MODAL"}
+
+    def _modal_editing(self, context, event):
+        if event.value != "PRESS":
+            return {"RUNNING_MODAL"}
+        if event.type in {"ESC", "RIGHTMOUSE"}:
+            _remove_text_by_id(context, self._page_id, self._text_id)
+            self.finish_from_external(context, keep_selection=True)
+            return {"CANCELLED"}
+        if event.type in {"RET", "NUMPAD_ENTER"}:
+            if event.shift:
+                return self._append_to_current_text(context, "\n")
+            self.finish_from_external(context, keep_selection=True)
+            return {"FINISHED"}
+        if event.type == "BACK_SPACE":
+            return self._backspace_current_text(context)
+        if event.type == "V" and event.ctrl and not event.alt:
+            clipboard = getattr(context.window_manager, "clipboard", "")
+            if clipboard:
+                return self._append_to_current_text(context, clipboard)
+            return {"RUNNING_MODAL"}
+        text = getattr(event, "unicode", "") or ""
+        if text and not event.ctrl and not event.alt and not getattr(event, "oskey", False):
+            return self._append_to_current_text(context, text)
+        return {"RUNNING_MODAL"}
+
+    def _current_text_entry(self, context):
+        page = _find_page_by_id(context, self._page_id)
+        if page is None:
+            return None, None, -1
+        idx = _find_text_index(page, self._text_id)
+        if idx < 0:
+            return page, None, -1
+        return page, page.texts[idx], idx
+
+    def _append_to_current_text(self, context, text: str):
+        page, entry, idx = self._current_text_entry(context)
+        if entry is None:
+            self.finish_from_external(context, keep_selection=True)
+            return {"CANCELLED"}
+        cleaned = text.replace("\x00", "")
+        if not cleaned:
+            return {"RUNNING_MODAL"}
+        entry.body = f"{entry.body}{cleaned}"
+        page.active_text_index = idx
+        if hasattr(context.scene, "bname_active_layer_kind"):
+            context.scene.bname_active_layer_kind = "text"
+        layer_stack_utils.sync_layer_stack_after_data_change(context)
+        return {"RUNNING_MODAL"}
+
+    def _backspace_current_text(self, context):
+        page, entry, idx = self._current_text_entry(context)
+        if entry is None:
+            self.finish_from_external(context, keep_selection=True)
+            return {"CANCELLED"}
+        if entry.body:
+            entry.body = entry.body[:-1]
+            page.active_text_index = idx
+            layer_stack_utils.sync_layer_stack_after_data_change(context)
+        return {"RUNNING_MODAL"}
+
+    def _cleanup(self, context) -> None:
+        if getattr(self, "_cursor_modal_set", False):
+            panel_modal_state.restore_modal_cursor(context)
+            self._cursor_modal_set = False
+        self._editing = False
+
+    def finish_from_external(self, context, *, keep_selection: bool) -> None:
+        _ = keep_selection
+        if getattr(self, "_externally_finished", False):
+            return
+        self._externally_finished = True
+        self._cleanup(context)
+        panel_modal_state.clear_active("text_tool", self, context)
+
+
 _CLASSES = (
     BNAME_OT_text_add,
     BNAME_OT_text_remove,
     BNAME_OT_text_attach_to_balloon,
+    BNAME_OT_text_tool,
 )
 
 

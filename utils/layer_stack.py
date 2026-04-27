@@ -305,15 +305,30 @@ def _normalize_tree_order(
     """
     current = [stack_item_uid(item) for item in stack]
     desired: list[str] = []
+    used: set[str] = set()
+
+    def _append_uid(item) -> None:
+        uid = stack_item_uid(item)
+        if uid in used:
+            return
+        desired.append(uid)
+        used.add(uid)
+
+    def _append_gp_subtree(parent_key: str) -> None:
+        for child in stack:
+            if getattr(child, "parent_key", "") != parent_key:
+                continue
+            _append_uid(child)
+            if child.kind == "gp_folder":
+                _append_gp_subtree(child.key)
 
     page_items = [item for item in stack if item.kind == PAGE_KIND]
-    page_uid_order = None
     if page_key_order is not None:
         page_uid_order = [target_uid(PAGE_KIND, key) for key in page_key_order]
-    page_items = _ordered_items_by_uid(page_items, page_uid_order)
-    for page_item in page_items:
-        page_uid = stack_item_uid(page_item)
-        desired.append(page_uid)
+        page_items = _ordered_items_by_uid(page_items, page_uid_order)
+
+    def _append_page_subtree(page_item) -> None:
+        _append_uid(page_item)
         page_key = page_item.key
         panel_items = [
             item
@@ -326,18 +341,30 @@ def _normalize_tree_order(
                 target_uid(PANEL_KIND, key)
                 for key in panel_key_order_by_page.get(page_key, [])
             ]
-        panel_items = _ordered_items_by_uid(panel_items, panel_uid_order)
+            panel_items = _ordered_items_by_uid(panel_items, panel_uid_order)
         for panel_item in panel_items:
-            panel_uid = stack_item_uid(panel_item)
-            desired.append(panel_uid)
+            _append_uid(panel_item)
             for child in stack:
                 if getattr(child, "parent_key", "") == panel_item.key:
-                    desired.append(stack_item_uid(child))
+                    _append_uid(child)
         for child in stack:
             if getattr(child, "parent_key", "") == page_key and child.kind != PANEL_KIND:
-                desired.append(stack_item_uid(child))
+                _append_uid(child)
 
-    used = set(desired)
+    if page_key_order is not None:
+        for page_item in page_items:
+            _append_page_subtree(page_item)
+
+    for item in stack:
+        if stack_item_uid(item) in used:
+            continue
+        if item.kind == PAGE_KIND:
+            _append_page_subtree(item)
+        elif not getattr(item, "parent_key", ""):
+            _append_uid(item)
+            if item.kind == "gp_folder":
+                _append_gp_subtree(item.key)
+
     desired.extend(uid for uid in current if uid not in used)
     for target_index, uid in enumerate(desired):
         current_index = next((i for i, item in enumerate(stack) if stack_item_uid(item) == uid), -1)

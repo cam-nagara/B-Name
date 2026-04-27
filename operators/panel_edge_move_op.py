@@ -610,6 +610,7 @@ class BNAME_OT_panel_edge_move(Operator):
             return {"FINISHED"}
         panel_modal_state.finish_active("knife_cut", context, keep_selection=False)
         panel_modal_state.finish_active("layer_move", context, keep_selection=False)
+        panel_modal_state.finish_active("text_tool", context, keep_selection=True)
         self._area, self._region, self._rv3d = target
         self._work = get_work(context)
         if self._work is None or not self._work.loaded:

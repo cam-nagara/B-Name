@@ -23,7 +23,7 @@ from bpy.types import Operator
 
 from ..core.work import get_active_page, get_work
 from ..utils import gpencil as gp_utils
-from ..utils import geom, log, page_grid
+from ..utils import geom, layer_stack as layer_stack_utils, log, page_grid
 
 _logger = log.get_logger(__name__)
 
@@ -152,6 +152,7 @@ class BNAME_OT_gpencil_layer_add(Operator):
             gp_utils.ensure_layer_material(obj, layer, activate=True, assign_existing=True)
         except Exception:  # noqa: BLE001
             _logger.exception("layer material setup failed")
+        layer_stack_utils.sync_layer_stack_after_data_change(context)
         return {"FINISHED"}
 
 
@@ -198,6 +199,7 @@ class BNAME_OT_gpencil_layer_remove(Operator):
             gp_utils.ensure_active_layer_material(obj, activate=True)
         except Exception:  # noqa: BLE001
             _logger.exception("active layer material refresh failed")
+        layer_stack_utils.sync_layer_stack_after_data_change(context)
         return {"FINISHED"}
 
 
@@ -229,6 +231,7 @@ class BNAME_OT_gpencil_layer_select(Operator):
             gp_utils.ensure_layer_material(obj, layer, activate=True, assign_existing=True)
         except Exception:  # noqa: BLE001
             _logger.exception("layer material setup failed")
+        layer_stack_utils.sync_layer_stack_after_data_change(context)
         return {"FINISHED"}
 
 
@@ -275,6 +278,7 @@ class BNAME_OT_gpencil_folder_add(Operator):
             context.scene.bname_active_layer_kind = "gp_folder"
         if hasattr(context.scene, "bname_active_gp_folder_key"):
             context.scene.bname_active_gp_folder_key = group.name
+        layer_stack_utils.sync_layer_stack_after_data_change(context)
         return {"FINISHED"}
 
 
@@ -315,6 +319,7 @@ class BNAME_OT_gpencil_folder_remove(Operator):
             context.scene.bname_active_layer_kind = "gp"
         if hasattr(context.scene, "bname_active_gp_folder_key"):
             context.scene.bname_active_gp_folder_key = ""
+        layer_stack_utils.sync_layer_stack_after_data_change(context)
         return {"FINISHED"}
 
 
@@ -356,6 +361,7 @@ class BNAME_OT_gpencil_layer_move_to_folder(Operator):
             layers.active = layer
         except Exception:  # noqa: BLE001
             pass
+        layer_stack_utils.sync_layer_stack_after_data_change(context)
         return {"FINISHED"}
 
 
