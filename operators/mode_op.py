@@ -17,6 +17,7 @@ from ..core.mode import MODE_PAGE, MODE_PANEL, get_mode, set_mode
 from ..core.work import get_active_page, get_work
 from ..io import blend_io, page_io, work_io
 from ..utils import geom, log, paths
+from . import panel_modal_state
 
 _logger = log.get_logger(__name__)
 
@@ -130,6 +131,7 @@ class BNAME_OT_enter_panel_mode(Operator):
         return self.execute(context)
 
     def execute(self, context):
+        panel_modal_state.finish_all(context)
         work = get_work(context)
         page = get_active_page(context)
         if (
@@ -273,6 +275,7 @@ class BNAME_OT_exit_panel_mode(Operator):
         return get_mode(context) == MODE_PANEL
 
     def execute(self, context):
+        panel_modal_state.finish_all(context)
         # 1) サムネイル生成 (panel.blend 切替前に現在の描画を記録)
         work = get_work(context)
         page = get_active_page(context)

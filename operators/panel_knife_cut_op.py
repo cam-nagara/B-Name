@@ -433,10 +433,8 @@ class BNAME_OT_panel_knife_cut(Operator):
         if target is None:
             return {"PASS_THROUGH"}
         if panel_modal_state.get_active("knife_cut") is not None:
-            panel_modal_state.finish_active(
-                "knife_cut", context, keep_selection=False,
-            )
             return {"FINISHED"}
+        panel_modal_state.finish_active("panel_vertex_edit", context, keep_selection=True)
         panel_modal_state.finish_active("edge_move", context, keep_selection=False)
         panel_modal_state.finish_active("layer_move", context, keep_selection=False)
         panel_modal_state.finish_active("balloon_tool", context, keep_selection=True)
@@ -588,8 +586,7 @@ class BNAME_OT_panel_knife_cut(Operator):
         ):
             if not self._is_inside_region(event):
                 return {"PASS_THROUGH"}
-            self.finish_from_external(context, keep_selection=False)
-            return {"FINISHED"}
+            return {"RUNNING_MODAL"}
 
         if (
             event.value == "PRESS"

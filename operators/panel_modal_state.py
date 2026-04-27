@@ -12,6 +12,17 @@ _ACTIVE_REFS: dict[str, weakref.ReferenceType | None] = {
     "balloon_tool": None,
     "text_tool": None,
     "effect_line_tool": None,
+    "panel_vertex_edit": None,
+}
+
+_DEFAULT_KEEP_SELECTION: dict[str, bool] = {
+    "edge_move": True,
+    "knife_cut": False,
+    "layer_move": True,
+    "balloon_tool": True,
+    "text_tool": True,
+    "effect_line_tool": True,
+    "panel_vertex_edit": True,
 }
 
 
@@ -60,6 +71,23 @@ def finish_active(tool_name: str, context, *, keep_selection: bool = False) -> b
     finally:
         clear_active(tool_name, op, context)
     return True
+
+
+def finish_all(context, *, except_tool: str = "") -> bool:
+    """アクティブな B-Name モーダルツールをまとめて終了する."""
+    changed = False
+    for tool_name in tuple(_ACTIVE_REFS.keys()):
+        if tool_name == except_tool:
+            continue
+        changed = (
+            finish_active(
+                tool_name,
+                context,
+                keep_selection=_DEFAULT_KEEP_SELECTION.get(tool_name, True),
+            )
+            or changed
+        )
+    return changed
 
 
 def set_modal_cursor(context, cursor: str) -> bool:

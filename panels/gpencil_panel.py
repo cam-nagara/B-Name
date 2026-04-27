@@ -909,11 +909,7 @@ class BNAME_OT_gpencil_master_mode_set(bpy.types.Operator):
         try:
             from ..operators import panel_modal_state
 
-            panel_modal_state.finish_active("knife_cut", context, keep_selection=False)
-            panel_modal_state.finish_active("edge_move", context, keep_selection=True)
-            panel_modal_state.finish_active("layer_move", context, keep_selection=True)
-            panel_modal_state.finish_active("text_tool", context, keep_selection=True)
-            panel_modal_state.finish_active("effect_line_tool", context, keep_selection=True)
+            panel_modal_state.finish_all(context)
         except Exception:  # noqa: BLE001
             pass
         obj = gp_utils.get_master_gpencil()

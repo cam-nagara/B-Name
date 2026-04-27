@@ -592,8 +592,8 @@ class BNAME_OT_text_tool(Operator):
 
     def invoke(self, context, _event):
         if panel_modal_state.get_active("text_tool") is not None:
-            panel_modal_state.finish_active("text_tool", context, keep_selection=True)
             return {"FINISHED"}
+        panel_modal_state.finish_active("panel_vertex_edit", context, keep_selection=True)
         panel_modal_state.finish_active("knife_cut", context, keep_selection=False)
         panel_modal_state.finish_active("edge_move", context, keep_selection=True)
         panel_modal_state.finish_active("layer_move", context, keep_selection=True)
@@ -629,8 +629,7 @@ class BNAME_OT_text_tool(Operator):
             self.finish_from_external(context, keep_selection=True)
             return {"FINISHED"}
         if event.type == "T" and event.value == "PRESS" and not event.ctrl and not event.alt:
-            self.finish_from_external(context, keep_selection=True)
-            return {"FINISHED"}
+            return {"RUNNING_MODAL"}
         if (
             event.value == "PRESS"
             and event.type in {"O", "P", "F", "G", "K"}

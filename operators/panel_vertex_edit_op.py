@@ -31,6 +31,7 @@ from gpu_extras.batch import batch_for_shader
 from ..core.work import get_active_page, get_work
 from ..io import page_io, panel_io
 from ..utils import geom, log
+from . import panel_modal_state
 
 _logger = log.get_logger(__name__)
 
@@ -206,6 +207,9 @@ class BNAME_OT_panel_edit_vertices(Operator):
         )
 
     def invoke(self, context, event):
+        if panel_modal_state.get_active("panel_vertex_edit") is not None:
+            return {"FINISHED"}
+        panel_modal_state.finish_all(context, except_tool="panel_vertex_edit")
         # マウス直下のコマへフォーカス (overview 時は全ページ逆引き)
         from . import panel_edit_op
 
@@ -241,6 +245,7 @@ class BNAME_OT_panel_edit_vertices(Operator):
         self._hover = None  # ("vertex"|"edge", index) or None
         self._drag = None  # dict or None
         self._snap_guides: list[tuple[str, float]] = []  # [("x"|"y", value_mm)]
+        self._externally_finished = False
 
         # 描画ハンドラ登録 (POST_PIXEL — 2D ピクセル座標で描画)
         args = (self,)
@@ -248,6 +253,7 @@ class BNAME_OT_panel_edit_vertices(Operator):
             _draw_callback, args, "WINDOW", "POST_PIXEL"
         )
         context.window_manager.modal_handler_add(self)
+        panel_modal_state.set_active("panel_vertex_edit", self, context)
         self._tag_redraw(context)
         self.report({"INFO"}, "ドラッグで編集 | Enter で確定 | ESC でキャンセル")
         return {"RUNNING_MODAL"}
@@ -281,6 +287,9 @@ class BNAME_OT_panel_edit_vertices(Operator):
     # ---- modal ----
 
     def modal(self, context, event):
+        if getattr(self, "_externally_finished", False):
+            panel_modal_state.clear_active("panel_vertex_edit", self, context)
+            return {"FINISHED", "PASS_THROUGH"}
         try:
             # entry が削除された等の例外ケースで modal が暴走しないよう防御
             _ = self._entry.panel_stem  # 参照を生かす
@@ -293,6 +302,10 @@ class BNAME_OT_panel_edit_vertices(Operator):
         # 原点を引いて正規化する。
         def _to_window(ev):
             return ev.mouse_x - self._region.x, ev.mouse_y - self._region.y
+
+        if self._drag is None and event.type in {"MOUSEMOVE", "LEFTMOUSE", "RIGHTMOUSE"}:
+            if not self._is_inside_region(event):
+                return {"PASS_THROUGH"}
 
         if event.type == "MOUSEMOVE":
             mx, my = _to_window(event)
@@ -331,6 +344,15 @@ class BNAME_OT_panel_edit_vertices(Operator):
             return {"FINISHED"}
 
         return {"PASS_THROUGH"}
+
+    def _is_inside_region(self, event) -> bool:
+        region = getattr(self, "_region", None)
+        if region is None:
+            return False
+        return (
+            region.x <= event.mouse_x < region.x + region.width
+            and region.y <= event.mouse_y < region.y + region.height
+        )
 
     # ---- ヒットテスト ----
 
@@ -559,6 +581,16 @@ class BNAME_OT_panel_edit_vertices(Operator):
             except Exception:  # noqa: BLE001
                 pass
             self._draw_handler = None
+        panel_modal_state.clear_active("panel_vertex_edit", self, context)
+
+    def finish_from_external(self, context, *, keep_selection: bool) -> None:
+        _ = keep_selection
+        if getattr(self, "_externally_finished", False):
+            return
+        self._externally_finished = True
+        self._drag = None
+        self._snap_guides = []
+        self._save_and_cleanup(context)
 
     def _tag_redraw(self, context) -> None:
         screen = getattr(context, "screen", None)

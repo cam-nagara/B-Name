@@ -676,8 +676,8 @@ class BNAME_OT_balloon_tool(Operator):
 
     def invoke(self, context, _event):
         if panel_modal_state.get_active("balloon_tool") is not None:
-            panel_modal_state.finish_active("balloon_tool", context, keep_selection=True)
             return {"FINISHED"}
+        panel_modal_state.finish_active("panel_vertex_edit", context, keep_selection=True)
         panel_modal_state.finish_active("knife_cut", context, keep_selection=False)
         panel_modal_state.finish_active("edge_move", context, keep_selection=True)
         panel_modal_state.finish_active("layer_move", context, keep_selection=True)

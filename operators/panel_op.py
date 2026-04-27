@@ -554,12 +554,7 @@ class BNAME_OT_panel_split_template(Operator):
         self.target_from_edge_selection = from_edge
         work.active_page_index = page_index
         page.active_panel_index = panel_index
-        panel_modal_state.finish_active("knife_cut", context, keep_selection=False)
-        panel_modal_state.finish_active("edge_move", context, keep_selection=True)
-        panel_modal_state.finish_active("layer_move", context, keep_selection=True)
-        panel_modal_state.finish_active("balloon_tool", context, keep_selection=True)
-        panel_modal_state.finish_active("text_tool", context, keep_selection=True)
-        panel_modal_state.finish_active("effect_line_tool", context, keep_selection=True)
+        panel_modal_state.finish_all(context)
         return context.window_manager.invoke_props_dialog(self)
 
     def execute(self, context):
@@ -587,12 +582,7 @@ class BNAME_OT_panel_split_template(Operator):
             self.report({"WARNING"}, "矩形または多角形コマを選択してください")
             return {"CANCELLED"}
         work_dir = Path(work.work_dir)
-        panel_modal_state.finish_active("knife_cut", context, keep_selection=False)
-        panel_modal_state.finish_active("edge_move", context, keep_selection=True)
-        panel_modal_state.finish_active("layer_move", context, keep_selection=True)
-        panel_modal_state.finish_active("balloon_tool", context, keep_selection=True)
-        panel_modal_state.finish_active("text_tool", context, keep_selection=True)
-        panel_modal_state.finish_active("effect_line_tool", context, keep_selection=True)
+        panel_modal_state.finish_all(context)
         gap_v = work.panel_gap.vertical_mm
         gap_h = work.panel_gap.horizontal_mm
         rows, cols = self.rows, self.cols

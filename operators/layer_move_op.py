@@ -133,6 +133,7 @@ class BNAME_OT_layer_move_tool(Operator):
             # レイヤー移動ツールは選択式ツールとして扱う。同じボタン/キーを
             # 再度押しても解除せず、他ツール切替または ESC/RMB まで維持する。
             return {"FINISHED"}
+        panel_modal_state.finish_active("panel_vertex_edit", context, keep_selection=True)
         panel_modal_state.finish_active("knife_cut", context, keep_selection=False)
         panel_modal_state.finish_active("edge_move", context, keep_selection=True)
         panel_modal_state.finish_active("balloon_tool", context, keep_selection=True)
