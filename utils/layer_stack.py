@@ -24,6 +24,7 @@ _logger = log.get_logger(__name__)
 EFFECT_GP_OBJECT_NAME = "BName_EffectLines"
 _sync_scheduled = False
 _sync_should_apply_order = False
+_sync_order_moved_uid = ""
 _draw_stack_signatures: dict[int, tuple[str, ...]] = {}
 
 
@@ -461,6 +462,136 @@ def remember_layer_stack_signature(context) -> None:
     _remember_stack_signature(context)
 
 
+def _find_stack_index_by_uid(stack, uid: str) -> int:
+    if stack is None or not uid:
+        return -1
+    for i, item in enumerate(stack):
+        if stack_item_uid(item) == uid:
+            return i
+    return -1
+
+
+def _find_stack_item(stack, kind: str, key: str):
+    for item in stack or []:
+        if getattr(item, "kind", "") == kind and getattr(item, "key", "") == key:
+            return item
+    return None
+
+
+def _gp_parent_key_from_flat_drop(stack, moved_index: int) -> str:
+    """UIList の平坦D&D位置から GP フォルダ親を推定する."""
+    if stack is None or moved_index <= 0:
+        return ""
+    previous = stack[moved_index - 1]
+    previous_kind = getattr(previous, "kind", "")
+    if previous_kind == "gp_folder":
+        return str(getattr(previous, "key", "") or "")
+    if previous_kind == "gp":
+        return str(getattr(previous, "parent_key", "") or "")
+    return ""
+
+
+def _is_stack_folder_descendant(stack, ancestor_key: str, candidate_key: str) -> bool:
+    key = candidate_key
+    guard = 0
+    while key and guard < 128:
+        if key == ancestor_key:
+            return True
+        folder = _find_stack_item(stack, "gp_folder", key)
+        if folder is None:
+            return False
+        key = str(getattr(folder, "parent_key", "") or "")
+        guard += 1
+    return False
+
+
+def _apply_gp_folder_drop_hint(context, moved_uid: str) -> bool:
+    """GP レイヤー/フォルダをフォルダ直下へ落としたUIList D&Dを親変更へ変換する."""
+    scene = getattr(context, "scene", None)
+    stack = getattr(scene, "bname_layer_stack", None) if scene is not None else None
+    moved_index = _find_stack_index_by_uid(stack, moved_uid)
+    if moved_index < 0:
+        return False
+    item = stack[moved_index]
+    if getattr(item, "kind", "") not in {"gp", "gp_folder"}:
+        return False
+    parent_key = _gp_parent_key_from_flat_drop(stack, moved_index)
+    old_parent_key = str(getattr(item, "parent_key", "") or "")
+    if getattr(item, "kind", "") == "gp_folder":
+        item_key = str(getattr(item, "key", "") or "")
+        if parent_key == item_key or _is_stack_folder_descendant(stack, item_key, parent_key):
+            return False
+    if parent_key == old_parent_key:
+        return False
+    item.parent_key = parent_key
+    parent = _find_stack_item(stack, "gp_folder", parent_key) if parent_key else None
+    item.depth = int(getattr(parent, "depth", -1)) + 1 if parent is not None else 0
+    obj = gp_utils.get_master_gpencil()
+    groups = getattr(getattr(obj, "data", None), "layer_groups", None) if obj is not None else None
+    group = _find_gp_group_by_key(groups, parent_key) if parent_key else None
+    if group is not None and hasattr(group, "is_expanded"):
+        try:
+            group.is_expanded = True
+        except Exception:  # noqa: BLE001
+            pass
+    return True
+
+
+def _infer_moved_uid(previous: tuple[str, ...], current: tuple[str, ...]) -> str:
+    if len(previous) != len(current) or previous == current:
+        return ""
+    first = -1
+    last = -1
+    for i, (old_uid, new_uid) in enumerate(zip(previous, current)):
+        if old_uid != new_uid:
+            if first < 0:
+                first = i
+            last = i
+    if first < 0 or last < 0:
+        return ""
+    if previous[first] == current[last]:
+        return previous[first]
+    if previous[last] == current[first]:
+        return previous[last]
+    return ""
+
+
+def _active_uid_from_signature(scene, signature: tuple[str, ...]) -> str:
+    idx = int(getattr(scene, "bname_active_layer_stack_index", -1))
+    if 0 <= idx < len(signature):
+        return signature[idx]
+    return ""
+
+
+def apply_stack_order_if_ui_changed(context, *, moved_uid: str = "") -> bool:
+    """UIList の D&D で変わった Collection 順を、同期で戻る前に実データへ適用する."""
+    scene = getattr(context, "scene", None)
+    if scene is None or getattr(scene, "bname_layer_stack", None) is None:
+        return False
+    try:
+        scene_key = int(scene.as_pointer())
+    except Exception:  # noqa: BLE001
+        scene_key = id(scene)
+    signature = _stack_signature(scene)
+    previous = _draw_stack_signatures.get(scene_key)
+    if previous is None:
+        _remember_stack_signature(context)
+        return False
+    if previous == signature:
+        return False
+    if set(previous) != set(signature):
+        _remember_stack_signature(context)
+        return False
+    if not moved_uid:
+        moved_uid = _active_uid_from_signature(scene, signature)
+    if not moved_uid:
+        moved_uid = _infer_moved_uid(previous, signature)
+    _apply_gp_folder_drop_hint(context, moved_uid)
+    apply_stack_order(context)
+    _remember_stack_signature(context)
+    return True
+
+
 def sync_layer_stack_after_data_change(
     context,
     *,
@@ -501,7 +632,13 @@ def schedule_layer_stack_draw_maintenance(context) -> None:
         return
     if previous != signature:
         _draw_stack_signatures[scene_key] = signature
-        schedule_layer_stack_sync(apply_order=True)
+        apply_order = set(previous) == set(signature)
+        moved_uid = ""
+        if apply_order:
+            moved_uid = _active_uid_from_signature(scene, signature)
+            if not moved_uid:
+                moved_uid = _infer_moved_uid(previous, signature)
+        schedule_layer_stack_sync(apply_order=apply_order, moved_uid=moved_uid)
     elif not signature:
         schedule_layer_stack_sync()
 
@@ -1001,6 +1138,55 @@ def _move_gp_node(gp_data, node, direction: str) -> None:
         _logger.exception("gp node move failed: %s %s", getattr(node, "name", ""), direction)
 
 
+def _gp_group_contains_key(group, key: str) -> bool:
+    if group is None or not key:
+        return False
+    for child in getattr(group, "children", []):
+        if gp_utils.is_layer_group(child):
+            child_key = _node_stack_key(child)
+            if child_key == key or _gp_group_contains_key(child, key):
+                return True
+    return False
+
+
+def _apply_gp_parenting(obj, stack) -> None:
+    gp_data = getattr(obj, "data", None)
+    if gp_data is None:
+        return
+    layers = getattr(gp_data, "layers", None)
+    groups = getattr(gp_data, "layer_groups", None)
+    if layers is None:
+        return
+    for item in stack:
+        kind = getattr(item, "kind", "")
+        if kind not in {"gp", "gp_folder"}:
+            continue
+        key = str(getattr(item, "key", "") or "")
+        node = (
+            _find_gp_group_by_key(groups, key)
+            if kind == "gp_folder"
+            else _find_gp_layer_by_key(layers, key)
+        )
+        if node is None:
+            continue
+        desired_parent_key = str(getattr(item, "parent_key", "") or "")
+        parent_group = _find_gp_group_by_key(groups, desired_parent_key) if desired_parent_key else None
+        if desired_parent_key and parent_group is None:
+            desired_parent_key = ""
+        actual_parent = getattr(node, "parent_group", None)
+        actual_parent_key = _node_stack_key(actual_parent) if actual_parent is not None else ""
+        if actual_parent_key == desired_parent_key:
+            continue
+        if kind == "gp_folder":
+            if desired_parent_key == key or _gp_group_contains_key(node, desired_parent_key):
+                continue
+            if not gp_utils.move_group_to_group(gp_data, node, parent_group):
+                continue
+        elif not gp_utils.move_layer_to_group(gp_data, node, parent_group):
+            continue
+        item.parent_key = desired_parent_key
+
+
 def _reorder_gp_parent(gp_data, parent_key: str, desired_front_uids: list[str], *, effect: bool):
     siblings = _siblings_for_parent(gp_data, parent_key)
     actual = [_node_uid_for_stack(node, effect=effect) for node in siblings]
@@ -1046,6 +1232,7 @@ def apply_stack_order(context) -> None:
     _apply_simple_collection_orders(context, stack)
     gp_obj = gp_utils.get_master_gpencil()
     if gp_obj is not None:
+        _apply_gp_parenting(gp_obj, stack)
         _apply_gp_order(gp_obj, stack, effect=False)
     effect_obj = get_effect_gp_object()
     if effect_obj is not None:
@@ -1152,24 +1339,28 @@ def schedule_layer_stack_sync(
     retries: int = 6,
     interval: float = 0.1,
     apply_order: bool = False,
+    moved_uid: str = "",
 ) -> None:
     """ファイルロード直後の UI 再構築をまたいでレイヤースタックを同期する."""
-    global _sync_scheduled, _sync_should_apply_order
+    global _sync_order_moved_uid, _sync_scheduled, _sync_should_apply_order
 
     _sync_should_apply_order = _sync_should_apply_order or bool(apply_order)
+    if moved_uid:
+        _sync_order_moved_uid = moved_uid
     if _sync_scheduled:
         return
     _sync_scheduled = True
     state = {"left": max(1, int(retries))}
 
     def _tick():
-        global _sync_scheduled, _sync_should_apply_order
+        global _sync_order_moved_uid, _sync_scheduled, _sync_should_apply_order
 
         try:
-            sync_layer_stack(bpy.context)
             if _sync_should_apply_order:
+                if _sync_order_moved_uid:
+                    _apply_gp_folder_drop_hint(bpy.context, _sync_order_moved_uid)
                 apply_stack_order(bpy.context)
-                sync_layer_stack(bpy.context)
+            sync_layer_stack(bpy.context)
             _remember_stack_signature(bpy.context)
             tag_view3d_redraw(bpy.context)
         except Exception:  # noqa: BLE001
@@ -1179,6 +1370,7 @@ def schedule_layer_stack_sync(
             return interval
         _sync_scheduled = False
         _sync_should_apply_order = False
+        _sync_order_moved_uid = ""
         return None
 
     try:

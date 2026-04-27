@@ -64,10 +64,29 @@ def _on_active_layer_stack_index_changed(_self, context) -> None:
     idx = int(getattr(scene, "bname_active_layer_stack_index", -1))
     if stack is None or not (0 <= idx < len(stack)):
         return
-    _active_index_update_depth += 1
     try:
         from ..utils import layer_stack as layer_stack_utils
-
+    except Exception:  # noqa: BLE001
+        _logger.exception("layer stack utils import failed")
+        return
+    active_uid = ""
+    try:
+        active_uid = layer_stack_utils.stack_item_uid(stack[idx])
+    except Exception:  # noqa: BLE001
+        active_uid = ""
+    _active_index_update_depth += 1
+    try:
+        order_changed = layer_stack_utils.apply_stack_order_if_ui_changed(
+            context,
+            moved_uid=active_uid,
+        )
+        if order_changed and active_uid:
+            stack = layer_stack_utils.sync_layer_stack(context, preserve_active_index=True)
+            if stack is not None:
+                for i, item in enumerate(stack):
+                    if layer_stack_utils.stack_item_uid(item) == active_uid:
+                        layer_stack_utils.select_stack_index(context, i)
+                        return
         layer_stack_utils.select_stack_index(context, idx)
     except Exception:  # noqa: BLE001
         _logger.exception("active layer stack index update failed")

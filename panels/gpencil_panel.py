@@ -171,6 +171,14 @@ def _draw_selection_slot(row, index: int, active: bool) -> None:
     _select_icon(row, index, "RADIOBUT_ON" if active else "RADIOBUT_OFF")
 
 
+def _draw_drag_handle(row) -> None:
+    cell = row.row(align=True)
+    cell.ui_units_x = 1.0
+    # UIList の標準D&Dは、行内の非ボタン領域から始める必要がある。
+    # ここを operator にすると Blender 側でドラッグ開始イベントがボタンに吸われる。
+    cell.label(text="", icon="GRIP")
+
+
 def _draw_hierarchy_slot(row, item, target, index: int) -> None:
     _indent(row, int(getattr(item, "depth", 0)))
     if target is None:
@@ -206,8 +214,45 @@ def _draw_type_icon(row, index: int, icon: str) -> None:
     _select_icon(row, index, icon)
 
 
-def _draw_right_lock(row, target, prop_name: str = "lock") -> None:
-    if not hasattr(target, prop_name):
+def _draw_detail_button(row, index: int) -> None:
+    cell = row.row(align=True)
+    cell.ui_units_x = 1.0
+    op = cell.operator(
+        "bname.layer_stack_detail",
+        text="",
+        icon="INFO",
+        emboss=False,
+    )
+    op.index = index
+
+
+def _gp_color_style(layer):
+    mat = None
+    try:
+        mat = bpy.data.materials.get(gp_utils._layer_material_name(layer))
+    except Exception:  # noqa: BLE001
+        mat = None
+    return getattr(mat, "grease_pencil", None) if mat is not None else None
+
+
+def _draw_square_color_prop(row, owner, prop_name: str | None = None) -> None:
+    cell = row.row(align=True)
+    cell.ui_units_x = 1.0
+    if owner is None or prop_name is None or not hasattr(owner, prop_name):
+        cell.label(text="")
+        return
+    cell.prop(owner, prop_name, text="", icon_only=True)
+
+
+def _draw_square_placeholder(row) -> None:
+    cell = row.row(align=True)
+    cell.ui_units_x = 1.0
+    cell.label(text="")
+
+
+def _draw_right_aux_lock(row, target, prop_name: str = "lock") -> None:
+    if target is None or not hasattr(target, prop_name):
+        _draw_square_placeholder(row)
         return
     locked = bool(getattr(target, prop_name))
     cell = row.row(align=True)
@@ -221,60 +266,56 @@ def _draw_right_lock(row, target, prop_name: str = "lock") -> None:
     )
 
 
-def _draw_detail_button(row, index: int) -> None:
+def _draw_right_aux_panel_enter(row, index: int) -> None:
     cell = row.row(align=True)
     cell.ui_units_x = 1.0
     op = cell.operator(
-        "bname.layer_stack_detail",
+        "bname.layer_stack_enter_panel",
         text="",
-        icon="INFO",
+        icon="PLAY",
         emboss=False,
     )
-    op.index = index
+    op.stack_index = index
 
 
-def _draw_gp_color_swatches(row, obj, layer) -> None:
-    mat = None
-    try:
-        mat = bpy.data.materials.get(gp_utils._layer_material_name(layer))
-    except Exception:  # noqa: BLE001
-        mat = None
-    gp_style = getattr(mat, "grease_pencil", None) if mat is not None else None
-    if gp_style is None:
-        _draw_square_placeholder(row)
-        _draw_square_placeholder(row)
-        return
-    _draw_square_color_prop(row, gp_style, "color")
-    if hasattr(gp_style, "fill_color"):
-        _draw_square_color_prop(row, gp_style, "fill_color")
+def _draw_right_controls(row, controls, index: int) -> None:
+    slots = row.row(align=True)
+    slots.alignment = "RIGHT"
+    slots.ui_units_x = 4.0
+
+    gp_style = controls.get("gp_style")
+    if gp_style is not None:
+        _draw_square_color_prop(slots, gp_style, "color")
+        _draw_square_color_prop(slots, gp_style, "fill_color")
     else:
-        _draw_square_placeholder(row)
+        _draw_square_placeholder(slots)
+        _draw_square_placeholder(slots)
+
+    aux = controls.get("aux")
+    if aux == "panel_enter":
+        _draw_right_aux_panel_enter(slots, index)
+    elif aux == "lock":
+        _draw_right_aux_lock(slots, controls.get("lock_target"), controls.get("lock_prop", "lock"))
+    else:
+        _draw_square_placeholder(slots)
+
+    _draw_detail_button(slots, index)
 
 
-def _draw_square_color_prop(row, owner, prop_name: str) -> None:
-    cell = row.row(align=True)
-    cell.ui_units_x = 1.0
-    cell.prop(owner, prop_name, text="")
-
-
-def _draw_square_placeholder(row) -> None:
-    cell = row.row(align=True)
-    cell.ui_units_x = 1.0
-    cell.label(text="")
-
-
-def _draw_stack_gp_row(row, right, item, resolved, index: int) -> None:
+def _draw_stack_gp_row(row, controls, item, resolved, index: int) -> None:
     target = resolved.get("target") if resolved is not None else None
     if target is None:
         _draw_type_icon(row, index, _kind_icon(item.kind))
         _select_name(row, index, item.label)
         return
-    obj = resolved.get("object") if resolved is not None else None
     _draw_type_icon(row, index, _kind_icon(item.kind))
     _select_name(row, index, target.name)
     if item.kind == "gp":
-        _draw_gp_color_swatches(right, obj, target)
-    _draw_right_lock(right, target)
+        controls["gp_style"] = _gp_color_style(target)
+    if hasattr(target, "lock"):
+        controls["aux"] = "lock"
+        controls["lock_target"] = target
+        controls["lock_prop"] = "lock"
 
 
 def _draw_stack_page_row(row, item, resolved, index: int, work=None) -> None:
@@ -286,24 +327,16 @@ def _draw_stack_page_row(row, item, resolved, index: int, work=None) -> None:
     _select_icon_name(row, index, _page_layer_name(target, work), icon)
 
 
-def _draw_stack_panel_row(row, right, item, resolved, index: int) -> None:
+def _draw_stack_panel_row(row, controls, item, resolved, index: int) -> None:
     target = resolved.get("target") if resolved is not None else None
     if target is None:
         _select_icon_name(row, index, item.label, _kind_icon(item.kind))
         return
     _select_icon_name(row, index, _panel_layer_name(target), "MOD_WIREFRAME")
-    cell = right.row(align=True)
-    cell.ui_units_x = 1.0
-    op = cell.operator(
-        "bname.layer_stack_enter_panel",
-        text="",
-        icon="PLAY",
-        emboss=False,
-    )
-    op.stack_index = index
+    controls["aux"] = "panel_enter"
 
 
-def _draw_stack_data_row(row, right, item, resolved, index: int) -> None:
+def _draw_stack_data_row(row, controls, item, resolved, index: int) -> None:
     target = resolved.get("target") if resolved is not None else None
     if target is None:
         _draw_type_icon(row, index, _kind_icon(item.kind))
@@ -312,7 +345,9 @@ def _draw_stack_data_row(row, right, item, resolved, index: int) -> None:
     if item.kind == "image":
         _draw_type_icon(row, index, "IMAGE_DATA")
         _select_name(row, index, getattr(target, "title", "") or item.label)
-        _draw_right_lock(right, target, "locked")
+        controls["aux"] = "lock"
+        controls["lock_target"] = target
+        controls["lock_prop"] = "locked"
     elif item.kind == "balloon":
         _draw_type_icon(row, index, "MOD_FLUID")
         _select_name(row, index, target.id)
@@ -321,7 +356,7 @@ def _draw_stack_data_row(row, right, item, resolved, index: int) -> None:
         _draw_type_icon(row, index, "FONT_DATA")
         _select_name(row, index, getattr(target, "body", "") or item.label)
     elif item.kind == "effect":
-        _draw_stack_gp_row(row, right, item, resolved, index)
+        _draw_stack_gp_row(row, controls, item, resolved, index)
     else:
         _draw_type_icon(row, index, _kind_icon(item.kind))
         _select_name(row, index, item.label)
@@ -351,23 +386,25 @@ class BNAME_UL_layer_stack(UIList):
         active = int(getattr(context.scene, "bname_active_layer_stack_index", -1)) == index
         resolved = layer_stack_utils.resolve_stack_item(context, item)
         target = resolved.get("target") if resolved is not None else None
+        _draw_drag_handle(row)
         _draw_visibility_slot(row, item, target, index)
         _draw_selection_slot(row, index, active)
         _draw_hierarchy_slot(row, item, target, index)
-        content = row.split(factor=0.72, align=True)
+        content = row.split(factor=0.60, align=True)
         left = content.row(align=True)
         left.alignment = "LEFT"
         right = content.row(align=True)
         right.alignment = "RIGHT"
+        controls = {}
         if item.kind == "page":
             _draw_stack_page_row(left, item, resolved, index, get_work(context))
         elif item.kind == "panel":
-            _draw_stack_panel_row(left, right, item, resolved, index)
+            _draw_stack_panel_row(left, controls, item, resolved, index)
         elif item.kind in {"gp", "gp_folder", "effect"}:
-            _draw_stack_gp_row(left, right, item, resolved, index)
+            _draw_stack_gp_row(left, controls, item, resolved, index)
         else:
-            _draw_stack_data_row(left, right, item, resolved, index)
-        _draw_detail_button(right, index)
+            _draw_stack_data_row(left, controls, item, resolved, index)
+        _draw_right_controls(right, controls, index)
 
 
 def _draw_gp_selected_settings(box, obj, active_layer) -> None:
