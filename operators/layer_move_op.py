@@ -7,7 +7,7 @@ from bpy.types import Operator
 
 from ..core.mode import MODE_PANEL, MODE_PAGE, get_mode
 from ..core.work import get_active_page, get_work
-from ..utils import geom, layer_stack as layer_stack_utils, page_grid
+from ..utils import geom, gp_layer_parenting as gp_parent, layer_stack as layer_stack_utils, page_grid
 from . import panel_modal_state, panel_picker
 
 
@@ -270,7 +270,7 @@ class BNAME_OT_layer_move_tool(Operator):
             return False
         self._target = resolved
         self._snapshots = []
-        self._capture_snapshot(item.kind, resolved)
+        self._capture_snapshot(context, item.kind, resolved)
         self._last_world = coords
         self._dragging = True
         self._moved = False
@@ -295,14 +295,24 @@ class BNAME_OT_layer_move_tool(Operator):
         self._cleanup(context)
         panel_modal_state.clear_active("layer_move", self, context)
 
-    def _capture_snapshot(self, kind: str, resolved: dict) -> None:
+    def _capture_snapshot(self, context, kind: str, resolved: dict) -> None:
         target = resolved.get("target")
         page = resolved.get("page")
         if kind == "page":
             self._snapshots.append(("page", target, (target.offset_x_mm, target.offset_y_mm)))
+            self._snapshots.append(
+                ("gp_layers", None, layer_stack_utils.capture_gp_layers_for_parent_keys(
+                    context, layer_stack_utils.gp_parent_keys_for_page(target)
+                ))
+            )
         elif kind == "panel":
             self._snapshots.append(("panel", target, _snapshot_panel(target)))
             if page is not None:
+                self._snapshots.append(
+                    ("gp_layers", None, layer_stack_utils.capture_gp_layers_for_parent_keys(
+                        context, {layer_stack_utils.gp_parent_key_for_panel(page, target)}
+                    ))
+                )
                 balloons, texts = _panel_children(page, target)
                 attached_text_ids: set[str] = set()
                 for balloon in balloons:
@@ -323,6 +333,8 @@ class BNAME_OT_layer_move_tool(Operator):
                 for text in getattr(page, "texts", []):
                     if getattr(text, "parent_balloon_id", "") == bid:
                         self._snapshots.append(("attached_text", text, (text.x_mm, text.y_mm)))
+        elif kind == "gp":
+            self._snapshots.append(("gp_layers", None, gp_parent.capture_layers([target])))
 
     def _restore_snapshots(self, context) -> None:
         for kind, target, data in self._snapshots:
@@ -332,6 +344,8 @@ class BNAME_OT_layer_move_tool(Operator):
                 _restore_panel(target, data)
             elif kind in {"balloon", "text", "attached_text", "image"}:
                 target.x_mm, target.y_mm = data
+            elif kind == "gp_layers":
+                layer_stack_utils.restore_gp_layer_snapshots(data)
         page_grid.apply_page_collection_transforms(context, get_work(context))
 
     def _apply_delta(self, context, dx_mm: float, dy_mm: float) -> bool:
@@ -343,6 +357,9 @@ class BNAME_OT_layer_move_tool(Operator):
         if kind == "page":
             target.offset_x_mm += dx_mm
             target.offset_y_mm += dy_mm
+            layer_stack_utils.translate_gp_layers_for_parent_keys(
+                context, layer_stack_utils.gp_parent_keys_for_page(target), dx_mm, dy_mm
+            )
             return True
         if kind == "panel":
             _move_panel(target, dx_mm, dy_mm)
@@ -352,6 +369,10 @@ class BNAME_OT_layer_move_tool(Operator):
                 elif child_kind == "text":
                     child.x_mm += dx_mm
                     child.y_mm += dy_mm
+            if page is not None:
+                layer_stack_utils.translate_gp_layers_for_parent_keys(
+                    context, {layer_stack_utils.gp_parent_key_for_panel(page, target)}, dx_mm, dy_mm
+                )
             return True
         if kind == "balloon" and page is not None:
             if _move_would_violate_layer_scope(context, page, target, dx_mm, dy_mm):
@@ -370,6 +391,9 @@ class BNAME_OT_layer_move_tool(Operator):
                 return False
             target.x_mm += dx_mm
             target.y_mm += dy_mm
+            return True
+        if kind == "gp":
+            gp_parent.translate_layer(target, dx_mm, dy_mm)
             return True
         obj = self._target.get("object")
         if obj is not None:

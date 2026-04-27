@@ -11,7 +11,7 @@ from bpy.types import Operator
 from ..core.work import get_active_page, get_work
 from ..io import page_io, panel_io, schema
 from ..utils import layer_stack as layer_stack_utils
-from ..utils import log, paths
+from ..utils import log, page_grid, paths
 from .panel_knife_cut_op import _panel_polygon, _polygon_area, _set_panel_polygon, _split_convex_polygon_by_line
 from . import panel_modal_state
 
@@ -282,6 +282,9 @@ class BNAME_OT_panel_remove(Operator):
         work_dir = Path(work.work_dir)
         try:
             panel_io.remove_panel_files(work_dir, page.id, stem)
+            layer_stack_utils.delete_gp_layers_for_parent_keys(
+                context, {layer_stack_utils.gp_parent_key_for_panel(page, entry)}
+            )
             page.panels.remove(idx)
             if len(page.panels) == 0:
                 page.active_panel_index = -1
@@ -424,6 +427,7 @@ class BNAME_OT_panel_move_to_page(Operator):
             return {"CANCELLED"}
         idx = page.active_panel_index
         src_entry = page.panels[idx]
+        old_parent_key = layer_stack_utils.gp_parent_key_for_panel(page, src_entry)
         work_dir = Path(work.work_dir)
         try:
             # 移動先で衝突しないファイル名を採番
@@ -437,6 +441,16 @@ class BNAME_OT_panel_move_to_page(Operator):
             new_entry.panel_stem = dst_stem
             new_entry.id = dst_stem.split("_", 1)[1]
             new_entry.title = src_entry.title
+            new_parent_key = layer_stack_utils.gp_parent_key_for_panel(target_page, new_entry)
+            source_page_index = next((i for i, p in enumerate(work.pages) if p.id == page.id), -1)
+            target_page_index = next((i for i, p in enumerate(work.pages) if p.id == target_page.id), -1)
+            if source_page_index >= 0 and target_page_index >= 0:
+                src_ox, src_oy = page_grid.page_total_offset_mm(work, context.scene, source_page_index)
+                dst_ox, dst_oy = page_grid.page_total_offset_mm(work, context.scene, target_page_index)
+                layer_stack_utils.translate_gp_layers_for_parent_keys(
+                    context, {old_parent_key}, dst_ox - src_ox, dst_oy - src_oy
+                )
+            layer_stack_utils.reparent_gp_layers(context, old_parent_key, new_parent_key)
             # 元の collection から削除
             page.panels.remove(idx)
             if len(page.panels) == 0:
@@ -614,6 +628,9 @@ class BNAME_OT_panel_split_template(Operator):
         try:
             if self.clear_existing:
                 panel_io.remove_panel_files(work_dir, page.id, src.panel_stem)
+                layer_stack_utils.delete_gp_layers_for_parent_keys(
+                    context, {layer_stack_utils.gp_parent_key_for_panel(page, src)}
+                )
                 page.panels.remove(self.target_panel_index)
                 if len(page.panels) == 0:
                     page.active_panel_index = -1

@@ -1076,9 +1076,21 @@ def _render_gp_object_layers(
         return out
     try:
         from ..utils import gpencil as gp_utils
+        from ..utils import gp_layer_parenting as gp_parent
+        from ..utils.layer_hierarchy import page_stack_key, split_child_key
     except Exception:  # pragma: no cover - bpy unavailable outside Blender
         gp_utils = None
+        gp_parent = None
+        page_stack_key = None
+        split_child_key = None
+    current_page_key = page_stack_key(page) if page_stack_key is not None else ""
     for layer in layers:
+        if gp_parent is not None:
+            parent_key = gp_parent.parent_key(layer)
+            if parent_key:
+                layer_page_key, _child_key = split_child_key(parent_key)
+                if layer_page_key != current_page_key:
+                    continue
         try:
             hidden = (
                 gp_utils.layer_effectively_hidden(layer)

@@ -113,12 +113,31 @@ class BNAME_OT_page_remove(Operator):
         if not (0 <= idx < len(work.pages)):
             self.report({"ERROR"}, "有効なページが選択されていません")
             return {"CANCELLED"}
-        page_id = work.pages[idx].id
+        page = work.pages[idx]
+        page_id = page.id
         work_dir = Path(work.work_dir)
 
         try:
+            old_offsets = {
+                entry.id: page_grid.page_total_offset_mm(work, context.scene, i)
+                for i, entry in enumerate(work.pages)
+            }
             page_io.remove_page_dir(work_dir, page_id)
+            layer_stack_utils.delete_gp_layers_for_parent_keys(
+                context, layer_stack_utils.gp_parent_keys_for_page(page)
+            )
             work.pages.remove(idx)
+            for i, entry in enumerate(work.pages):
+                old = old_offsets.get(entry.id)
+                if old is None:
+                    continue
+                new = page_grid.page_total_offset_mm(work, context.scene, i)
+                dx = new[0] - old[0]
+                dy = new[1] - old[1]
+                if abs(dx) > 1.0e-6 or abs(dy) > 1.0e-6:
+                    layer_stack_utils.translate_gp_layers_for_parent_keys(
+                        context, layer_stack_utils.gp_parent_keys_for_page(entry), dx, dy
+                    )
             # GP オブジェクト / データ / Collection も削除
             gp_utils.remove_page_gpencil(page_id)
             # active index の補正
@@ -242,7 +261,22 @@ class BNAME_OT_page_move(Operator):
             return {"CANCELLED"}  # 端では無効 (エラーにはしない)
         work_dir = Path(work.work_dir)
         try:
+            old_offsets = {
+                page.id: page_grid.page_total_offset_mm(work, context.scene, i)
+                for i, page in enumerate(work.pages)
+            }
             page_io.move_page(work, idx, new_idx)
+            for i, page in enumerate(work.pages):
+                old = old_offsets.get(page.id)
+                if old is None:
+                    continue
+                new = page_grid.page_total_offset_mm(work, context.scene, i)
+                dx = new[0] - old[0]
+                dy = new[1] - old[1]
+                if abs(dx) > 1.0e-6 or abs(dy) > 1.0e-6:
+                    layer_stack_utils.translate_gp_layers_for_parent_keys(
+                        context, layer_stack_utils.gp_parent_keys_for_page(page), dx, dy
+                    )
             # 順序が変わったので Collection transform を再計算
             page_grid.apply_page_collection_transforms(context, work)
             page_io.save_pages_json(work_dir, work)

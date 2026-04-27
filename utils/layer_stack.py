@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import bpy
 
 from ..core.work import get_active_page, get_work
+from . import gp_layer_parenting as gp_parent
 from . import gpencil as gp_utils
 from . import log
 from .layer_hierarchy import (
@@ -130,7 +131,17 @@ def _iter_gp_targets(obj, *, kind: str, depth: int = 0, parent_key: str = ""):
             return
         for layer in reversed(list(layers)):
             key = _ensure_node_stack_key(layer, used, kind)
-            yield LayerTarget(kind, key, layer.name, parent_key, depth)
+            logical_parent_key = gp_parent.parent_key(layer)
+            if logical_parent_key:
+                yield LayerTarget(
+                    kind,
+                    key,
+                    layer.name,
+                    logical_parent_key,
+                    gp_parent.parent_depth(logical_parent_key),
+                )
+            else:
+                yield LayerTarget(kind, key, layer.name, parent_key, depth)
         return
     yield from _iter_gp_node_targets(
         nodes, kind=kind, depth=depth, parent_key=parent_key, used=used
@@ -152,7 +163,17 @@ def _iter_gp_node_targets(nodes, *, kind: str, depth: int, parent_key: str, used
                 )
         else:
             key = _ensure_node_stack_key(node, used, kind)
-            yield LayerTarget(kind, key, node.name, parent_key, depth)
+            logical_parent_key = gp_parent.parent_key(node)
+            if logical_parent_key:
+                yield LayerTarget(
+                    kind,
+                    key,
+                    node.name,
+                    logical_parent_key,
+                    gp_parent.parent_depth(logical_parent_key),
+                )
+            else:
+                yield LayerTarget(kind, key, node.name, parent_key, depth)
 
 
 def _collect_page_layer_targets(
@@ -244,11 +265,29 @@ def _collect_page_layer_targets(
     return targets
 
 
+def _partition_gp_targets(obj, work) -> tuple[list[LayerTarget], dict[str, list[LayerTarget]]]:
+    root_targets: list[LayerTarget] = []
+    targets_by_parent: dict[str, list[LayerTarget]] = {}
+    if obj is None:
+        return root_targets, targets_by_parent
+    for target in _iter_gp_targets(obj, kind="gp"):
+        if target.kind == "gp" and gp_parent.parent_key_exists(work, target.parent_key):
+            targets_by_parent.setdefault(target.parent_key, []).append(target)
+        else:
+            if target.kind == "gp" and target.parent_key:
+                root_targets.append(LayerTarget(target.kind, target.key, target.label))
+            else:
+                root_targets.append(target)
+    return root_targets, targets_by_parent
+
+
 def collect_targets(context) -> list[LayerTarget]:
     """現在の作品/シーンから、前面→背面の統合レイヤー候補を返す."""
     scene = context.scene
     work = get_work(context)
     targets: list[LayerTarget] = []
+    gp_obj = gp_utils.get_master_gpencil()
+    gp_root_targets, gp_targets_by_parent = _partition_gp_targets(gp_obj, work)
 
     if work is not None and getattr(work, "loaded", False):
         for page in work.pages:
@@ -268,6 +307,7 @@ def collect_targets(context) -> list[LayerTarget]:
                 panels_by_key[key] = panel
                 panel_label = getattr(panel, "title", "") or getattr(panel, "panel_stem", "") or key
                 targets.append(LayerTarget(PANEL_KIND, key, panel_label, page_key, 1))
+                targets.extend(gp_targets_by_parent.get(key, []))
                 targets.extend(
                     _collect_page_layer_targets(
                         page, {key: panel}, include_page_children=False
@@ -276,6 +316,9 @@ def collect_targets(context) -> list[LayerTarget]:
             # コマ外のページ直下レイヤーは、すべてのコマ行の後にまとめて表示する。
             all_page_layers = _collect_page_layer_targets(page, panels_by_key)
             visible_parent_keys = {page_key}
+            for target in gp_targets_by_parent.get(page_key, []):
+                targets.append(target)
+                visible_parent_keys.add(target.key)
             for target in all_page_layers:
                 if target.parent_key in visible_parent_keys:
                     targets.append(target)
@@ -293,9 +336,7 @@ def collect_targets(context) -> list[LayerTarget]:
             label = getattr(entry, "title", "") or key
             targets.append(LayerTarget("image", key, label))
 
-    gp_obj = gp_utils.get_master_gpencil()
-    if gp_obj is not None:
-        targets.extend(_iter_gp_targets(gp_obj, kind="gp"))
+    targets.extend(gp_root_targets)
 
     return targets
 
@@ -619,15 +660,20 @@ def _target_index_for_stack_move(
 
 
 def _gp_parent_key_from_flat_drop(stack, moved_index: int) -> str:
-    """UIList の平坦D&D位置から GP フォルダ親を推定する."""
+    """UIList の平坦D&D位置から GP レイヤーの親を推定する."""
     if stack is None or moved_index <= 0:
         return ""
     previous = stack[moved_index - 1]
     previous_kind = getattr(previous, "kind", "")
+    if previous_kind in {PAGE_KIND, PANEL_KIND}:
+        return str(getattr(previous, "key", "") or "")
     if previous_kind == "gp_folder":
         return str(getattr(previous, "key", "") or "")
     if previous_kind == "gp":
         return str(getattr(previous, "parent_key", "") or "")
+    previous_parent_key = str(getattr(previous, "parent_key", "") or "")
+    if previous_parent_key:
+        return previous_parent_key
     return ""
 
 
@@ -646,7 +692,7 @@ def _is_stack_folder_descendant(stack, ancestor_key: str, candidate_key: str) ->
 
 
 def _apply_gp_folder_drop_hint(context, moved_uid: str) -> bool:
-    """GP レイヤー/フォルダをフォルダ直下へ落としたUIList D&Dを親変更へ変換する."""
+    """GP レイヤー/フォルダを別階層へ落としたUIList D&Dを親変更へ変換する."""
     scene = getattr(context, "scene", None)
     stack = getattr(scene, "bname_layer_stack", None) if scene is not None else None
     moved_index = _find_stack_index_by_uid(stack, moved_uid)
@@ -657,14 +703,28 @@ def _apply_gp_folder_drop_hint(context, moved_uid: str) -> bool:
         return False
     parent_key = _gp_parent_key_from_flat_drop(stack, moved_index)
     old_parent_key = str(getattr(item, "parent_key", "") or "")
-    if getattr(item, "kind", "") == "gp_folder":
+    kind = getattr(item, "kind", "")
+    work = get_work(context)
+    parent_is_page_panel = parent_key and gp_parent.parent_key_exists(work, parent_key)
+    parent_is_gp_folder = bool(_find_stack_item(stack, "gp_folder", parent_key)) if parent_key else False
+    if parent_key and not parent_is_page_panel and not parent_is_gp_folder:
+        return False
+    if kind == "gp_folder":
+        if parent_is_page_panel:
+            return False
         item_key = str(getattr(item, "key", "") or "")
         if parent_key == item_key or _is_stack_folder_descendant(stack, item_key, parent_key):
             return False
     if parent_key == old_parent_key:
         return False
     item.parent_key = parent_key
-    parent = _find_stack_item(stack, "gp_folder", parent_key) if parent_key else None
+    parent = None
+    if parent_key:
+        parent = (
+            _find_stack_item(stack, "gp_folder", parent_key)
+            or _find_stack_item(stack, PAGE_KIND, parent_key)
+            or _find_stack_item(stack, PANEL_KIND, parent_key)
+        )
     item.depth = int(getattr(parent, "depth", -1)) + 1 if parent is not None else 0
     obj = gp_utils.get_master_gpencil()
     groups = getattr(getattr(obj, "data", None), "layer_groups", None) if obj is not None else None
@@ -879,6 +939,74 @@ def _find_gp_group_by_key(groups, key: str):
         if _node_stack_key(group) == key or getattr(group, "name", "") == key:
             return group
     return None
+
+
+def gp_parent_keys_for_page(page) -> set[str]:
+    return gp_parent.parent_keys_for_page(page)
+
+
+def gp_parent_key_for_panel(page, panel) -> str:
+    return gp_parent.parent_key_for_panel(page, panel)
+
+
+def gp_layers_for_parent_keys(context, parent_keys: set[str]) -> list[object]:
+    _ = context
+    obj = gp_utils.get_master_gpencil()
+    if obj is None or not parent_keys:
+        return []
+    return list(gp_parent.iter_layers_with_parent(obj, set(parent_keys)))
+
+
+def delete_gp_layers_for_parent_keys(context, parent_keys: set[str]) -> int:
+    obj = gp_utils.get_master_gpencil()
+    layers = getattr(getattr(obj, "data", None), "layers", None) if obj is not None else None
+    if layers is None or not parent_keys:
+        return 0
+    removed = 0
+    for layer in list(gp_parent.iter_layers_with_parent(obj, set(parent_keys))):
+        try:
+            gp_parent.set_parent_key(layer, "")
+            layers.remove(layer)
+            removed += 1
+        except Exception:  # noqa: BLE001
+            _logger.exception("delete gp layer for parent failed: %s", getattr(layer, "name", ""))
+    if removed:
+        tag_view3d_redraw(context)
+    return removed
+
+
+def reparent_gp_layers(context, old_parent_key: str, new_parent_key: str) -> int:
+    work = get_work(context)
+    if not old_parent_key or not gp_parent.parent_key_exists(work, new_parent_key):
+        return 0
+    obj = gp_utils.get_master_gpencil()
+    if obj is None:
+        return 0
+    changed = 0
+    for layer in list(gp_parent.iter_layers_with_parent(obj, {old_parent_key})):
+        gp_parent.set_parent_key(layer, new_parent_key)
+        changed += 1
+    if changed:
+        tag_view3d_redraw(context)
+    return changed
+
+
+def translate_gp_layers_for_parent_keys(context, parent_keys: set[str], dx_mm: float, dy_mm: float) -> int:
+    moved = 0
+    for layer in gp_layers_for_parent_keys(context, parent_keys):
+        gp_parent.translate_layer(layer, dx_mm, dy_mm)
+        moved += 1
+    if moved:
+        tag_view3d_redraw(context)
+    return moved
+
+
+def capture_gp_layers_for_parent_keys(context, parent_keys: set[str]):
+    return gp_parent.capture_layers(gp_layers_for_parent_keys(context, parent_keys))
+
+
+def restore_gp_layer_snapshots(snapshot) -> None:
+    gp_parent.restore_layers(snapshot)
 
 
 def resolve_stack_item(context, item):
@@ -1223,6 +1351,16 @@ def _apply_page_panel_orders(context, stack) -> None:
     work = get_work(context)
     if work is None or not getattr(work, "loaded", False):
         return
+    try:
+        from . import page_grid
+    except Exception:  # noqa: BLE001
+        page_grid = None
+    old_page_offsets = {}
+    if page_grid is not None:
+        old_page_offsets = {
+            page_stack_key(page): page_grid.page_total_offset_mm(work, context.scene, i)
+            for i, page in enumerate(work.pages)
+        }
     active_page_key = ""
     active_panel_key = ""
     active_idx = int(getattr(work, "active_page_index", -1))
@@ -1235,6 +1373,16 @@ def _apply_page_panel_orders(context, stack) -> None:
 
     page_keys = [item.key for item in stack if item.kind == PAGE_KIND]
     _reorder_collection(work.pages, page_keys, page_stack_key)
+    if page_grid is not None:
+        for i, page in enumerate(work.pages):
+            old = old_page_offsets.get(page_stack_key(page))
+            if old is None:
+                continue
+            new = page_grid.page_total_offset_mm(work, context.scene, i)
+            dx = new[0] - old[0]
+            dy = new[1] - old[1]
+            if abs(dx) > 1.0e-6 or abs(dy) > 1.0e-6:
+                translate_gp_layers_for_parent_keys(context, gp_parent_keys_for_page(page), dx, dy)
 
     for page in work.pages:
         page_key = page_stack_key(page)
@@ -1251,8 +1399,8 @@ def _apply_page_panel_orders(context, stack) -> None:
 
     _restore_active_page_panel(work, active_page_key, active_panel_key)
     try:
-        from . import page_grid
-
+        if page_grid is None:
+            return
         page_grid.apply_page_collection_transforms(context, work)
     except Exception:  # noqa: BLE001
         _logger.exception("apply page collection transforms after stack order failed")
@@ -1344,7 +1492,7 @@ def _gp_group_contains_key(group, key: str) -> bool:
     return False
 
 
-def _apply_gp_parenting(obj, stack) -> None:
+def _apply_gp_parenting(obj, stack, work) -> None:
     gp_data = getattr(obj, "data", None)
     if gp_data is None:
         return
@@ -1366,19 +1514,31 @@ def _apply_gp_parenting(obj, stack) -> None:
             continue
         desired_parent_key = str(getattr(item, "parent_key", "") or "")
         parent_group = _find_gp_group_by_key(groups, desired_parent_key) if desired_parent_key else None
-        if desired_parent_key and parent_group is None:
+        logical_parent = kind == "gp" and gp_parent.parent_key_exists(work, desired_parent_key)
+        if desired_parent_key and parent_group is None and not logical_parent:
             desired_parent_key = ""
+        native_parent_group = None if logical_parent else parent_group
+        native_parent_key = "" if native_parent_group is None else _node_stack_key(native_parent_group)
         actual_parent = getattr(node, "parent_group", None)
         actual_parent_key = _node_stack_key(actual_parent) if actual_parent is not None else ""
-        if actual_parent_key == desired_parent_key:
-            continue
         if kind == "gp_folder":
+            if logical_parent:
+                continue
             if desired_parent_key == key or _gp_group_contains_key(node, desired_parent_key):
                 continue
-            if not gp_utils.move_group_to_group(gp_data, node, parent_group):
+            if actual_parent_key == native_parent_key:
+                item.parent_key = desired_parent_key
                 continue
-        elif not gp_utils.move_layer_to_group(gp_data, node, parent_group):
-            continue
+            if not gp_utils.move_group_to_group(gp_data, node, native_parent_group):
+                continue
+            gp_parent.set_parent_key(node, "")
+        else:
+            gp_parent.set_parent_key(node, desired_parent_key if logical_parent else "")
+            if actual_parent_key == native_parent_key:
+                item.parent_key = desired_parent_key
+                continue
+            if not gp_utils.move_layer_to_group(gp_data, node, native_parent_group):
+                continue
         item.parent_key = desired_parent_key
 
 
@@ -1407,14 +1567,19 @@ def _apply_gp_order(obj, stack, *, effect: bool) -> None:
     gp_data = getattr(obj, "data", None)
     if gp_data is None:
         return
+    groups = getattr(gp_data, "layer_groups", None)
     by_parent: dict[str, list[str]] = {}
     for item in stack:
         if effect:
             if item.kind != "effect":
                 continue
+            native_parent_key = str(getattr(item, "parent_key", "") or "")
         elif item.kind not in {"gp", "gp_folder"}:
             continue
-        by_parent.setdefault(getattr(item, "parent_key", ""), []).append(stack_item_uid(item))
+        else:
+            parent_key = str(getattr(item, "parent_key", "") or "")
+            native_parent_key = parent_key if _find_gp_group_by_key(groups, parent_key) else ""
+        by_parent.setdefault(native_parent_key, []).append(stack_item_uid(item))
     for parent_key, uids in by_parent.items():
         _reorder_gp_parent(gp_data, parent_key, uids, effect=effect)
 
@@ -1427,7 +1592,7 @@ def apply_stack_order(context) -> None:
     _apply_simple_collection_orders(context, stack)
     gp_obj = gp_utils.get_master_gpencil()
     if gp_obj is not None:
-        _apply_gp_parenting(gp_obj, stack)
+        _apply_gp_parenting(gp_obj, stack, get_work(context))
         _apply_gp_order(gp_obj, stack, effect=False)
     effect_obj = get_effect_gp_object()
     if effect_obj is not None:
@@ -1467,6 +1632,7 @@ def delete_stack_index(context, index: int) -> bool:
     if kind == "gp":
         obj = resolved.get("object")
         try:
+            gp_parent.set_parent_key(resolved["target"], "")
             obj.data.layers.remove(resolved["target"])
         except Exception:  # noqa: BLE001
             return False

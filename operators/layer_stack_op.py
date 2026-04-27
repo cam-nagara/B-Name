@@ -168,9 +168,19 @@ def _parent_key_for_new_item(context, anchor_uid: str, kind: str) -> str:
     stack = getattr(context.scene, "bname_layer_stack", None)
     if stack is None or not anchor_uid:
         return ""
+    from ..core.work import get_work
+    from ..utils import gp_layer_parenting as gp_parent
+
+    work = get_work(context)
     for item in stack:
         if layer_stack_utils.stack_item_uid(item) != anchor_uid:
             continue
+        if kind == "gp" and item.kind in {PAGE_KIND, PANEL_KIND}:
+            return item.key
+        if kind == "gp" and gp_parent.parent_key_exists(
+            work, str(getattr(item, "parent_key", "") or "")
+        ):
+            return str(getattr(item, "parent_key", "") or "")
         if kind in {"gp", "gp_folder"} and item.kind in {"gp", "gp_folder"}:
             return str(getattr(item, "parent_key", "") or "")
         if kind in {"balloon", "text"} and item.kind in {"balloon", "text"}:
@@ -545,16 +555,21 @@ class BNAME_OT_layer_stack_add(Operator, ImportHelper):
 
     def _add_gp_layer(self, context, anchor_uid: str) -> str:
         from ..utils import gpencil as gp_utils
+        from ..utils import gp_layer_parenting as gp_parent
+        from ..core.work import get_work
 
         obj = gp_utils.ensure_master_gpencil(context.scene)
         gp_data = obj.data
         parent_key = _parent_key_for_new_item(context, anchor_uid, "gp")
         groups = getattr(gp_data, "layer_groups", None)
         parent = layer_stack_utils._find_gp_group_by_key(groups, parent_key)
+        logical_parent = gp_parent.parent_key_exists(get_work(context), parent_key)
         existing = {layer.name for layer in gp_data.layers}
         layer = gp_data.layers.new(_unique_name(existing, "レイヤー"))
         if parent is not None:
             gp_utils.move_layer_to_group(gp_data, layer, parent)
+        elif logical_parent:
+            gp_parent.set_parent_key(layer, parent_key)
         gp_data.layers.active = layer
         gp_utils.ensure_active_frame(layer)
         gp_utils.ensure_layer_material(obj, layer, activate=True, assign_existing=True)
@@ -732,8 +747,20 @@ class BNAME_OT_layer_stack_duplicate(Operator):
         ):
             return False
         try:
+            parent_key = str(getattr(item, "parent_key", "") or "")
             result = bpy.ops.grease_pencil.layer_duplicate("EXEC_DEFAULT", empty_keyframes=False)
-            return "FINISHED" in result
+            if "FINISHED" not in result:
+                return False
+            if item.kind == "gp" and parent_key:
+                from ..core.work import get_work
+                from ..utils import gp_layer_parenting as gp_parent
+                from ..utils import gpencil as gp_utils
+
+                layer = getattr(getattr(gp_utils.get_master_gpencil(), "data", None), "layers", None)
+                active = getattr(layer, "active", None) if layer is not None else None
+                if active is not None and gp_parent.parent_key_exists(get_work(context), parent_key):
+                    gp_parent.set_parent_key(active, parent_key)
+            return True
         except Exception:  # noqa: BLE001
             return False
 
