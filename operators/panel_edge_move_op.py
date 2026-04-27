@@ -25,8 +25,17 @@ from gpu_extras.batch import batch_for_shader
 
 from ..core.work import get_work
 from ..io import page_io, panel_io
-from . import panel_edge_style_op, panel_modal_state
-from ..utils import geom, log, page_grid, page_range, panel_edge_adjacency, polygon_geom, viewport_colors
+from . import panel_modal_state
+from ..utils import (
+    edge_selection,
+    geom,
+    log,
+    page_grid,
+    page_range,
+    panel_edge_adjacency,
+    polygon_geom,
+    viewport_colors,
+)
 
 _logger = log.get_logger(__name__)
 
@@ -646,37 +655,38 @@ class BNAME_OT_panel_edge_move(Operator):
 
     def _update_wm_selection(self, context) -> None:
         """WindowManager のグローバル選択状態を更新 (N パネル UI が読む)."""
-        wm = context.window_manager
         sel = self._selection
         if sel is None:
-            wm.bname_edge_select_kind = "none"
-            wm.bname_edge_select_page = -1
-            wm.bname_edge_select_panel = -1
-            wm.bname_edge_select_edge = -1
-            wm.bname_edge_select_vertex = -1
-            _tag_view3d_redraw(context)
+            edge_selection.clear_selection(context)
             return
         t = sel.get("type")
-        wm.bname_edge_select_page = int(sel.get("page", -1))
-        wm.bname_edge_select_panel = int(sel.get("panel", -1))
+        page_index = int(sel.get("page", -1))
+        panel_index = int(sel.get("panel", -1))
         if t == "edge":
-            wm.bname_edge_select_kind = "edge"
-            wm.bname_edge_select_edge = int(sel.get("edge", -1))
-            wm.bname_edge_select_vertex = -1
+            edge_selection.set_selection(
+                context,
+                "edge",
+                page_index=page_index,
+                panel_index=panel_index,
+                edge_index=int(sel.get("edge", -1)),
+            )
         elif t == "border":
-            wm.bname_edge_select_kind = "border"
-            wm.bname_edge_select_edge = -1
-            wm.bname_edge_select_vertex = -1
+            edge_selection.set_selection(
+                context,
+                "border",
+                page_index=page_index,
+                panel_index=panel_index,
+            )
         elif t == "vertex":
-            wm.bname_edge_select_kind = "vertex"
-            wm.bname_edge_select_edge = -1
-            wm.bname_edge_select_vertex = int(sel.get("vertex", -1))
+            edge_selection.set_selection(
+                context,
+                "vertex",
+                page_index=page_index,
+                panel_index=panel_index,
+                vertex_index=int(sel.get("vertex", -1)),
+            )
         else:
-            wm.bname_edge_select_kind = "none"
-            wm.bname_edge_select_edge = -1
-            wm.bname_edge_select_vertex = -1
-        panel_edge_style_op.sync_selected_style_props(context)
-        _tag_view3d_redraw(context)
+            edge_selection.clear_selection(context)
 
     def _to_window(self, ev):
         return ev.mouse_x - self._region.x, ev.mouse_y - self._region.y

@@ -39,6 +39,7 @@ from ..utils import border_geom, color_space, log, page_browser, viewport_colors
 from ..utils.geom import Rect, bleed_rect, mm_to_m
 from . import overlay_balloon
 from . import overlay_effect_line
+from . import overlay_panel_selection
 from . import overlay_shared
 from . import overlay_text
 from . import overlay_visibility
@@ -640,8 +641,18 @@ def _draw_panels(
     active_kind = getattr(scene, "bname_active_layer_kind", "") if scene is not None else ""
     active_page_idx = int(getattr(work, "active_page_index", -1))
     active_page = work.pages[active_page_idx] if 0 <= active_page_idx < len(work.pages) else None
+    wm = getattr(bpy.context, "window_manager", None)
+    edge_selection_matches = False
+    if wm is not None and getattr(wm, "bname_edge_select_kind", "none") in {"edge", "border", "vertex"}:
+        edge_selection_matches = (
+            int(getattr(wm, "bname_edge_select_page", -1)) == active_page_idx
+            and active_page is page
+            and int(getattr(wm, "bname_edge_select_panel", -1))
+            == int(getattr(page, "active_panel_index", -1))
+        )
     is_active_page = (
         active_kind == "panel"
+        and not edge_selection_matches
         and active_page is not None
         and str(getattr(active_page, "id", "") or "") == str(getattr(page, "id", "") or "")
     )
@@ -1547,6 +1558,8 @@ def _draw_callback_pixel() -> None:
                 entry_visible=lambda entry: overlay_visibility.entry_in_visible_panel(page, entry),
                 draw_text_in_rect=_draw_text_in_rect,
             )
+    region, rv3d = _resolve_active_region(context)
+    overlay_panel_selection.draw(context, work, region, rv3d)
 
 
 def _draw_work_info_texts_pixel(context, work, inner_rect, page_index: int,

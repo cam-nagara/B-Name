@@ -19,7 +19,7 @@ from ..core.work import get_work
 from ..io import page_io, work_io
 from ..utils import gpencil as gp_utils
 from ..utils import layer_stack as layer_stack_utils
-from ..utils import log, page_browser, page_grid, page_range, paths
+from ..utils import edge_selection, log, page_browser, page_grid, page_range, paths
 
 _logger = log.get_logger(__name__)
 
@@ -43,6 +43,12 @@ def _sync_layer_stack_after_page_change(context, *, align_page_order: bool = Fal
 def _sync_page_number_range(work_dir: Path, work) -> None:
     page_range.sync_end_number_to_page_count(work)
     work_io.save_work_json(work_dir, work)
+
+
+def _set_page_layer_active(context) -> None:
+    if hasattr(context.scene, "bname_active_layer_kind"):
+        context.scene.bname_active_layer_kind = "page"
+    edge_selection.clear_selection(context)
 
 
 class BNAME_OT_page_add(Operator):
@@ -76,8 +82,7 @@ class BNAME_OT_page_add(Operator):
             page_grid.apply_page_collection_transforms(context, work)
             page_io.save_pages_json(work_dir, work)
             _sync_page_number_range(work_dir, work)
-            if hasattr(context.scene, "bname_active_layer_kind"):
-                context.scene.bname_active_layer_kind = "page"
+            _set_page_layer_active(context)
             _sync_layer_stack_after_page_change(context, align_page_order=True)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("page_add failed")
@@ -149,8 +154,7 @@ class BNAME_OT_page_remove(Operator):
             page_grid.apply_page_collection_transforms(context, work)
             page_io.save_pages_json(work_dir, work)
             _sync_page_number_range(work_dir, work)
-            if hasattr(context.scene, "bname_active_layer_kind"):
-                context.scene.bname_active_layer_kind = "page"
+            _set_page_layer_active(context)
             _sync_layer_stack_after_page_change(context, align_page_order=True)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("page_remove failed")
@@ -219,8 +223,7 @@ class BNAME_OT_page_duplicate(Operator):
             page_io.save_page_json(work_dir, new_entry)
             page_io.save_pages_json(work_dir, work)
             _sync_page_number_range(work_dir, work)
-            if hasattr(context.scene, "bname_active_layer_kind"):
-                context.scene.bname_active_layer_kind = "page"
+            _set_page_layer_active(context)
             _sync_layer_stack_after_page_change(context, align_page_order=True)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("page_duplicate failed")
@@ -284,8 +287,7 @@ class BNAME_OT_page_move(Operator):
             # 順序が変わったので Collection transform を再計算
             page_grid.apply_page_collection_transforms(context, work)
             page_io.save_pages_json(work_dir, work)
-            if hasattr(context.scene, "bname_active_layer_kind"):
-                context.scene.bname_active_layer_kind = "page"
+            _set_page_layer_active(context)
             _sync_layer_stack_after_page_change(context, align_page_order=True)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("page_move failed")
@@ -347,8 +349,7 @@ class BNAME_OT_page_select(Operator):
             if not bool(getattr(context.scene, "bname_overview_mode", True)):
                 context.scene.bname_overview_mode = True
                 _tag_screen_redraw(context)
-            if hasattr(context.scene, "bname_active_layer_kind"):
-                context.scene.bname_active_layer_kind = "page"
+            _set_page_layer_active(context)
             _sync_layer_stack_after_page_change(context)
             return {"FINISHED"}
         try:
@@ -357,8 +358,7 @@ class BNAME_OT_page_select(Operator):
             _logger.exception("page_select failed")
             self.report({"ERROR"}, f"ページ切替失敗: {exc}")
             return {"CANCELLED"}
-        if hasattr(context.scene, "bname_active_layer_kind"):
-            context.scene.bname_active_layer_kind = "page"
+        _set_page_layer_active(context)
         _sync_layer_stack_after_page_change(context)
         return {"FINISHED"}
 
@@ -403,8 +403,12 @@ class BNAME_OT_page_pick_viewport(Operator):
 
             if is_browser:
                 context.scene.bname_overview_mode = True
-            panel_hit = panel_picker.find_panel_at_event(context, event)
-            if panel_hit is not None:
+            edge_hit = panel_picker.find_panel_edge_at_event(context, event)
+            panel_hit = None if edge_hit is not None else panel_picker.find_panel_at_event(context, event)
+            if edge_hit is not None:
+                page_index = int(edge_hit["page"])
+                panel_index = int(edge_hit["panel"])
+            elif panel_hit is not None:
                 page_index, panel_index = panel_hit
             else:
                 page_index = panel_picker.find_page_at_event(context, event)
@@ -437,8 +441,23 @@ class BNAME_OT_page_pick_viewport(Operator):
                     changed = True
                 if hasattr(context.scene, "bname_active_layer_kind"):
                     context.scene.bname_active_layer_kind = "panel"
-        elif hasattr(context.scene, "bname_active_layer_kind"):
-            context.scene.bname_active_layer_kind = "page"
+                if edge_hit is not None:
+                    edge_selection.set_selection(
+                        context,
+                        "edge",
+                        page_index=page_index,
+                        panel_index=panel_index,
+                        edge_index=int(edge_hit["edge"]),
+                    )
+                else:
+                    edge_selection.set_selection(
+                        context,
+                        "border",
+                        page_index=page_index,
+                        panel_index=panel_index,
+                    )
+        else:
+            _set_page_layer_active(context)
         _sync_layer_stack_after_page_change(context)
         if changed:
             _tag_screen_redraw(context)

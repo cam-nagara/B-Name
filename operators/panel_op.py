@@ -10,6 +10,7 @@ from bpy.types import Operator
 
 from ..core.work import get_active_page, get_work
 from ..io import page_io, panel_io, schema
+from ..utils import edge_selection
 from ..utils import layer_stack as layer_stack_utils
 from ..utils import log, page_grid, paths
 from .panel_knife_cut_op import _panel_polygon, _polygon_area, _set_panel_polygon, _split_convex_polygon_by_line
@@ -82,12 +83,12 @@ def _require_target_panel(op: Operator, context):
 
 
 def _set_edge_selection(context, *, kind: str, page_index: int, panel_index: int) -> None:
-    wm = context.window_manager
-    wm.bname_edge_select_kind = kind
-    wm.bname_edge_select_page = int(page_index)
-    wm.bname_edge_select_panel = int(panel_index)
-    wm.bname_edge_select_edge = -1
-    wm.bname_edge_select_vertex = -1
+    edge_selection.set_selection(
+        context,
+        kind,
+        page_index=page_index,
+        panel_index=panel_index,
+    )
 
 
 def _panel_bounds_mm(poly: list[tuple[float, float]]) -> tuple[float, float, float, float] | None:

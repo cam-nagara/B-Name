@@ -8,6 +8,7 @@ import bpy
 
 from ..core.work import get_active_page, get_work
 from . import gp_layer_parenting as gp_parent
+from . import edge_selection
 from . import gpencil as gp_utils
 from . import log
 from .layer_hierarchy import (
@@ -1172,6 +1173,7 @@ def select_stack_index(context, index: int) -> bool:
             pass
         scene.bname_active_gp_folder_key = ""
         scene.bname_active_layer_kind = PAGE_KIND
+        edge_selection.clear_selection(context)
     elif kind == PANEL_KIND:
         work = get_work(context)
         page_idx = int(resolved.get("page_index", -1))
@@ -1195,6 +1197,12 @@ def select_stack_index(context, index: int) -> bool:
             pass
         scene.bname_active_gp_folder_key = ""
         scene.bname_active_layer_kind = PANEL_KIND
+        edge_selection.set_selection(
+            context,
+            "border",
+            page_index=page_idx,
+            panel_index=panel_idx,
+        )
     elif kind == "gp":
         obj = resolved.get("object")
         layer = resolved.get("target")
@@ -1207,14 +1215,17 @@ def select_stack_index(context, index: int) -> bool:
             _logger.exception("select gp layer failed")
         scene.bname_active_layer_kind = "gp"
         scene.bname_active_gp_folder_key = ""
+        edge_selection.clear_selection(context)
     elif kind == "gp_folder":
         _set_active_object(context, resolved.get("object"))
         scene.bname_active_gp_folder_key = item.key
         scene.bname_active_layer_kind = "gp_folder"
+        edge_selection.clear_selection(context)
     elif kind == "image":
         scene.bname_active_image_layer_index = int(resolved.get("index", -1))
         scene.bname_active_gp_folder_key = ""
         scene.bname_active_layer_kind = "image"
+        edge_selection.clear_selection(context)
     elif kind == "balloon_group":
         target_page = resolved.get("page") or page
         if target_page is None:
@@ -1237,6 +1248,7 @@ def select_stack_index(context, index: int) -> bool:
             target_page.active_balloon_index = first_selected
         scene.bname_active_gp_folder_key = ""
         scene.bname_active_layer_kind = "balloon"
+        edge_selection.clear_selection(context)
     elif kind == "balloon":
         target_page = resolved.get("page") or page
         if target_page is None:
@@ -1253,6 +1265,7 @@ def select_stack_index(context, index: int) -> bool:
                 pass
         scene.bname_active_gp_folder_key = ""
         scene.bname_active_layer_kind = "balloon"
+        edge_selection.clear_selection(context)
     elif kind == "text":
         target_page = resolved.get("page") or page
         if target_page is None:
@@ -1264,6 +1277,7 @@ def select_stack_index(context, index: int) -> bool:
         target_page.active_text_index = int(resolved.get("index", -1))
         scene.bname_active_gp_folder_key = ""
         scene.bname_active_layer_kind = "text"
+        edge_selection.clear_selection(context)
     elif kind == "effect":
         obj = resolved.get("object")
         layer = resolved.get("target")
@@ -1275,6 +1289,7 @@ def select_stack_index(context, index: int) -> bool:
         scene.bname_active_effect_layer_name = item.key
         scene.bname_active_gp_folder_key = ""
         scene.bname_active_layer_kind = "effect"
+        edge_selection.clear_selection(context)
     tag_view3d_redraw(context)
     return True
 

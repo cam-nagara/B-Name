@@ -9,6 +9,7 @@ overview モード中は全ページが grid 配置で描画されているた�
 
 from __future__ import annotations
 
+import math
 from typing import Sequence
 
 import bpy
@@ -16,6 +17,7 @@ import bpy
 from ..utils import geom, log, page_browser, page_grid, page_range
 
 _logger = log.get_logger(__name__)
+EDGE_PICK_TOLERANCE_PX = 12.0
 
 
 def _point_on_segment(
@@ -82,6 +84,35 @@ def _hit_test_panel(entry, x_mm: float, y_mm: float) -> bool:
             return False
         return _point_in_polygon((x_mm, y_mm), poly)
     return False
+
+
+def _panel_polygon(entry) -> list[tuple[float, float]]:
+    shape = getattr(entry, "shape_type", "")
+    if shape == "rect":
+        x = float(getattr(entry, "rect_x_mm", 0.0))
+        y = float(getattr(entry, "rect_y_mm", 0.0))
+        w = float(getattr(entry, "rect_width_mm", 0.0))
+        h = float(getattr(entry, "rect_height_mm", 0.0))
+        return [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
+    if shape == "polygon":
+        return [(float(v.x_mm), float(v.y_mm)) for v in getattr(entry, "vertices", [])]
+    return []
+
+
+def _distance_point_to_segment(
+    p: tuple[float, float],
+    a: tuple[float, float],
+    b: tuple[float, float],
+) -> float:
+    dx = b[0] - a[0]
+    dy = b[1] - a[1]
+    length_sq = dx * dx + dy * dy
+    if length_sq < 1.0e-12:
+        return math.hypot(p[0] - a[0], p[1] - a[1])
+    t = max(0.0, min(1.0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / length_sq))
+    cx = a[0] + dx * t
+    cy = a[1] + dy * t
+    return math.hypot(p[0] - cx, p[1] - cy)
 
 
 def _hit_test_page(page, x_mm: float, y_mm: float) -> int | None:
@@ -186,6 +217,82 @@ def find_panel_at_event(context, event) -> tuple[int, int] | None:
     if page_browser.is_page_browser_area(context) and page_browser.fit_enabled(context.scene):
         return _find_panel_at_world_mm_page_browser(context, work, coords[0], coords[1])
     return find_panel_at_world_mm(work, coords[0], coords[1])
+
+
+def find_panel_edge_at_event(context, event, tolerance_px: float = EDGE_PICK_TOLERANCE_PX):
+    """VIEW_3D のマウスイベントから最寄りのコマ辺をピクセル距離で解決."""
+    work = None
+    try:
+        from ..core.work import get_work
+
+        work = get_work(context)
+    except Exception:  # noqa: BLE001
+        work = None
+    if work is None or not getattr(work, "loaded", False):
+        return None
+    view = _event_view_context(context, event)
+    if view is None:
+        return None
+    area, region, rv3d, mx, my = view
+    scene = getattr(context, "scene", None)
+    if scene is None:
+        return None
+
+    best = None
+    best_dist = float(tolerance_px)
+    for candidate in _iter_panel_edge_screen_candidates(context, work, area, region, rv3d):
+        dist = _distance_point_to_segment(
+            (mx, my),
+            candidate["screen_a"],
+            candidate["screen_b"],
+        )
+        if dist > best_dist:
+            continue
+        if best is not None and abs(dist - best_dist) <= 0.01 and candidate["z_order"] < best["z_order"]:
+            continue
+        best_dist = dist
+        best = candidate
+    if best is None:
+        return None
+    return {"page": best["page"], "panel": best["panel"], "edge": best["edge"]}
+
+
+def _iter_panel_edge_screen_candidates(context, work, area, region, rv3d):
+    try:
+        from bpy_extras.view3d_utils import location_3d_to_region_2d
+    except Exception:  # noqa: BLE001
+        return
+    for page_index, page in _iter_pickable_pages(context, work, area):
+        ox, oy = _page_offset_for_area(context, work, area, page_index)
+        for panel_index, panel in enumerate(getattr(page, "panels", [])):
+            if not bool(getattr(panel, "visible", True)):
+                continue
+            poly = _panel_polygon(panel)
+            if len(poly) < 2:
+                continue
+            z_order = int(getattr(panel, "z_order", 0))
+            for edge_index in range(len(poly)):
+                a = (poly[edge_index][0] + ox, poly[edge_index][1] + oy)
+                b = (
+                    poly[(edge_index + 1) % len(poly)][0] + ox,
+                    poly[(edge_index + 1) % len(poly)][1] + oy,
+                )
+                ap = location_3d_to_region_2d(
+                    region, rv3d, (geom.mm_to_m(a[0]), geom.mm_to_m(a[1]), 0.0)
+                )
+                bp = location_3d_to_region_2d(
+                    region, rv3d, (geom.mm_to_m(b[0]), geom.mm_to_m(b[1]), 0.0)
+                )
+                if ap is None or bp is None:
+                    continue
+                yield {
+                    "page": page_index,
+                    "panel": panel_index,
+                    "edge": edge_index,
+                    "z_order": z_order,
+                    "screen_a": (float(ap.x), float(ap.y)),
+                    "screen_b": (float(bp.x), float(bp.y)),
+                }
 
 
 def find_page_at_world_mm(work, x_mm: float, y_mm: float) -> int | None:
@@ -317,3 +424,63 @@ def _event_world_mm(context, event) -> tuple[float, float] | None:
                 return None
             return geom.m_to_mm(loc.x), geom.m_to_mm(loc.y)
     return None
+
+
+def _event_view_context(context, event):
+    screen = getattr(context, "screen", None)
+    if screen is None:
+        return None
+    for area in screen.areas:
+        if area.type != "VIEW_3D":
+            continue
+        for region in area.regions:
+            if region.type != "WINDOW":
+                continue
+            if not (
+                region.x <= event.mouse_x < region.x + region.width
+                and region.y <= event.mouse_y < region.y + region.height
+            ):
+                continue
+            space = area.spaces.active
+            rv3d = getattr(space, "region_3d", None)
+            if rv3d is None:
+                continue
+            return area, region, rv3d, event.mouse_x - region.x, event.mouse_y - region.y
+    return None
+
+
+def _iter_pickable_pages(context, work, area):
+    scene = getattr(context, "scene", None)
+    if scene is None:
+        return
+    is_browser = page_browser.is_marked_area(area) or page_browser.page_browser_area(context) == area
+    overview = bool(getattr(scene, "bname_overview_mode", False)) or is_browser
+    if not overview:
+        idx = int(getattr(work, "active_page_index", -1))
+        if 0 <= idx < len(work.pages) and page_range.page_in_range(work.pages[idx]):
+            yield idx, work.pages[idx]
+        return
+    for idx, page in enumerate(work.pages):
+        if page_range.page_in_range(page):
+            yield idx, page
+
+
+def _page_offset_for_area(context, work, area, page_index: int) -> tuple[float, float]:
+    scene = getattr(context, "scene", None)
+    is_browser = page_browser.is_marked_area(area) or page_browser.page_browser_area(context) == area
+    if is_browser and page_browser.fit_enabled(scene):
+        return page_browser.page_offset_mm(work, scene, area, page_index)
+    cols = max(1, int(getattr(scene, "bname_overview_cols", 4)))
+    gap = float(getattr(scene, "bname_overview_gap_mm", 30.0))
+    paper = work.paper
+    ox, oy = page_grid.page_grid_offset_mm(
+        page_index,
+        cols,
+        gap,
+        float(paper.canvas_width_mm),
+        float(paper.canvas_height_mm),
+        getattr(paper, "start_side", "right"),
+        getattr(paper, "read_direction", "left"),
+    )
+    add_x, add_y = page_grid.page_manual_offset_mm(work.pages[page_index])
+    return ox + add_x, oy + add_y
