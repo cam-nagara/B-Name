@@ -19,7 +19,7 @@ from ..core.mode import MODE_PANEL, get_mode
 from ..core.work import get_active_page, get_work
 from ..utils import layer_stack as layer_stack_utils, log
 from ..utils.layer_hierarchy import page_stack_key
-from . import panel_modal_state
+from . import panel_modal_state, text_edit_runtime
 
 _logger = log.get_logger(__name__)
 
@@ -564,6 +564,8 @@ class BNAME_OT_text_tool(Operator):
     _editing: bool
     _editing_created_new: bool
     _edit_original_body: str
+    _cursor_index: int
+    _selection_anchor: int
     _page_id: str
     _text_id: str
     _dragging: bool
@@ -602,6 +604,8 @@ class BNAME_OT_text_tool(Operator):
         self._editing = False
         self._editing_created_new = False
         self._edit_original_body = ""
+        self._cursor_index = 0
+        self._selection_anchor = -1
         self._page_id = ""
         self._text_id = ""
         self._clear_drag_state()
@@ -674,6 +678,8 @@ class BNAME_OT_text_tool(Operator):
         self._editing = True
         self._editing_created_new = True
         self._edit_original_body = ""
+        self._cursor_index = 0
+        self._selection_anchor = -1
         self._page_id = getattr(page, "id", "")
         self._text_id = getattr(entry, "id", "")
         self._clear_click_state()
@@ -681,6 +687,8 @@ class BNAME_OT_text_tool(Operator):
         return {"RUNNING_MODAL"}
 
     def _modal_editing(self, context, event):
+        if text_edit_runtime.event_is_ime_control(event):
+            return {"PASS_THROUGH"}
         if not _event_in_view3d_window(context, event):
             if event.type == "LEFTMOUSE" and event.value == "PRESS":
                 self._finish_current_text_edit(context)
@@ -688,13 +696,15 @@ class BNAME_OT_text_tool(Operator):
             if not self._is_text_edit_event(event):
                 return {"PASS_THROUGH"}
         if event.type == "LEFTMOUSE" and event.value in {"PRESS", "DOUBLE_CLICK"}:
+            if self._set_cursor_from_text_click(context, event):
+                return {"RUNNING_MODAL"}
             self._finish_current_text_edit(context)
             return self.modal(context, event)
         text = _event_text(event)
         if text:
-            return self._append_to_current_text(context, text)
+            return self._insert_current_text(context, text)
         if event.value != "PRESS":
-            return {"RUNNING_MODAL"}
+            return {"PASS_THROUGH"}
         if event.type in {"ESC", "RIGHTMOUSE"}:
             if bool(getattr(self, "_editing_created_new", False)):
                 _remove_text_by_id(context, self._page_id, self._text_id)
@@ -709,15 +719,33 @@ class BNAME_OT_text_tool(Operator):
             return {"RUNNING_MODAL"}
         if event.type in {"RET", "NUMPAD_ENTER"}:
             if event.shift:
-                return self._append_to_current_text(context, "\n")
+                return self._insert_current_text(context, "\n")
             self._finish_current_text_edit(context)
             return {"RUNNING_MODAL"}
         if event.type == "BACK_SPACE":
             return self._backspace_current_text(context)
+        if event.type in {"DEL", "DELETE"}:
+            return self._delete_current_text(context)
+        if event.type in {"LEFT_ARROW", "RIGHT_ARROW", "UP_ARROW", "DOWN_ARROW", "HOME", "END"}:
+            direction = {
+                "LEFT_ARROW": "LEFT",
+                "RIGHT_ARROW": "RIGHT",
+                "UP_ARROW": "UP",
+                "DOWN_ARROW": "DOWN",
+                "HOME": "HOME",
+                "END": "END",
+            }[event.type]
+            return self._move_text_cursor(context, direction, select=bool(getattr(event, "shift", False)))
+        if event.type == "A" and event.ctrl and not event.alt:
+            return self._select_all_current_text(context)
+        if event.type == "C" and event.ctrl and not event.alt:
+            return self._copy_current_selection(context)
+        if event.type == "X" and event.ctrl and not event.alt:
+            return self._cut_current_selection(context)
         if event.type == "V" and event.ctrl and not event.alt:
             clipboard = getattr(context.window_manager, "clipboard", "")
             if clipboard:
-                return self._append_to_current_text(context, clipboard)
+                return self._insert_current_text(context, clipboard)
             return {"RUNNING_MODAL"}
         return {"RUNNING_MODAL"}
 
@@ -730,14 +758,32 @@ class BNAME_OT_text_tool(Operator):
             return False
         if event.type in {"ESC", "RET", "NUMPAD_ENTER", "BACK_SPACE"}:
             return True
+        if event.type in {
+            "DEL",
+            "DELETE",
+            "LEFT_ARROW",
+            "RIGHT_ARROW",
+            "UP_ARROW",
+            "DOWN_ARROW",
+            "HOME",
+            "END",
+        }:
+            return True
+        if event.type in {"A", "C", "X"} and event.ctrl and not event.alt:
+            return True
         if event.type == "V" and event.ctrl and not event.alt:
             return True
         return False
 
     def _finish_current_text_edit(self, context) -> None:
+        _page, entry, _idx = self._current_text_entry(context)
+        if entry is not None and str(getattr(entry, "body", "")) != str(getattr(self, "_edit_original_body", "")):
+            self._push_undo_step("B-Name: テキスト編集")
         self._editing = False
         self._editing_created_new = False
         self._edit_original_body = ""
+        self._cursor_index = 0
+        self._selection_anchor = -1
         self._page_id = ""
         self._text_id = ""
         self._clear_click_state()
@@ -748,6 +794,8 @@ class BNAME_OT_text_tool(Operator):
         self._editing = True
         self._editing_created_new = False
         self._edit_original_body = str(getattr(entry, "body", ""))
+        self._cursor_index = len(self._edit_original_body)
+        self._selection_anchor = -1
         self._page_id = getattr(page, "id", "")
         self._text_id = getattr(entry, "id", "")
         self._clear_drag_state()
@@ -927,7 +975,42 @@ class BNAME_OT_text_tool(Operator):
             return page, None, -1
         return page, page.texts[idx], idx
 
-    def _append_to_current_text(self, context, text: str):
+    def _set_cursor_from_text_click(self, context, event) -> bool:
+        page, entry, idx = self._current_text_entry(context)
+        if entry is None or page is None or idx < 0:
+            return False
+        work, hit_page, lx, ly, hit_index, hit_entry, hit_part, _can_create = _resolve_text_hit_from_event(
+            context, event
+        )
+        _ = work
+        if (
+            hit_entry is None
+            or hit_page is None
+            or getattr(hit_page, "id", "") != getattr(page, "id", "")
+            or getattr(hit_entry, "id", "") != getattr(entry, "id", "")
+            or hit_index != idx
+        ):
+            return False
+        if hit_part != "body" or lx is None or ly is None:
+            return False
+        if event.value == "DOUBLE_CLICK":
+            self._cursor_index = len(text_edit_runtime.text_body(entry))
+            self._selection_anchor = 0
+        else:
+            self._cursor_index = text_edit_runtime.cursor_index_from_point(entry, lx, ly)
+            self._selection_anchor = -1
+        page.active_text_index = idx
+        layer_stack_utils.tag_view3d_redraw(context)
+        return True
+
+    def _touch_current_text(self, context, page, entry, idx: int) -> None:
+        self._cursor_index = text_edit_runtime.clamp_cursor(entry, self._cursor_index)
+        page.active_text_index = idx
+        if hasattr(context.scene, "bname_active_layer_kind"):
+            context.scene.bname_active_layer_kind = "text"
+        layer_stack_utils.sync_layer_stack_after_data_change(context)
+
+    def _insert_current_text(self, context, text: str):
         page, entry, idx = self._current_text_entry(context)
         if entry is None:
             self.finish_from_external(context, keep_selection=True)
@@ -935,11 +1018,14 @@ class BNAME_OT_text_tool(Operator):
         cleaned = text.replace("\x00", "")
         if not cleaned:
             return {"RUNNING_MODAL"}
-        entry.body = f"{entry.body}{cleaned}"
-        page.active_text_index = idx
-        if hasattr(context.scene, "bname_active_layer_kind"):
-            context.scene.bname_active_layer_kind = "text"
-        layer_stack_utils.sync_layer_stack_after_data_change(context)
+        self._cursor_index = text_edit_runtime.replace_selection(
+            entry,
+            self._cursor_index,
+            self._selection_anchor,
+            cleaned,
+        )
+        self._selection_anchor = -1
+        self._touch_current_text(context, page, entry, idx)
         return {"RUNNING_MODAL"}
 
     def _backspace_current_text(self, context):
@@ -947,10 +1033,80 @@ class BNAME_OT_text_tool(Operator):
         if entry is None:
             self.finish_from_external(context, keep_selection=True)
             return {"CANCELLED"}
-        if entry.body:
-            entry.body = entry.body[:-1]
-            page.active_text_index = idx
-            layer_stack_utils.sync_layer_stack_after_data_change(context)
+        self._cursor_index = text_edit_runtime.delete_backward(
+            entry,
+            self._cursor_index,
+            self._selection_anchor,
+        )
+        self._selection_anchor = -1
+        self._touch_current_text(context, page, entry, idx)
+        return {"RUNNING_MODAL"}
+
+    def _delete_current_text(self, context):
+        page, entry, idx = self._current_text_entry(context)
+        if entry is None:
+            self.finish_from_external(context, keep_selection=True)
+            return {"CANCELLED"}
+        self._cursor_index = text_edit_runtime.delete_forward(
+            entry,
+            self._cursor_index,
+            self._selection_anchor,
+        )
+        self._selection_anchor = -1
+        self._touch_current_text(context, page, entry, idx)
+        return {"RUNNING_MODAL"}
+
+    def _move_text_cursor(self, context, direction: str, *, select: bool):
+        page, entry, idx = self._current_text_entry(context)
+        if entry is None:
+            self.finish_from_external(context, keep_selection=True)
+            return {"CANCELLED"}
+        if select and self._selection_anchor < 0:
+            self._selection_anchor = text_edit_runtime.clamp_cursor(entry, self._cursor_index)
+        self._cursor_index = text_edit_runtime.move_cursor(entry, self._cursor_index, direction)
+        if not select:
+            self._selection_anchor = -1
+        page.active_text_index = idx
+        layer_stack_utils.tag_view3d_redraw(context)
+        return {"RUNNING_MODAL"}
+
+    def _select_all_current_text(self, context):
+        page, entry, idx = self._current_text_entry(context)
+        if entry is None:
+            self.finish_from_external(context, keep_selection=True)
+            return {"CANCELLED"}
+        self._selection_anchor = 0
+        self._cursor_index = len(text_edit_runtime.text_body(entry))
+        page.active_text_index = idx
+        layer_stack_utils.tag_view3d_redraw(context)
+        return {"RUNNING_MODAL"}
+
+    def _copy_current_selection(self, context):
+        _page, entry, _idx = self._current_text_entry(context)
+        if entry is None:
+            self.finish_from_external(context, keep_selection=True)
+            return {"CANCELLED"}
+        selected = text_edit_runtime.selected_text(entry, self._cursor_index, self._selection_anchor)
+        if selected:
+            context.window_manager.clipboard = selected
+        return {"RUNNING_MODAL"}
+
+    def _cut_current_selection(self, context):
+        page, entry, idx = self._current_text_entry(context)
+        if entry is None:
+            self.finish_from_external(context, keep_selection=True)
+            return {"CANCELLED"}
+        selected = text_edit_runtime.selected_text(entry, self._cursor_index, self._selection_anchor)
+        if selected:
+            context.window_manager.clipboard = selected
+            self._cursor_index = text_edit_runtime.replace_selection(
+                entry,
+                self._cursor_index,
+                self._selection_anchor,
+                "",
+            )
+            self._selection_anchor = -1
+            self._touch_current_text(context, page, entry, idx)
         return {"RUNNING_MODAL"}
 
     def _cleanup(self, context) -> None:
@@ -960,6 +1116,8 @@ class BNAME_OT_text_tool(Operator):
         self._editing = False
         self._editing_created_new = False
         self._edit_original_body = ""
+        self._cursor_index = 0
+        self._selection_anchor = -1
         self._clear_drag_state()
         self._clear_click_state()
 

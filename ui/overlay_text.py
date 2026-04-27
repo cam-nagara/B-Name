@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from ..utils.geom import Rect
+from ..operators import text_edit_runtime
 
 EntryVisiblePredicate = Callable[[object], bool]
 _TEXT_HANDLE_SIZE_MM = 2.0
@@ -31,36 +32,23 @@ def _text_handle_rects(rect: Rect) -> list[Rect]:
 
 
 def _text_content(entry) -> str:
-    return str(getattr(entry, "body", "") or "")
+    return text_edit_runtime.text_body(entry)
 
 
 def _text_em_mm(entry) -> float:
-    from ..utils.geom import q_to_mm
-
-    try:
-        q = float(getattr(entry, "font_size_q", 20.0))
-    except Exception:  # noqa: BLE001
-        q = 20.0
-    return max(0.25, q_to_mm(q))
+    return text_edit_runtime.text_em_mm(entry)
 
 
 def _text_line_height(entry) -> float:
-    try:
-        return max(0.1, float(getattr(entry, "line_height", 1.4)))
-    except Exception:  # noqa: BLE001
-        return 1.4
+    return text_edit_runtime.text_line_height(entry)
 
 
 def _text_letter_spacing(entry) -> float:
-    try:
-        return float(getattr(entry, "letter_spacing", 0.0))
-    except Exception:  # noqa: BLE001
-        return 0.0
+    return text_edit_runtime.text_letter_spacing(entry)
 
 
 def _text_inner_rect(rect: Rect) -> Rect:
-    padded = rect.inset(1.0)
-    return padded if padded.width > 0.0 and padded.height > 0.0 else rect
+    return text_edit_runtime.text_inner_rect(rect)
 
 
 def _vertical_caret_rect(entry, rect: Rect) -> Rect:
@@ -114,27 +102,50 @@ def _horizontal_caret_rect(entry, rect: Rect) -> Rect:
     return Rect(x, y, thickness, min(em, region.height))
 
 
-def text_caret_rect(entry, rect: Rect) -> Rect:
-    if getattr(entry, "writing_mode", "vertical") == "horizontal":
-        return _horizontal_caret_rect(entry, rect)
-    return _vertical_caret_rect(entry, rect)
+def text_caret_rect(entry, rect: Rect, cursor_index: int | None = None) -> Rect:
+    if cursor_index is None:
+        cursor_index = len(text_edit_runtime.text_body(entry))
+    return text_edit_runtime.caret_rect(entry, rect, cursor_index)
 
 
-def _is_editing_entry(context, page, entry) -> bool:
+def _editing_operator(context, page, entry):
     if context is None:
-        return False
+        return None
     try:
         from ..operators import panel_modal_state
 
         op = panel_modal_state.get_active("text_tool")
     except Exception:  # noqa: BLE001
-        return False
+        return None
     if op is None or not bool(getattr(op, "_editing", False)):
-        return False
-    return (
+        return None
+    if (
         str(getattr(op, "_page_id", "") or "") == str(getattr(page, "id", "") or "")
         and str(getattr(op, "_text_id", "") or "") == str(getattr(entry, "id", "") or "")
-    )
+    ):
+        return op
+    return None
+
+
+def _selection_rects(entry, rect: Rect, cursor_index: int, selection_anchor: int) -> list[Rect]:
+    bounds = text_edit_runtime.selection_bounds(cursor_index, selection_anchor)
+    if bounds is None:
+        return []
+    start, end = bounds
+    em = _text_em_mm(entry)
+    char_pitch = em * max(0.1, 1.0 + _text_letter_spacing(entry))
+    rects: list[Rect] = []
+    body = text_edit_runtime.text_body(entry)
+    vertical = getattr(entry, "writing_mode", "vertical") != "horizontal"
+    for index in range(start, min(end, len(body))):
+        if body[index] == "\n":
+            continue
+        caret = text_edit_runtime.caret_rect(entry, rect, index)
+        if vertical:
+            rects.append(Rect(caret.x, caret.y - char_pitch, caret.width, char_pitch))
+        else:
+            rects.append(Rect(caret.x, caret.y, char_pitch, caret.height))
+    return rects
 
 
 def draw_text_guides(
@@ -164,8 +175,16 @@ def draw_text_guides(
             for handle in _text_handle_rects(rect):
                 draw_rect_fill(handle, (1.0, 1.0, 1.0, 0.95))
                 draw_rect_outline(handle, (1.0, 0.6, 0.0, 1.0), width_mm=0.25)
-        if _is_editing_entry(context, page, entry):
-            caret = text_caret_rect(entry, rect)
+        editing_op = _editing_operator(context, page, entry)
+        if editing_op is not None:
+            for selection_rect in _selection_rects(
+                entry,
+                rect,
+                int(getattr(editing_op, "_cursor_index", 0)),
+                int(getattr(editing_op, "_selection_anchor", -1)),
+            ):
+                draw_rect_fill(selection_rect, (0.2, 0.45, 1.0, 0.35))
+            caret = text_caret_rect(entry, rect, int(getattr(editing_op, "_cursor_index", 0)))
             draw_rect_fill(caret, _TEXT_CARET_COLOR)
 
 
