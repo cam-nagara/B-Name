@@ -653,6 +653,8 @@ def balloon_entry_to_dict(entry) -> dict[str, Any]:
         "fillColorAlpha": round(entry.fill_color[3], 3),
         "blendMode": getattr(entry, "blend_mode", "normal"),
         "mergeGroupId": getattr(entry, "merge_group_id", ""),
+        "parentKind": getattr(entry, "parent_kind", "page"),
+        "parentKey": getattr(entry, "parent_key", ""),
         "tails": [
             {
                 "type": t.type,
@@ -700,6 +702,8 @@ def balloon_entry_from_dict(entry, data: dict[str, Any]) -> None:
     entry.fill_color = hex_to_rgba(data.get("fillColor", "#FFFFFF"), alpha)
     entry.blend_mode = data.get("blendMode", "normal")
     entry.merge_group_id = data.get("mergeGroupId", "")
+    entry.parent_kind = data.get("parentKind", data.get("parent_kind", "page"))
+    entry.parent_key = str(data.get("parentKey", data.get("parent_key", "")) or "")
     entry.tails.clear()
     for td in data.get("tails", []):
         tail = entry.tails.add()

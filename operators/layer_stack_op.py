@@ -751,6 +751,8 @@ class BNAME_OT_layer_stack_add(Operator, ImportHelper):
         entry.width_mm = width
         entry.height_mm = height
         entry.rounded_corner_enabled = True
+        entry.parent_kind = "coma" if ":" in parent_key else "page"
+        entry.parent_key = parent_key or page_stack_key(page)
         page.active_balloon_index = len(page.balloons) - 1
         context.scene.bname_active_layer_kind = "balloon"
         layer_stack_utils.sync_layer_stack_after_data_change(context)

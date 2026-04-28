@@ -130,6 +130,8 @@ class BNameBalloonEntry(bpy.types.PropertyGroup):
     fill_color: FloatVectorProperty(subtype="COLOR", size=4, default=(1.0, 1.0, 1.0, 1.0), min=0.0, max=1.0)  # type: ignore[valid-type]
     blend_mode: EnumProperty(name="合成モード", items=_BLEND_MODE_ITEMS, default="normal")  # type: ignore[valid-type]
     merge_group_id: StringProperty(name="結合フォルダ ID", default="")  # type: ignore[valid-type]
+    parent_kind: StringProperty(name="親種別", default="page")  # type: ignore[valid-type]
+    parent_key: StringProperty(name="親キー", default="")  # type: ignore[valid-type]
     selected: BoolProperty(name="選択", default=False, options={"SKIP_SAVE"})  # type: ignore[valid-type]
 
     # 反転 / 不透明度 (Meldex flipH/flipV/opacity 相当)

@@ -12,10 +12,10 @@ from bpy.types import Operator
 
 from ..core.mode import MODE_COMA, get_mode
 from ..core.work import get_active_page, get_work
-from ..utils import layer_hierarchy, log, object_selection
+from ..utils import gp_layer_parenting as gp_parent, layer_hierarchy, log, object_selection, page_grid
 from ..utils.geom import m_to_mm
 from ..utils import layer_stack as layer_stack_utils
-from . import coma_modal_state, effect_line_link_op, selection_context_menu, view_event_region
+from . import coma_modal_state, coma_picker, effect_line_link_op, selection_context_menu, view_event_region
 
 _logger = log.get_logger(__name__)
 
@@ -594,7 +594,29 @@ def on_effect_params_changed(context, _params) -> None:
         _logger.exception("effect_line: param change rebuild failed")
 
 
-def _create_effect_layer(context, bounds: tuple[float, float, float, float] | None = None):
+def _parent_key_for_world_point(context, x_mm: float, y_mm: float) -> str:
+    work = get_work(context)
+    if work is None or not getattr(work, "loaded", False):
+        return ""
+    page_index = coma_picker.find_page_at_world_mm(work, x_mm, y_mm)
+    if page_index is None or not (0 <= page_index < len(work.pages)):
+        return ""
+    page = work.pages[page_index]
+    ox_mm, oy_mm = page_grid.page_total_offset_mm(work, context.scene, page_index)
+    local_x = float(x_mm) - ox_mm
+    local_y = float(y_mm) - oy_mm
+    panel = layer_hierarchy.coma_containing_point(page, local_x, local_y)
+    if panel is not None:
+        return layer_hierarchy.coma_stack_key(page, panel)
+    return layer_hierarchy.page_stack_key(page)
+
+
+def _create_effect_layer(
+    context,
+    bounds: tuple[float, float, float, float] | None = None,
+    *,
+    parent_key: str = "",
+):
     obj = layer_stack_utils.ensure_effect_gp_object(context.scene)
     gp_data = obj.data
     params = getattr(context.scene, "bname_effect_line_params", None)
@@ -602,6 +624,8 @@ def _create_effect_layer(context, bounds: tuple[float, float, float, float] | No
     layer_name = _unique_layer_name(gp_data, f"effect_{suffix}")
     layer = gp_data.layers.new(layer_name)
     gp_data.layers.active = layer
+    if parent_key:
+        gp_parent.set_parent_key(layer, parent_key)
     seed = _seed_for_new_layer(obj)
     if bounds is None:
         bounds = (70.0, 110.0, 80.0, 100.0)
@@ -823,6 +847,7 @@ class BNAME_OT_effect_line_tool(Operator):
         obj, layer = _create_effect_layer(
             context,
             (x_mm, y_mm, _EFFECT_MIN_SIZE_MM, _EFFECT_MIN_SIZE_MM),
+            parent_key=_parent_key_for_world_point(context, x_mm, y_mm),
         )
         object_selection.select_key(
             context,

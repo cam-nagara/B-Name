@@ -212,6 +212,23 @@ def _coma_parent_key_matches(entry, page, coma_key: str, panel) -> bool:
     return parent == f"{getattr(page, 'id', '')}:{getattr(panel, 'coma_id', '')}"
 
 
+def _explicit_entry_parent(entry, page, panels_by_key: dict[str, object]) -> tuple[str, int] | None:
+    parent = str(getattr(entry, "parent_key", "") or "")
+    if not parent:
+        return None
+    parent_kind = str(getattr(entry, "parent_kind", "") or "")
+    page_key = page_stack_key(page)
+    if parent_kind == "page" or (not parent_kind and ":" not in parent):
+        if parent in {getattr(page, "id", ""), page_key}:
+            return page_key, 1
+        return None
+    if parent_kind == "coma" or ":" in parent:
+        for coma_key, panel in panels_by_key.items():
+            if _coma_parent_key_matches(entry, page, coma_key, panel):
+                return coma_key, 2
+    return None
+
+
 def _collect_raster_targets_for_page(page, panels_by_key: dict[str, object]):
     scene = getattr(bpy.context, "scene", None)
     coll = getattr(scene, "bname_raster_layers", None) if scene is not None else None
@@ -264,13 +281,17 @@ def _collect_page_layer_targets(
 
     for entry in reversed(list(getattr(page, "balloons", []))):
         bid = _ensure_unique_id(entry, used_balloon, "balloon")
-        panel = coma_containing_point(page, *entry_center(entry))
-        if panel is not None:
-            parent = coma_stack_key(page, panel)
-            depth = 2
+        explicit_parent = _explicit_entry_parent(entry, page, panels_by_key)
+        if explicit_parent is not None:
+            parent, depth = explicit_parent
         else:
-            parent = page_key
-            depth = 1
+            panel = coma_containing_point(page, *entry_center(entry))
+            if panel is not None:
+                parent = coma_stack_key(page, panel)
+                depth = 2
+            else:
+                parent = page_key
+                depth = 1
         group_id = str(getattr(entry, "merge_group_id", "") or "")
         if group_id:
             group_key = f"{page_key}:{group_id}"
@@ -749,7 +770,7 @@ def _target_index_for_stack_move(
 def _parent_item_allows_child(parent, child_kind: str) -> bool:
     parent_kind = getattr(parent, "kind", "")
     if parent_kind in {PAGE_KIND, COMA_KIND}:
-        return child_kind in {"gp", "effect", "raster"}
+        return child_kind in {"gp", "effect", "raster", "balloon"}
     if parent_kind == "gp_folder":
         return child_kind in {"gp", "gp_folder"}
     return False
@@ -760,7 +781,7 @@ def _parent_key_exists_for_child(context, child_kind: str, parent_key: str) -> b
     if not parent_key:
         return True
     work = get_work(context)
-    if child_kind in {"gp", "effect", "raster"} and gp_parent.parent_key_exists(work, parent_key):
+    if child_kind in {"gp", "effect", "raster", "balloon"} and gp_parent.parent_key_exists(work, parent_key):
         return True
     if child_kind in {"gp", "gp_folder"}:
         stack = getattr(getattr(context, "scene", None), "bname_layer_stack", None)
@@ -775,7 +796,7 @@ def _parent_key_from_flat_drop(stack, moved_index: int, child_kind: str) -> str:
     previous = stack[moved_index - 1]
     if _parent_item_allows_child(previous, child_kind):
         return str(getattr(previous, "key", "") or "")
-    if child_kind in {"gp", "effect", "raster"} and getattr(previous, "kind", "") in {"gp", "effect", "raster"}:
+    if child_kind in {"gp", "effect", "raster", "balloon"} and getattr(previous, "kind", "") in {"gp", "effect", "raster", "balloon"}:
         return str(getattr(previous, "parent_key", "") or "")
     previous_parent_key = str(getattr(previous, "parent_key", "") or "")
     if previous_parent_key:
@@ -830,7 +851,7 @@ def _apply_stack_drop_hint(context, moved_uid: str, *, nesting_delta: int = 0) -
         return False
     item = stack[moved_index]
     kind = getattr(item, "kind", "")
-    if kind not in {"gp", "gp_folder", "effect", "raster"}:
+    if kind not in {"gp", "gp_folder", "effect", "raster", "balloon"}:
         return False
     parent_key = _drop_parent_from_nesting_delta(stack, item, moved_index, nesting_delta)
     old_parent_key = str(getattr(item, "parent_key", "") or "")
@@ -840,7 +861,7 @@ def _apply_stack_drop_hint(context, moved_uid: str, *, nesting_delta: int = 0) -
         item_key = str(getattr(item, "key", "") or "")
         if parent_key == item_key or _is_stack_folder_descendant(stack, item_key, parent_key):
             return False
-    if kind in {"effect", "raster"} and _find_stack_item(stack, "gp_folder", parent_key):
+    if kind in {"effect", "raster", "balloon"} and _find_stack_item(stack, "gp_folder", parent_key):
         return False
     if nesting_delta == 0 and old_parent_key and parent_key:
         old_page_key, _old_child_key = split_child_key(old_parent_key)
@@ -1825,6 +1846,34 @@ def _apply_raster_parenting(context, stack) -> None:
             pass
 
 
+def _apply_balloon_parenting(context, stack) -> None:
+    work = get_work(context)
+    if work is None:
+        return
+    for page in getattr(work, "pages", []):
+        page_key = page_stack_key(page)
+        by_key = {
+            split_child_key(str(getattr(item, "key", "") or ""))[1]: str(getattr(item, "parent_key", "") or "")
+            for item in stack
+            if getattr(item, "kind", "") == "balloon"
+            and split_child_key(str(getattr(item, "key", "") or ""))[0] == page_key
+        }
+        for entry in getattr(page, "balloons", []):
+            key = str(getattr(entry, "id", "") or "")
+            if key not in by_key:
+                continue
+            parent_key = by_key[key]
+            existing_parent = str(getattr(entry, "parent_key", "") or "")
+            fallback_panel = coma_containing_point(page, *entry_center(entry))
+            fallback_parent = coma_stack_key(page, fallback_panel) if fallback_panel is not None else page_key
+            if not existing_parent and parent_key == fallback_parent:
+                continue
+            if not parent_key or not gp_parent.parent_key_exists(work, parent_key):
+                continue
+            entry.parent_kind = "coma" if ":" in parent_key else "page"
+            entry.parent_key = parent_key
+
+
 def _reorder_gp_parent(gp_data, parent_key: str, desired_front_uids: list[str], *, effect: bool):
     siblings = _siblings_for_parent(gp_data, parent_key)
     actual = [_node_uid_for_stack(node, effect=effect) for node in siblings]
@@ -1883,6 +1932,7 @@ def apply_stack_order(context) -> None:
         _apply_effect_parenting(effect_obj, stack, get_work(context))
         _apply_gp_order(effect_obj, stack, effect=True)
     _apply_raster_parenting(context, stack)
+    _apply_balloon_parenting(context, stack)
     tag_view3d_redraw(context)
 
 

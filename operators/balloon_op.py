@@ -19,7 +19,7 @@ from bpy.types import Operator
 from ..core.work import get_active_page, get_work
 from ..io import balloon_presets
 from ..utils import layer_stack as layer_stack_utils, log, object_selection
-from ..utils.layer_hierarchy import page_stack_key
+from ..utils.layer_hierarchy import coma_containing_point, coma_stack_key, page_stack_key
 from . import coma_modal_state, selection_context_menu, view_event_region
 
 _logger = log.get_logger(__name__)
@@ -315,7 +315,25 @@ def _set_balloon_rect(page, entry, x: float, y: float, width: float, height: flo
     entry.height_mm = max(_BALLOON_MIN_SIZE_MM, float(height))
 
 
-def _create_balloon_entry(context, page, *, shape: str, x: float, y: float, w: float, h: float):
+def _parent_for_creation_point(page, x_mm: float, y_mm: float) -> tuple[str, str]:
+    panel = coma_containing_point(page, x_mm, y_mm)
+    if panel is not None:
+        return "coma", coma_stack_key(page, panel)
+    return "page", page_stack_key(page)
+
+
+def _create_balloon_entry(
+    context,
+    page,
+    *,
+    shape: str,
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    parent_kind: str = "",
+    parent_key: str = "",
+):
     entry = page.balloons.add()
     entry.id = _allocate_balloon_id(page)
     entry.shape = shape
@@ -324,6 +342,8 @@ def _create_balloon_entry(context, page, *, shape: str, x: float, y: float, w: f
     entry.width_mm = max(_BALLOON_MIN_SIZE_MM, float(w))
     entry.height_mm = max(_BALLOON_MIN_SIZE_MM, float(h))
     entry.rounded_corner_enabled = (shape == "rect")
+    entry.parent_kind = str(parent_kind or "page")
+    entry.parent_key = str(parent_key or page_stack_key(page))
     page.active_balloon_index = len(page.balloons) - 1
     _clear_balloon_selection(page)
     entry.selected = True
@@ -705,6 +725,7 @@ class BNAME_OT_balloon_tool(Operator):
         ):
             self.report({"ERROR"}, "このモードではその位置にフキダシを作成できません")
             return {"RUNNING_MODAL"}
+        parent_kind, parent_key = _parent_for_creation_point(page, lx, ly)
         entry = _create_balloon_entry(
             context,
             page,
@@ -713,6 +734,8 @@ class BNAME_OT_balloon_tool(Operator):
             y=ly,
             w=_BALLOON_MIN_SIZE_MM,
             h=_BALLOON_MIN_SIZE_MM,
+            parent_kind=parent_kind,
+            parent_key=parent_key,
         )
         self._start_create_drag(page, entry, lx, ly)
         return {"RUNNING_MODAL"}

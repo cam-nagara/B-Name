@@ -8,6 +8,7 @@ from bpy.types import Operator
 from ..core.mode import MODE_COMA, MODE_PAGE, get_mode
 from ..core.work import get_active_page, get_work
 from ..utils import geom, gp_layer_parenting as gp_parent, layer_stack as layer_stack_utils, page_grid
+from ..utils.layer_hierarchy import coma_stack_key, page_stack_key
 from . import coma_modal_state, coma_picker, view_event_region
 
 
@@ -40,11 +41,47 @@ def _entry_center(entry) -> tuple[float, float]:
     )
 
 
+def _balloon_parent_matches_panel(page, panel, balloon) -> bool | None:
+    parent_key = str(getattr(balloon, "parent_key", "") or "")
+    if not parent_key:
+        return None
+    page_key = page_stack_key(page)
+    parent_kind = str(getattr(balloon, "parent_kind", "") or "")
+    if parent_kind == "page" or parent_key in {str(getattr(page, "id", "") or ""), page_key}:
+        return False
+    target_stem = str(getattr(panel, "coma_id", "") or "")
+    target_matches = {
+        coma_stack_key(page, panel),
+        str(getattr(panel, "id", "") or ""),
+        target_stem,
+        f"{getattr(page, 'id', '')}:{target_stem}",
+    }
+    if parent_key in target_matches:
+        return True
+    if parent_kind == "coma" or ":" in parent_key:
+        for candidate in getattr(page, "comas", []):
+            stem = str(getattr(candidate, "coma_id", "") or "")
+            if parent_key in {
+                coma_stack_key(page, candidate),
+                str(getattr(candidate, "id", "") or ""),
+                stem,
+                f"{getattr(page, 'id', '')}:{stem}",
+            }:
+                return False
+    return None
+
+
 def _panel_children(page, panel):
     balloons = []
     texts = []
     target_stem = str(getattr(panel, "coma_id", "") or "")
     for balloon in getattr(page, "balloons", []):
+        parent_match = _balloon_parent_matches_panel(page, panel, balloon)
+        if parent_match is True:
+            balloons.append(balloon)
+            continue
+        if parent_match is False:
+            continue
         hit = layer_stack_utils.coma_containing_point(page, *_entry_center(balloon))
         if hit is not None and str(getattr(hit, "coma_id", "") or "") == target_stem:
             balloons.append(balloon)
