@@ -178,14 +178,28 @@ def draw_text_guides(
                 draw_rect_outline(handle, viewport_colors.HANDLE_OUTLINE, width_mm=0.25)
         editing_op = _editing_operator(context, page, entry)
         if editing_op is not None:
-            for selection_rect in _selection_rects(
-                entry,
-                rect,
-                int(getattr(editing_op, "_cursor_index", 0)),
-                int(getattr(editing_op, "_selection_anchor", -1)),
-            ):
-                draw_rect_fill(selection_rect, viewport_colors.SELECTION_FILL)
-            caret = text_caret_rect(entry, rect, int(getattr(editing_op, "_cursor_index", 0)))
+            cursor_index = int(getattr(editing_op, "_cursor_index", 0))
+            selection_anchor = int(getattr(editing_op, "_selection_anchor", -1))
+            preview_entry, preview_cursor, composition_bounds = (
+                text_edit_runtime.preview_entry_with_composition(
+                    entry,
+                    cursor_index,
+                    selection_anchor,
+                )
+            )
+            if composition_bounds is None:
+                for selection_rect in _selection_rects(
+                    entry,
+                    rect,
+                    cursor_index,
+                    selection_anchor,
+                ):
+                    draw_rect_fill(selection_rect, viewport_colors.SELECTION_FILL)
+            else:
+                start, end = composition_bounds
+                for composition_rect in _selection_rects(preview_entry, rect, end, start):
+                    draw_rect_fill(composition_rect, viewport_colors.SELECTION_FILL)
+            caret = text_caret_rect(preview_entry, rect, preview_cursor)
             draw_rect_fill(caret, _TEXT_CARET_COLOR)
 
 
@@ -205,4 +219,13 @@ def draw_text_pixels(
         if not entry_visible(entry):
             continue
         rect = Rect(entry.x_mm + ox_mm, entry.y_mm + oy_mm, entry.width_mm, entry.height_mm)
+        editing_op = _editing_operator(context, page, entry)
+        if editing_op is not None:
+            cursor_index = int(getattr(editing_op, "_cursor_index", 0))
+            selection_anchor = int(getattr(editing_op, "_selection_anchor", -1))
+            entry, _cursor, _bounds = text_edit_runtime.preview_entry_with_composition(
+                entry,
+                cursor_index,
+                selection_anchor,
+            )
         draw_text_in_rect(context, rect, entry)

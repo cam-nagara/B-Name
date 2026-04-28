@@ -40,7 +40,10 @@ _IME_CONTROL_TYPES = {
     "OSKEY",
 }
 _WM_CHAR = 0x0102
+_WM_IME_STARTCOMPOSITION = 0x010D
+_WM_IME_ENDCOMPOSITION = 0x010E
 _WM_IME_COMPOSITION = 0x010F
+_GCS_COMPSTR = 0x0008
 _GCS_RESULTSTR = 0x0800
 _GWL_WNDPROC = -4
 _IME_CAPTURE_HWND = None
@@ -48,6 +51,8 @@ _IME_CAPTURE_OLD_PROC = None
 _IME_CAPTURE_PROC = None
 _IME_TEXT_QUEUE: list[str] = []
 _IME_LAST_APPEND = ("", 0.0)
+_IME_COMPOSITION_TEXT = ""
+_IME_COMPOSITION_ACTIVE = False
 _USER32 = None
 _IMM32 = None
 
@@ -58,7 +63,7 @@ def _clean_ime_text(value: str) -> str:
 
 
 def _append_ime_text(text: str) -> None:
-    global _IME_LAST_APPEND
+    global _IME_LAST_APPEND, _IME_COMPOSITION_TEXT, _IME_COMPOSITION_ACTIVE
     cleaned = _clean_ime_text(text)
     if not cleaned:
         return
@@ -69,6 +74,25 @@ def _append_ime_text(text: str) -> None:
         return
     _IME_TEXT_QUEUE.append(cleaned)
     _IME_LAST_APPEND = (cleaned, now)
+    _IME_COMPOSITION_TEXT = ""
+    _IME_COMPOSITION_ACTIVE = False
+
+
+def _set_ime_composition_text(text: str, *, active: bool = True) -> None:
+    global _IME_COMPOSITION_TEXT, _IME_COMPOSITION_ACTIVE
+    _IME_COMPOSITION_TEXT = _clean_ime_text(text)
+    _IME_COMPOSITION_ACTIVE = bool(active)
+
+
+def _begin_ime_composition() -> None:
+    global _IME_COMPOSITION_ACTIVE
+    _IME_COMPOSITION_ACTIVE = True
+
+
+def _end_ime_composition() -> None:
+    global _IME_COMPOSITION_TEXT, _IME_COMPOSITION_ACTIVE
+    _IME_COMPOSITION_TEXT = ""
+    _IME_COMPOSITION_ACTIVE = False
 
 
 def poll_ime_text() -> str:
@@ -80,10 +104,22 @@ def poll_ime_text() -> str:
     return text
 
 
+def ime_composition_text() -> str:
+    """Return the current uncommitted IME composition string."""
+    return _IME_COMPOSITION_TEXT
+
+
+def ime_composition_active() -> bool:
+    """Return True while the OS IME is composing text for the inline editor."""
+    return _IME_COMPOSITION_ACTIVE or bool(_IME_COMPOSITION_TEXT)
+
+
 def _clear_ime_text_queue() -> None:
-    global _IME_LAST_APPEND
+    global _IME_LAST_APPEND, _IME_COMPOSITION_TEXT, _IME_COMPOSITION_ACTIVE
     _IME_TEXT_QUEUE.clear()
     _IME_LAST_APPEND = ("", 0.0)
+    _IME_COMPOSITION_TEXT = ""
+    _IME_COMPOSITION_ACTIVE = False
 
 
 def _ensure_win32_ime_api() -> bool:
@@ -95,6 +131,10 @@ def _ensure_win32_ime_api() -> bool:
     try:
         user32 = ctypes.WinDLL("user32", use_last_error=True)
         imm32 = ctypes.WinDLL("imm32", use_last_error=True)
+        user32.GetFocus.argtypes = []
+        user32.GetFocus.restype = wintypes.HWND
+        user32.GetActiveWindow.argtypes = []
+        user32.GetActiveWindow.restype = wintypes.HWND
         user32.GetForegroundWindow.argtypes = []
         user32.GetForegroundWindow.restype = wintypes.HWND
         user32.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
@@ -125,21 +165,37 @@ def _ensure_win32_ime_api() -> bool:
     return True
 
 
-def _read_ime_result_string(hwnd, lparam) -> str:
-    if _IMM32 is None or not (int(lparam) & _GCS_RESULTSTR):
+def _capture_hwnd_candidates():
+    if _USER32 is None:
+        return []
+    candidates = []
+    seen = set()
+    for getter in (_USER32.GetFocus, _USER32.GetActiveWindow, _USER32.GetForegroundWindow):
+        try:
+            hwnd = getter()
+        except Exception:  # noqa: BLE001
+            hwnd = None
+        if hwnd and int(hwnd) not in seen:
+            candidates.append(hwnd)
+            seen.add(int(hwnd))
+    return candidates
+
+
+def _read_ime_string(hwnd, lparam, flag: int) -> str:
+    if _IMM32 is None or not (int(lparam) & int(flag)):
         return ""
     himc = _IMM32.ImmGetContext(hwnd)
     if not himc:
         return ""
     try:
-        byte_count = int(_IMM32.ImmGetCompositionStringW(himc, _GCS_RESULTSTR, None, 0))
+        byte_count = int(_IMM32.ImmGetCompositionStringW(himc, flag, None, 0))
         if byte_count <= 0:
             return ""
         buffer = ctypes.create_unicode_buffer(byte_count // 2 + 1)
         read_count = int(
             _IMM32.ImmGetCompositionStringW(
                 himc,
-                _GCS_RESULTSTR,
+                flag,
                 ctypes.cast(buffer, ctypes.c_void_p),
                 byte_count,
             )
@@ -156,10 +212,10 @@ def begin_ime_capture() -> None:
     global _IME_CAPTURE_HWND, _IME_CAPTURE_OLD_PROC, _IME_CAPTURE_PROC
     if not _ensure_win32_ime_api():
         return
-    hwnd = _USER32.GetForegroundWindow()
-    if not hwnd:
+    hwnd_candidates = _capture_hwnd_candidates()
+    if not hwnd_candidates:
         return
-    if _IME_CAPTURE_HWND == hwnd and _IME_CAPTURE_OLD_PROC:
+    if _IME_CAPTURE_HWND in hwnd_candidates and _IME_CAPTURE_OLD_PROC:
         return
     end_ime_capture()
 
@@ -173,8 +229,18 @@ def begin_ime_capture() -> None:
 
     def _ime_wnd_proc(hwnd_arg, msg, wparam, lparam):
         try:
-            if msg == _WM_IME_COMPOSITION:
-                _append_ime_text(_read_ime_result_string(hwnd_arg, lparam))
+            if msg == _WM_IME_STARTCOMPOSITION:
+                _begin_ime_composition()
+            elif msg == _WM_IME_ENDCOMPOSITION:
+                _end_ime_composition()
+            elif msg == _WM_IME_COMPOSITION:
+                committed = _read_ime_string(hwnd_arg, lparam, _GCS_RESULTSTR)
+                if committed:
+                    _append_ime_text(committed)
+                else:
+                    composition = _read_ime_string(hwnd_arg, lparam, _GCS_COMPSTR)
+                    if composition or int(lparam) & _GCS_COMPSTR:
+                        _set_ime_composition_text(composition)
             elif msg == _WM_CHAR:
                 char_code = int(wparam)
                 if char_code >= 128:
@@ -184,12 +250,14 @@ def begin_ime_capture() -> None:
         return _USER32.CallWindowProcW(_IME_CAPTURE_OLD_PROC, hwnd_arg, msg, wparam, lparam)
 
     callback = wndproc_type(_ime_wnd_proc)
-    old_proc = _USER32.SetWindowLongPtrW(hwnd, _GWL_WNDPROC, ctypes.cast(callback, ctypes.c_void_p))
-    if not old_proc:
+    for hwnd in hwnd_candidates:
+        old_proc = _USER32.SetWindowLongPtrW(hwnd, _GWL_WNDPROC, ctypes.cast(callback, ctypes.c_void_p))
+        if not old_proc:
+            continue
+        _IME_CAPTURE_HWND = hwnd
+        _IME_CAPTURE_OLD_PROC = old_proc
+        _IME_CAPTURE_PROC = callback
         return
-    _IME_CAPTURE_HWND = hwnd
-    _IME_CAPTURE_OLD_PROC = old_proc
-    _IME_CAPTURE_PROC = callback
 
 
 def end_ime_capture() -> None:
@@ -204,6 +272,116 @@ def end_ime_capture() -> None:
     _IME_CAPTURE_OLD_PROC = None
     _IME_CAPTURE_PROC = None
     _clear_ime_text_queue()
+
+
+class _SpanPreview:
+    def __init__(self, **values) -> None:
+        for key, value in values.items():
+            setattr(self, key, value)
+
+
+class _TextEntryPreview:
+    def __init__(self, source, body: str, font_spans: list[_SpanPreview], style_spans: list[_SpanPreview]) -> None:
+        self._source = source
+        self.body = body
+        self.font_spans = font_spans
+        self.style_spans = style_spans
+
+    def __getattr__(self, name: str):
+        return getattr(self._source, name)
+
+
+def _replace_segments_for_preview(segments, start: int, end: int, new_length: int):
+    delta = int(new_length) - (int(end) - int(start))
+    adjusted = []
+    for item in segments:
+        seg_start, seg_end, *rest = item
+        seg_start = int(seg_start)
+        seg_end = int(seg_end)
+        if start == end:
+            if seg_end <= start:
+                adjusted.append(item)
+            elif seg_start >= start:
+                adjusted.append((seg_start + delta, seg_end + delta, *rest))
+            else:
+                adjusted.append((seg_start, seg_end + delta, *rest))
+            continue
+        if seg_end <= start:
+            adjusted.append(item)
+        elif seg_start >= end:
+            adjusted.append((seg_start + delta, seg_end + delta, *rest))
+        else:
+            if seg_start < start:
+                adjusted.append((seg_start, start, *rest))
+            if end < seg_end:
+                adjusted.append((start + new_length, seg_end + delta, *rest))
+    return adjusted
+
+
+def _inherit_style_index(entry, start: int) -> int:
+    body = text_body(entry)
+    if not body:
+        return 0
+    return max(0, min(len(body) - 1, int(start)))
+
+
+def composition_replacement_range(entry, cursor_index: int, selection_anchor: int) -> tuple[int, int]:
+    bounds = selection_bounds(cursor_index, selection_anchor)
+    if bounds is not None:
+        return bounds
+    cursor = clamp_cursor(entry, cursor_index)
+    return cursor, cursor
+
+
+def preview_entry_with_composition(entry, cursor_index: int, selection_anchor: int):
+    """Return a read-only text-entry proxy with the IME composition inserted."""
+    composition = ime_composition_text()
+    if not composition:
+        return entry, clamp_cursor(entry, cursor_index), None
+    start, end = composition_replacement_range(entry, cursor_index, selection_anchor)
+    body = text_body(entry)
+    display_body = body[:start] + composition + body[end:]
+    new_length = len(composition)
+
+    font_segments = _replace_segments_for_preview(
+        text_style.font_spans_snapshot(entry),
+        start,
+        end,
+        new_length,
+    )
+    inherited_style = text_style.style_for_index(entry, _inherit_style_index(entry, start))
+    style_segments = _replace_segments_for_preview(
+        text_style.style_spans_snapshot(entry),
+        start,
+        end,
+        new_length,
+    )
+    style_segments.append((start, start + new_length, inherited_style))
+
+    font_spans = [
+        _SpanPreview(start=s, length=e - s, font=font)
+        for s, e, font in font_segments
+        if s < e
+    ]
+    style_spans = []
+    for s, e, style in style_segments:
+        if s >= e:
+            continue
+        font, font_size_q, color, bold, italic = style
+        style_spans.append(
+            _SpanPreview(
+                start=s,
+                length=e - s,
+                font=font,
+                font_size_q=font_size_q,
+                color=color,
+                font_bold=bold,
+                font_italic=italic,
+            )
+        )
+    preview = _TextEntryPreview(entry, display_body, font_spans, style_spans)
+    composition_bounds = (start, start + new_length)
+    return preview, composition_bounds[1], composition_bounds
 
 
 def text_body(entry) -> str:

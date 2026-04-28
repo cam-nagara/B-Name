@@ -30,6 +30,17 @@ _TEXT_MIN_SIZE_MM = 2.0
 _TEXT_DRAG_EPS_MM = 0.05
 _TEXT_DOUBLE_CLICK_SECONDS = 0.45
 _TEXT_DOUBLE_CLICK_DISTANCE_MM = 3.0
+_IME_MOUSE_EVENT_TYPES = {
+    "LEFTMOUSE",
+    "MIDDLEMOUSE",
+    "RIGHTMOUSE",
+    "MOUSEMOVE",
+    "WHEELUPMOUSE",
+    "WHEELDOWNMOUSE",
+    "WHEELINMOUSE",
+    "WHEELOUTMOUSE",
+    "TIMER",
+}
 
 
 _SPEAKER_TYPE_ITEMS = (
@@ -263,6 +274,16 @@ def _event_text(event) -> str:
     if event_type != "TEXTINPUT" and value != "PRESS":
         return ""
     return ""
+
+
+def _event_should_pass_to_ime(event) -> bool:
+    if not text_edit_runtime.ime_composition_active():
+        return False
+    event_type = str(getattr(event, "type", "") or "")
+    value = str(getattr(event, "value", "") or "")
+    if event_type in _IME_MOUSE_EVENT_TYPES:
+        return False
+    return event_type == "TEXTINPUT" or value in {"PRESS", "RELEASE", "NOTHING"}
 
 
 def _select_text_index(context, work, page, text_index: int) -> bool:
@@ -749,8 +770,11 @@ class BNAME_OT_text_tool(Operator):
         if queued_text:
             return self._insert_current_text(context, queued_text)
         if event.type == "TIMER":
+            if text_edit_runtime.ime_composition_active():
+                layer_stack_utils.tag_view3d_redraw(context)
             return {"RUNNING_MODAL"}
-        if text_edit_runtime.event_is_ime_control(event):
+        if text_edit_runtime.event_is_ime_control(event) or _event_should_pass_to_ime(event):
+            layer_stack_utils.tag_view3d_redraw(context)
             return {"PASS_THROUGH"}
         if not _event_in_view3d_window(context, event):
             return {"PASS_THROUGH"}
