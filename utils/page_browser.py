@@ -18,6 +18,17 @@ POSITION_ITEMS = (
 )
 
 _PAGE_BROWSER_AREAS: set[int] = set()
+_SPACE_VIEW_STATES: dict[int, dict[str, object]] = {}
+_SPACE_BOOL_PROPS = (
+    "show_region_toolbar",
+    "show_region_ui",
+    "show_region_tool_header",
+    "show_region_asset_shelf",
+    "show_region_hud",
+    "show_region_header",
+    "show_gizmo",
+    "show_gizmo_navigate",
+)
 
 
 def area_key(area) -> int:
@@ -27,10 +38,184 @@ def area_key(area) -> int:
         return 0
 
 
+def _space_key(space) -> int:
+    try:
+        return int(space.as_pointer())
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _remember_space_state(space) -> dict[str, object]:
+    key = _space_key(space)
+    if key and key in _SPACE_VIEW_STATES:
+        return _SPACE_VIEW_STATES[key]
+    state: dict[str, object] = {}
+    for prop in _SPACE_BOOL_PROPS:
+        if hasattr(space, prop):
+            try:
+                state[prop] = bool(getattr(space, prop))
+            except Exception:  # noqa: BLE001
+                pass
+    overlay = getattr(space, "overlay", None)
+    if overlay is not None and hasattr(overlay, "show_overlays"):
+        try:
+            state["overlay.show_overlays"] = bool(overlay.show_overlays)
+        except Exception:  # noqa: BLE001
+            pass
+    rv3d = getattr(space, "region_3d", None)
+    if rv3d is not None and hasattr(rv3d, "view_perspective"):
+        try:
+            state["region_3d.view_perspective"] = str(rv3d.view_perspective)
+        except Exception:  # noqa: BLE001
+            pass
+    if hasattr(space, "lock_camera"):
+        try:
+            state["lock_camera"] = bool(space.lock_camera)
+        except Exception:  # noqa: BLE001
+            pass
+    shading = getattr(space, "shading", None)
+    if shading is not None:
+        for prop in ("type", "light", "background_type"):
+            if not hasattr(shading, prop):
+                continue
+            try:
+                state[f"shading.{prop}"] = str(getattr(shading, prop))
+            except Exception:  # noqa: BLE001
+                pass
+    if key:
+        _SPACE_VIEW_STATES[key] = state
+    return state
+
+
+def apply_page_browser_view_settings(area) -> None:
+    """ページ一覧ビュー専用の3Dビュー表示設定を適用する."""
+    if area is None or getattr(area, "type", "") != "VIEW_3D":
+        return
+    for space in getattr(area, "spaces", []):
+        if getattr(space, "type", "") != "VIEW_3D":
+            continue
+        _remember_space_state(space)
+        for prop in _SPACE_BOOL_PROPS:
+            if not hasattr(space, prop):
+                continue
+            try:
+                setattr(space, prop, False)
+            except Exception:  # noqa: BLE001
+                pass
+        overlay = getattr(space, "overlay", None)
+        if overlay is not None and hasattr(overlay, "show_overlays"):
+            try:
+                overlay.show_overlays = False
+            except Exception:  # noqa: BLE001
+                pass
+        if hasattr(space, "lock_camera"):
+            try:
+                space.lock_camera = False
+            except Exception:  # noqa: BLE001
+                pass
+        rv3d = getattr(space, "region_3d", None)
+        if rv3d is not None:
+            try:
+                rv3d.view_perspective = "ORTHO"
+            except Exception:  # noqa: BLE001
+                pass
+        shading = getattr(space, "shading", None)
+        if shading is not None:
+            try:
+                shading.type = "SOLID"
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                shading.light = "FLAT"
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                shading.background_type = "THEME"
+            except Exception:  # noqa: BLE001
+                pass
+    try:
+        area.tag_redraw()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def restore_page_browser_view_settings(area) -> None:
+    if area is None or getattr(area, "type", "") != "VIEW_3D":
+        return
+    for space in getattr(area, "spaces", []):
+        if getattr(space, "type", "") != "VIEW_3D":
+            continue
+        key = _space_key(space)
+        state = _SPACE_VIEW_STATES.pop(key, None) if key else None
+        if not state:
+            continue
+        for prop in _SPACE_BOOL_PROPS:
+            if prop not in state or not hasattr(space, prop):
+                continue
+            try:
+                setattr(space, prop, bool(state[prop]))
+            except Exception:  # noqa: BLE001
+                pass
+        overlay = getattr(space, "overlay", None)
+        if overlay is not None and "overlay.show_overlays" in state:
+            try:
+                overlay.show_overlays = bool(state["overlay.show_overlays"])
+            except Exception:  # noqa: BLE001
+                pass
+        rv3d = getattr(space, "region_3d", None)
+        if rv3d is not None and "region_3d.view_perspective" in state:
+            try:
+                rv3d.view_perspective = str(state["region_3d.view_perspective"])
+            except Exception:  # noqa: BLE001
+                pass
+        if hasattr(space, "lock_camera") and "lock_camera" in state:
+            try:
+                space.lock_camera = bool(state["lock_camera"])
+            except Exception:  # noqa: BLE001
+                pass
+        shading = getattr(space, "shading", None)
+        if shading is not None:
+            for prop in ("type", "light", "background_type"):
+                key_name = f"shading.{prop}"
+                if key_name not in state or not hasattr(shading, prop):
+                    continue
+                try:
+                    setattr(shading, prop, str(state[key_name]))
+                except Exception:  # noqa: BLE001
+                    pass
+    try:
+        area.tag_redraw()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _area_has_remembered_space(area) -> bool:
+    for space in getattr(area, "spaces", []):
+        key = _space_key(space)
+        if key and key in _SPACE_VIEW_STATES:
+            return True
+    return False
+
+
+def restore_all_view_settings() -> None:
+    wm = getattr(bpy.context, "window_manager", None)
+    windows = getattr(wm, "windows", ()) if wm is not None else ()
+    for window in windows:
+        screen = getattr(window, "screen", None)
+        if screen is None:
+            continue
+        for area in getattr(screen, "areas", []):
+            if _area_has_remembered_space(area):
+                restore_page_browser_view_settings(area)
+    _SPACE_VIEW_STATES.clear()
+    _PAGE_BROWSER_AREAS.clear()
+
+
 def mark_area(area) -> None:
     key = area_key(area)
     if key:
         _PAGE_BROWSER_AREAS.add(key)
+        apply_page_browser_view_settings(area)
 
 
 def clear_missing_areas(screen) -> None:
@@ -42,10 +227,31 @@ def clear_missing_areas(screen) -> None:
     if not live:
         live = {area_key(area) for area in getattr(screen, "areas", [])}
     _PAGE_BROWSER_AREAS.intersection_update(key for key in live if key)
+    live_spaces = {
+        key
+        for window in windows
+        for area in getattr(getattr(window, "screen", None), "areas", [])
+        for space in getattr(area, "spaces", [])
+        if (key := _space_key(space))
+    }
+    if not live_spaces:
+        live_spaces = {
+            key
+            for area in getattr(screen, "areas", [])
+            for space in getattr(area, "spaces", [])
+            if (key := _space_key(space))
+        }
+    for key in tuple(_SPACE_VIEW_STATES):
+        if key not in live_spaces:
+            _SPACE_VIEW_STATES.pop(key, None)
 
 
 def clear_screen_marks(screen) -> None:
-    keys = {area_key(area) for area in getattr(screen, "areas", [])}
+    areas = tuple(getattr(screen, "areas", []))
+    keys = {area_key(area) for area in areas}
+    for area in areas:
+        if area_key(area) in _PAGE_BROWSER_AREAS or _area_has_remembered_space(area):
+            restore_page_browser_view_settings(area)
     _PAGE_BROWSER_AREAS.difference_update(key for key in keys if key)
 
 
@@ -161,6 +367,19 @@ def iter_page_browser_areas(context=None) -> Iterable[object]:
     return tuple(areas)
 
 
+def is_page_browser_area_for_window(window, area) -> bool:
+    if area is None or getattr(area, "type", "") != "VIEW_3D":
+        return False
+    if is_marked_area(area):
+        return True
+    workspace = getattr(window, "workspace", None)
+    screen = getattr(window, "screen", None)
+    if not is_page_browser_workspace(workspace) or screen is None:
+        return False
+    inferred = edge_view3d_area(screen, workspace_position(workspace))
+    return inferred == area
+
+
 def tag_page_browser_redraw(context=None) -> None:
     for area in iter_page_browser_areas(context):
         try:
@@ -248,7 +467,7 @@ def layout_bbox_mm(work, scene, area) -> tuple[float, float, float, float] | Non
     """ページ一覧ビューの表示対象 bbox (x, y, w, h) を mm で返す."""
     if work is None or scene is None or len(getattr(work, "pages", [])) == 0:
         return None
-    from . import page_grid
+    from . import page_grid, page_range
 
     paper = work.paper
     cw = float(paper.canvas_width_mm)

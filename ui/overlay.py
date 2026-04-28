@@ -1393,6 +1393,9 @@ def apply_bname_shading_mode(context=None) -> int:
         for area in screen.areas:
             if area.type != "VIEW_3D":
                 continue
+            if page_browser.is_page_browser_area_for_window(window, area):
+                page_browser.apply_page_browser_view_settings(area)
+                continue
             space = area.spaces.active
             if space is None:
                 continue
@@ -1424,6 +1427,9 @@ def set_viewport_overlays_enabled(context=None, *, enabled: bool) -> int:
             continue
         for area in screen.areas:
             if area.type != "VIEW_3D":
+                continue
+            if page_browser.is_page_browser_area_for_window(window, area):
+                page_browser.apply_page_browser_view_settings(area)
                 continue
             for space in getattr(area, "spaces", []):
                 if space.type != "VIEW_3D":

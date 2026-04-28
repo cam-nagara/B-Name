@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import bpy
 
+from ..utils import page_browser
+
 B_NAME_CATEGORY = "B-Name"
 
 
@@ -20,6 +22,9 @@ def open_bname_sidebar(context=None) -> int:
             continue
         for area in getattr(screen, "areas", []):
             if area.type != "VIEW_3D":
+                continue
+            if page_browser.is_page_browser_area_for_window(window, area):
+                page_browser.apply_page_browser_view_settings(area)
                 continue
             for space in getattr(area, "spaces", []):
                 if space.type != "VIEW_3D":

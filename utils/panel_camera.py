@@ -11,7 +11,7 @@ import bpy
 from ..core.mode import MODE_PANEL, get_mode
 from ..core.work import get_work
 from ..io import export_pipeline
-from . import log
+from . import log, page_browser
 from .panel_camera_constants import (
     DEFAULT_CAMERA_DISTANCE,
     DEFAULT_REF_DPI,
@@ -666,6 +666,17 @@ def _iter_view3d_spaces(context):
         seen.add(sid)
         for area in getattr(screen, "areas", []):
             if area.type != "VIEW_3D":
+                continue
+            window = next(
+                (
+                    candidate
+                    for candidate in getattr(wm, "windows", [])
+                    if getattr(candidate, "screen", None) == screen
+                ),
+                None,
+            ) if wm is not None else None
+            if window is not None and page_browser.is_page_browser_area_for_window(window, area):
+                page_browser.apply_page_browser_view_settings(area)
                 continue
             for space in area.spaces:
                 if space.type == "VIEW_3D" and getattr(space, "region_3d", None) is not None:

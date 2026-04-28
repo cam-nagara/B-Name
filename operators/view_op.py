@@ -97,16 +97,9 @@ def _fit_page_browser_area(context, area) -> bool:
         rv3d = getattr(space, "region_3d", None)
         if rv3d is not None:
             rv3d.view_perspective = "ORTHO"
-        overlay = getattr(space, "overlay", None)
-        if overlay is not None:
-            overlay.show_overlays = False
-        shading = getattr(space, "shading", None)
-        if shading is not None:
-            shading.type = "SOLID"
-            shading.light = "FLAT"
-            shading.background_type = "THEME"
     except Exception:  # noqa: BLE001
         pass
+    page_browser.apply_page_browser_view_settings(area)
     try:
         area.tag_redraw()
     except Exception:  # noqa: BLE001
@@ -579,6 +572,8 @@ def _fit_page_browser_areas(context) -> None:
     if context is None:
         context = bpy.context
     if not page_browser.fit_enabled(getattr(context, "scene", None)):
+        for area in page_browser.iter_page_browser_areas(context):
+            page_browser.apply_page_browser_view_settings(area)
         page_browser.tag_page_browser_redraw(context)
         return
     for area in page_browser.iter_page_browser_areas(context):
@@ -598,11 +593,16 @@ def _page_browser_fit_watcher():
     try:
         context = bpy.context
         scene = getattr(context, "scene", None)
-        if scene is None or not page_browser.fit_enabled(scene):
+        if scene is None:
             _PAGE_BROWSER_AREA_SIZES.clear()
             return 0.5
         work = get_work(context)
         if work is None or not work.loaded:
+            return 0.5
+        for area in page_browser.iter_page_browser_areas(context):
+            page_browser.apply_page_browser_view_settings(area)
+        if not page_browser.fit_enabled(scene):
+            _PAGE_BROWSER_AREA_SIZES.clear()
             return 0.5
         for area in page_browser.iter_page_browser_areas(context):
             key = page_browser.area_key(area)
@@ -696,6 +696,7 @@ def unregister() -> None:
         except ValueError:
             pass
     _PAGE_BROWSER_AREA_SIZES.clear()
+    page_browser.restore_all_view_settings()
     for cls in reversed(_CLASSES):
         try:
             bpy.utils.unregister_class(cls)
