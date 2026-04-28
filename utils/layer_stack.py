@@ -1143,6 +1143,20 @@ def _set_active_object(context, obj) -> None:
         pass
 
 
+def _leave_grease_pencil_draw_modes(context) -> None:
+    view_layer = getattr(context, "view_layer", None)
+    obj = getattr(view_layer, "objects", None)
+    active = getattr(obj, "active", None) if obj is not None else None
+    if active is None or getattr(active, "type", "") != "GREASEPENCIL":
+        return
+    if getattr(active, "mode", "") not in {"PAINT_GREASE_PENCIL", "EDIT"}:
+        return
+    try:
+        bpy.ops.object.mode_set(mode="OBJECT")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def select_stack_index(context, index: int) -> bool:
     stack = sync_layer_stack(context, preserve_active_index=True)
     if stack is None or not (0 <= index < len(stack)):
@@ -1156,6 +1170,8 @@ def select_stack_index(context, index: int) -> bool:
     kind = item.kind
     scene = context.scene
     page = get_active_page(context)
+    if kind != "gp":
+        _leave_grease_pencil_draw_modes(context)
     if kind == PAGE_KIND:
         work = get_work(context)
         idx = int(resolved.get("index", -1))

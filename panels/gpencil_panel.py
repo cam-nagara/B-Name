@@ -34,6 +34,41 @@ def _master_gp_object():
     return gp_utils.get_master_gpencil()
 
 
+def _active_gp_layer_target(context):
+    scene = getattr(context, "scene", None)
+    if scene is None or getattr(scene, "bname_active_layer_kind", "") != "gp":
+        return None, None
+    item = layer_stack_utils.active_stack_item(context)
+    if item is None or getattr(item, "kind", "") != "gp":
+        return None, None
+    resolved = layer_stack_utils.resolve_stack_item(context, item)
+    if resolved is None:
+        return None, None
+    obj = resolved.get("object")
+    layer = resolved.get("target")
+    if obj is None or layer is None:
+        return None, None
+    if gp_utils.layer_effectively_hidden(layer) or gp_utils.layer_effectively_locked(layer):
+        return None, None
+    return obj, layer
+
+
+def _activate_gp_layer_for_tool(context):
+    obj, layer = _active_gp_layer_target(context)
+    if obj is None or layer is None:
+        return None
+    try:
+        context.view_layer.objects.active = obj
+        obj.select_set(True)
+        obj.data.layers.active = layer
+        gp_utils.ensure_active_frame(layer)
+        gp_utils.ensure_layer_material(obj, layer, activate=True, assign_existing=True)
+    except Exception:  # noqa: BLE001
+        _logger.exception("activate gp layer for tool failed")
+        return None
+    return obj
+
+
 def _get_prefs():
     try:
         from ..preferences import get_preferences
@@ -933,8 +968,14 @@ class BNAME_OT_gpencil_master_mode_set(bpy.types.Operator):
             panel_modal_state.finish_all(context)
         except Exception:  # noqa: BLE001
             pass
-        obj = gp_utils.get_master_gpencil()
-        if obj is None:
+        if self.mode in {_GP_PAINT_MODE, _GP_EDIT_MODE}:
+            obj = _activate_gp_layer_for_tool(context)
+            if obj is None:
+                self.report({"WARNING"}, "グリースペンシルレイヤーを選択してください")
+                return {"CANCELLED"}
+        else:
+            obj = gp_utils.get_master_gpencil()
+        if obj is None and self.mode == _GP_OBJECT_MODE:
             try:
                 obj = gp_utils.ensure_master_gpencil(context.scene)
             except Exception:  # noqa: BLE001

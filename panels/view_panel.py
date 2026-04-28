@@ -5,7 +5,7 @@ from __future__ import annotations
 import bpy
 from bpy.types import Panel
 
-from ..core.mode import MODE_PANEL, get_mode
+from ..core.mode import MODE_PAGE, MODE_PANEL, get_mode
 from ..core.work import get_work
 from ..utils import page_browser
 
@@ -27,7 +27,8 @@ class BNAME_PT_view(Panel):
 
     def draw(self, context):
         layout = self.layout
-        is_panel_mode = get_mode(context) == MODE_PANEL
+        mode = get_mode(context)
+        is_panel_mode = mode == MODE_PANEL
         scene = context.scene
 
         col = layout.column(align=True)
@@ -39,17 +40,18 @@ class BNAME_PT_view(Panel):
         row.prop(scene, "bname_overview_cols", text="列数")
         row.prop(scene, "bname_overview_gap_mm", text="間隔mm")
 
-        layout.separator()
-        box = layout.box()
-        box.label(text="ページ一覧ビュー", icon="WINDOW")
-        box.prop(scene, "bname_page_browser_position", text="位置")
-        box.prop(scene, "bname_page_browser_size", text="サイズ")
-        box.prop(scene, "bname_page_browser_fit", text="フィット")
-        row = box.row(align=True)
-        row.operator("bname.page_browser_workspace", text="専用ワークスペース", icon="WINDOW")
-        row.operator("bname.page_browser_mark_area", text="", icon="IMGDISPLAY")
-        if page_browser.is_page_browser_area(context):
-            box.label(text="この3Dビューはページ一覧です", icon="CHECKMARK")
+        if mode != MODE_PAGE:
+            layout.separator()
+            box = layout.box()
+            box.label(text="ページ一覧ビュー", icon="WINDOW")
+            box.prop(scene, "bname_page_browser_position", text="位置")
+            box.prop(scene, "bname_page_browser_size", text="サイズ")
+            box.prop(scene, "bname_page_browser_fit", text="フィット")
+            row = box.row(align=True)
+            row.operator("bname.page_browser_workspace", text="専用ワークスペース", icon="WINDOW")
+            row.operator("bname.page_browser_mark_area", text="", icon="IMGDISPLAY")
+            if page_browser.is_page_browser_area(context):
+                box.label(text="この3Dビューはページ一覧です", icon="CHECKMARK")
 
 
 _CLASSES = (

@@ -12,6 +12,15 @@ from ..operators import panel_modal_state
 B_NAME_CATEGORY = "B-Name"
 
 
+def _active_stack_kind(context) -> str:
+    scene = getattr(context, "scene", None)
+    stack = getattr(scene, "bname_layer_stack", None) if scene is not None else None
+    idx = int(getattr(scene, "bname_active_layer_stack_index", -1)) if scene is not None else -1
+    if stack is None or not (0 <= idx < len(stack)):
+        return ""
+    return str(getattr(stack[idx], "kind", "") or "")
+
+
 class BNAME_PT_tools(Panel):
     bl_idname = "BNAME_PT_tools"
     bl_label = "ツール"
@@ -35,6 +44,11 @@ class BNAME_PT_tools(Panel):
         except Exception:  # noqa: BLE001
             obj = None
         mode = getattr(obj, "mode", "") if obj is not None else ""
+        active_stack_kind = _active_stack_kind(context)
+        gp_layer_active = (
+            active_stack_kind == "gp"
+            and getattr(context.scene, "bname_active_layer_kind", "") == "gp"
+        )
 
         row = layout.row(align=True)
         op = row.operator(
@@ -44,18 +58,22 @@ class BNAME_PT_tools(Panel):
             depress=(mode == "OBJECT"),
         )
         op.mode = "OBJECT"
-        op = row.operator(
+        draw_slot = row.row(align=True)
+        draw_slot.enabled = gp_layer_active
+        op = draw_slot.operator(
             "bname.gpencil_master_mode_set",
             text="",
             icon="OUTLINER_OB_GREASEPENCIL",
-            depress=(mode == "PAINT_GREASE_PENCIL"),
+            depress=(gp_layer_active and mode == "PAINT_GREASE_PENCIL"),
         )
         op.mode = "PAINT_GREASE_PENCIL"
-        op = row.operator(
+        edit_slot = row.row(align=True)
+        edit_slot.enabled = gp_layer_active
+        op = edit_slot.operator(
             "bname.gpencil_master_mode_set",
             text="",
             icon="EDITMODE_HLT",
-            depress=(mode == "EDIT"),
+            depress=(gp_layer_active and mode == "EDIT"),
         )
         op.mode = "EDIT"
 

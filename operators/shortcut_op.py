@@ -18,6 +18,7 @@ from bpy.types import Operator
 from ..core.mode import MODE_PAGE, get_mode
 from ..core.work import get_work
 from ..utils import gpencil as gp_utils
+from ..utils import layer_stack as layer_stack_utils
 from ..utils import log, page_range
 from ..utils.geom import mm_to_m
 from ..utils.page_grid import (
@@ -55,6 +56,41 @@ def _finish_modal_tools_for_mode_switch(context) -> None:
     panel_modal_state.finish_all(context)
 
 
+def _active_gp_layer_target(context):
+    scene = getattr(context, "scene", None)
+    if scene is None or getattr(scene, "bname_active_layer_kind", "") != "gp":
+        return None, None
+    item = layer_stack_utils.active_stack_item(context)
+    if item is None or getattr(item, "kind", "") != "gp":
+        return None, None
+    resolved = layer_stack_utils.resolve_stack_item(context, item)
+    if resolved is None:
+        return None, None
+    obj = resolved.get("object")
+    layer = resolved.get("target")
+    if obj is None or layer is None:
+        return None, None
+    if gp_utils.layer_effectively_hidden(layer) or gp_utils.layer_effectively_locked(layer):
+        return None, None
+    return obj, layer
+
+
+def _activate_gp_layer_for_drawing(context):
+    obj, layer = _active_gp_layer_target(context)
+    if obj is None or layer is None:
+        return None
+    try:
+        context.view_layer.objects.active = obj
+        obj.select_set(True)
+        obj.data.layers.active = layer
+        gp_utils.ensure_active_frame(layer)
+        gp_utils.ensure_layer_material(obj, layer, activate=True, assign_existing=True)
+    except Exception:  # noqa: BLE001
+        _logger.exception("activate gp layer for drawing failed")
+        return None
+    return obj
+
+
 # ---------- ツール切替 ----------
 
 
@@ -85,11 +121,7 @@ class BNAME_OT_set_mode_object(Operator):
 
 
 class BNAME_OT_set_mode_draw(Operator):
-    """アクティブ GP を描画ツール (PAINT_GREASE_PENCIL) へ切替.
-
-    アクティブが GP でない場合は、現在ページの GP オブジェクトを active に
-    してから切替える。GP が見つからない場合は no-op。
-    """
+    """選択中の GP レイヤーを描画ツール (PAINT_GREASE_PENCIL) へ切替."""
 
     bl_idname = "bname.set_mode_draw"
     bl_label = "描画ツール"
@@ -101,25 +133,9 @@ class BNAME_OT_set_mode_draw(Operator):
 
     def execute(self, context):
         _finish_modal_tools_for_mode_switch(context)
-        view_layer = context.view_layer
-        obj = view_layer.objects.active
-
-        # active が GP でなければ、現在ページの GP を探して active 化
-        if obj is None or obj.type != "GREASEPENCIL":
-            work = get_work(context)
-            if work is not None and 0 <= work.active_page_index < len(work.pages):
-                page = work.pages[work.active_page_index]
-                gp_obj = gp_utils.get_page_gpencil(page.id)
-                if gp_obj is not None:
-                    try:
-                        view_layer.objects.active = gp_obj
-                        gp_obj.select_set(True)
-                        obj = gp_obj
-                    except Exception:  # noqa: BLE001
-                        pass
-
-        if obj is None or obj.type != "GREASEPENCIL":
-            self.report({"WARNING"}, "アクティブな Grease Pencil がありません")
+        obj = _activate_gp_layer_for_drawing(context)
+        if obj is None:
+            self.report({"WARNING"}, "描画するグリースペンシルレイヤーを選択してください")
             return {"CANCELLED"}
         try:
             if obj.mode != "PAINT_GREASE_PENCIL":

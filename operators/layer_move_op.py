@@ -113,7 +113,7 @@ def _move_would_violate_layer_scope(context, page, entry, dx_mm: float, dy_mm: f
 class BNAME_OT_layer_move_tool(Operator):
     bl_idname = "bname.layer_move_tool"
     bl_label = "レイヤー移動ツール"
-    bl_options = {"REGISTER", "UNDO", "BLOCKING"}
+    bl_options = {"REGISTER", "UNDO"}
 
     _last_world: tuple[float, float] | None
     _target: dict | None
@@ -129,9 +129,9 @@ class BNAME_OT_layer_move_tool(Operator):
         return bool(work and work.loaded and getattr(context.scene, "bname_layer_stack", None) is not None)
 
     def invoke(self, context, event):
-        if panel_modal_state.get_active("layer_move") is not None:
-            # レイヤー移動ツールは選択式ツールとして扱う。同じボタン/キーを
-            # 再度押しても解除せず、他ツール切替または ESC/RMB まで維持する。
+        active = panel_modal_state.get_active("layer_move")
+        if active is not None:
+            active.finish_from_external(context, keep_selection=True)
             return {"FINISHED"}
         panel_modal_state.finish_active("panel_vertex_edit", context, keep_selection=True)
         panel_modal_state.finish_active("knife_cut", context, keep_selection=False)
@@ -162,8 +162,6 @@ class BNAME_OT_layer_move_tool(Operator):
             and not event.alt
             and not event.shift
         ):
-            if panel_picker._event_world_mm(context, event) is None:
-                return {"PASS_THROUGH"}
             self.finish_from_external(context, keep_selection=True)
             try:
                 bpy.ops.bname.panel_knife_cut("INVOKE_DEFAULT")
@@ -177,8 +175,6 @@ class BNAME_OT_layer_move_tool(Operator):
             and not event.alt
             and not event.shift
         ):
-            if panel_picker._event_world_mm(context, event) is None:
-                return {"PASS_THROUGH"}
             self.finish_from_external(context, keep_selection=True)
             try:
                 bpy.ops.bname.panel_edge_move("INVOKE_DEFAULT")
@@ -192,8 +188,6 @@ class BNAME_OT_layer_move_tool(Operator):
             and not event.alt
             and not event.shift
         ):
-            if panel_picker._event_world_mm(context, event) is None:
-                return {"PASS_THROUGH"}
             self.finish_from_external(context, keep_selection=True)
             try:
                 bpy.ops.bname.text_tool("INVOKE_DEFAULT")
@@ -207,15 +201,14 @@ class BNAME_OT_layer_move_tool(Operator):
             and not event.alt
             and not event.shift
         ):
-            return {"RUNNING_MODAL"}
+            self.finish_from_external(context, keep_selection=True)
+            return {"FINISHED"}
         if (
             event.value == "PRESS"
             and event.type in {"O", "P", "COMMA", "PERIOD", "Z", "X"}
             and not event.ctrl
             and not event.alt
         ):
-            if panel_picker._event_world_mm(context, event) is None:
-                return {"PASS_THROUGH"}
             self.finish_from_external(context, keep_selection=True)
             return {"FINISHED", "PASS_THROUGH"}
         if event.type in {"ESC", "RIGHTMOUSE"}:
@@ -246,10 +239,10 @@ class BNAME_OT_layer_move_tool(Operator):
                 return {"RUNNING_MODAL"}
             return {"RUNNING_MODAL"}
         if event.type != "MOUSEMOVE":
-            return {"RUNNING_MODAL"}
+            return {"PASS_THROUGH"}
         coords = panel_picker._event_world_mm(context, event)
         if coords is None or self._last_world is None or not self._dragging:
-            return {"RUNNING_MODAL"}
+            return {"PASS_THROUGH"}
         dx = coords[0] - self._last_world[0]
         dy = coords[1] - self._last_world[1]
         if dx == 0.0 and dy == 0.0:
