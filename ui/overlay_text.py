@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from ..utils import viewport_colors
+from ..utils import object_selection, viewport_colors
 from ..utils.geom import Rect
 from ..operators import text_edit_runtime
 
@@ -171,7 +171,7 @@ def draw_text_guides(
         draw_rect_fill(rect, (1.0, 1.0, 1.0, 0.55))
         color = (0.2, 0.7, 1.0, 1.0) if entry.parent_balloon_id else (0.95, 0.85, 0.1, 1.0)
         draw_rect_outline(rect, color, width_mm=0.30)
-        if i == active_idx:
+        if i == active_idx or object_selection.is_text_selected(context, page, entry):
             draw_rect_outline(rect.inset(-1.0), viewport_colors.SELECTION_STRONG, width_mm=0.50)
             for handle in _text_handle_rects(rect):
                 draw_rect_fill(handle, viewport_colors.HANDLE_FILL)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..utils import object_selection
 from .edge_style_ui import draw_selected_edge_style_box, get_selected_panel_entry
 
 
@@ -42,6 +43,8 @@ def draw_panel_shape_settings(layout, context, entry) -> None:
         row.operator("bname.panel_to_polygon", text="多角形化", icon="MESH_DATA")
     else:
         row.operator("bname.panel_to_rect", text="矩形化 (外接)", icon="MESH_PLANE")
+    if object_selection.selected_panel_count(context) >= 2:
+        layout.operator("bname.panel_merge_selected", text="コマ結合", icon="AUTOMERGE_ON")
 
     layout.prop(entry, "overlap_clipping")
     layout.prop(entry, "background_color")

@@ -8,7 +8,7 @@ import gpu
 from bpy_extras.view3d_utils import location_3d_to_region_2d
 from gpu_extras.batch import batch_for_shader
 
-from ..utils import geom, page_browser, page_grid, viewport_colors
+from ..utils import geom, object_selection, page_browser, page_grid, viewport_colors
 from . import overlay_visibility
 
 _LINE_WIDTH_PX = 4.0
@@ -22,7 +22,11 @@ def draw(context, work, region, rv3d) -> None:
     if region is None or rv3d is None:
         return
     scene = getattr(context, "scene", None)
-    if scene is None or getattr(scene, "bname_active_layer_kind", "") != "panel":
+    if scene is None:
+        return
+    selected_refs = object_selection.selected_panel_refs(context)
+    active_panel_selection = getattr(scene, "bname_active_layer_kind", "") == "panel"
+    if not active_panel_selection and not selected_refs:
         return
     try:
         from ..operators import panel_modal_state
@@ -34,6 +38,19 @@ def draw(context, work, region, rv3d) -> None:
 
     wm = getattr(context, "window_manager", None)
     if wm is None:
+        return
+    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    for page_index, page, _panel_index, panel in selected_refs:
+        if not overlay_visibility.page_visible(page) or not overlay_visibility.panel_visible(panel):
+            continue
+        poly = _panel_polygon(panel)
+        if len(poly) < 2:
+            continue
+        ox, oy = _page_offset(context, work, page_index)
+        world_poly = [(x + ox, y + oy) for x, y in poly]
+        for edge_index in range(len(world_poly)):
+            _draw_edge(shader, region, rv3d, world_poly, edge_index)
+    if not active_panel_selection:
         return
     kind = getattr(wm, "bname_edge_select_kind", "none")
     if kind not in {"edge", "border", "vertex"}:
@@ -56,7 +73,6 @@ def draw(context, work, region, rv3d) -> None:
     ox, oy = _page_offset(context, work, page_index)
     world_poly = [(x + ox, y + oy) for x, y in poly]
 
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
     if kind == "edge":
         edge_index = int(getattr(wm, "bname_edge_select_edge", -1))
         _draw_edge(shader, region, rv3d, world_poly, edge_index)

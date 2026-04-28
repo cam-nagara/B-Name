@@ -117,6 +117,10 @@ class BNAME_OT_set_mode_object(Operator):
             _logger.exception("set_mode_object failed")
             self.report({"WARNING"}, f"切替不可: {exc}")
             return {"CANCELLED"}
+        try:
+            bpy.ops.bname.object_tool("INVOKE_DEFAULT")
+        except Exception:  # noqa: BLE001
+            pass
         return {"FINISHED"}
 
 

@@ -981,6 +981,11 @@ class BNAME_OT_gpencil_master_mode_set(bpy.types.Operator):
         except Exception as exc:  # noqa: BLE001
             self.report({"WARNING"}, f"モード切替失敗: {exc}")
             return {"CANCELLED"}
+        if self.mode == _GP_OBJECT_MODE:
+            try:
+                bpy.ops.bname.object_tool("INVOKE_DEFAULT")
+            except Exception:  # noqa: BLE001
+                pass
         return {"FINISHED"}
 
 

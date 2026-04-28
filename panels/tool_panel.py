@@ -11,6 +11,7 @@ from ..operators import panel_modal_state
 
 B_NAME_CATEGORY = "B-Name"
 _MODAL_TOOL_NAMES = (
+    "object_tool",
     "knife_cut",
     "edge_move",
     "layer_move",
@@ -69,7 +70,10 @@ class BNAME_PT_tools(Panel):
             "bname.gpencil_master_mode_set",
             text="",
             icon="OBJECT_DATAMODE",
-            depress=(not modal_tool_active and mode == "OBJECT"),
+            depress=(
+                panel_modal_state.is_active("object_tool")
+                or (not modal_tool_active and mode == "OBJECT")
+            ),
         )
         op.mode = "OBJECT"
         draw_slot = row.row(align=True)

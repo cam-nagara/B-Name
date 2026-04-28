@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import math
 
 import bpy
 from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty
@@ -10,7 +11,7 @@ from bpy.types import Operator
 
 from ..core.work import get_active_page, get_work
 from ..io import page_io, panel_io, schema
-from ..utils import edge_selection
+from ..utils import edge_selection, object_selection
 from ..utils import layer_stack as layer_stack_utils
 from ..utils import log, page_grid, paths
 from .panel_knife_cut_op import _panel_polygon, _polygon_area, _set_panel_polygon, _split_convex_polygon_by_line
@@ -97,6 +98,172 @@ def _panel_bounds_mm(poly: list[tuple[float, float]]) -> tuple[float, float, flo
     xs = [p[0] for p in poly]
     ys = [p[1] for p in poly]
     return min(xs), min(ys), max(xs), max(ys)
+
+
+_MERGE_TOL_MM = 1.0e-4
+
+
+def _merge_point_key(point: tuple[float, float]) -> tuple[int, int]:
+    return (
+        int(round(float(point[0]) / _MERGE_TOL_MM)),
+        int(round(float(point[1]) / _MERGE_TOL_MM)),
+    )
+
+
+def _merge_lerp(a: tuple[float, float], b: tuple[float, float], t: float) -> tuple[float, float]:
+    return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+
+
+def _merge_edge_t(
+    a: tuple[float, float],
+    b: tuple[float, float],
+    point: tuple[float, float],
+) -> float:
+    dx = b[0] - a[0]
+    dy = b[1] - a[1]
+    denom = dx * dx + dy * dy
+    if denom <= 1.0e-12:
+        return 0.0
+    return ((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / denom
+
+
+def _merge_edges_collinear(
+    a: tuple[float, float],
+    b: tuple[float, float],
+    c: tuple[float, float],
+    d: tuple[float, float],
+) -> bool:
+    dx = b[0] - a[0]
+    dy = b[1] - a[1]
+    length = math.hypot(dx, dy)
+    if length <= _MERGE_TOL_MM:
+        return False
+    cross_c = abs(dx * (c[1] - a[1]) - dy * (c[0] - a[0])) / length
+    cross_d = abs(dx * (d[1] - a[1]) - dy * (d[0] - a[0])) / length
+    if cross_c > _MERGE_TOL_MM * 5.0 or cross_d > _MERGE_TOL_MM * 5.0:
+        return False
+    t_c = _merge_edge_t(a, b, c)
+    t_d = _merge_edge_t(a, b, d)
+    return max(0.0, min(t_c, t_d)) < min(1.0, max(t_c, t_d)) - 1.0e-8
+
+
+def _merge_remove_collinear(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    if len(points) < 3:
+        return points
+    changed = True
+    out = list(points)
+    while changed and len(out) >= 3:
+        changed = False
+        kept = []
+        n = len(out)
+        for i, cur in enumerate(out):
+            prev = out[(i - 1) % n]
+            nxt = out[(i + 1) % n]
+            ux = cur[0] - prev[0]
+            uy = cur[1] - prev[1]
+            vx = nxt[0] - cur[0]
+            vy = nxt[1] - cur[1]
+            if math.hypot(ux, uy) <= _MERGE_TOL_MM or math.hypot(vx, vy) <= _MERGE_TOL_MM:
+                changed = True
+                continue
+            cross = abs(ux * vy - uy * vx)
+            if cross <= _MERGE_TOL_MM * max(1.0, math.hypot(ux, uy), math.hypot(vx, vy)):
+                dot = ux * vx + uy * vy
+                if dot >= 0.0:
+                    changed = True
+                    continue
+            kept.append(cur)
+        out = kept
+    return out
+
+
+def _merge_signed_area(points: list[tuple[float, float]]) -> float:
+    total = 0.0
+    for i, point in enumerate(points):
+        nxt = points[(i + 1) % len(points)]
+        total += point[0] * nxt[1] - nxt[0] * point[1]
+    return total * 0.5
+
+
+def _merge_boundary_polygon(polys: list[list[tuple[float, float]]]) -> list[tuple[float, float]] | None:
+    raw_edges: list[tuple[tuple[float, float], tuple[float, float]]] = []
+    for poly in polys:
+        if len(poly) < 3:
+            continue
+        pts = list(poly)
+        if _merge_signed_area(pts) < 0.0:
+            pts.reverse()
+        for i, a in enumerate(pts):
+            b = pts[(i + 1) % len(pts)]
+            if math.hypot(b[0] - a[0], b[1] - a[1]) > _MERGE_TOL_MM:
+                raw_edges.append((a, b))
+    if not raw_edges:
+        return None
+
+    point_by_key: dict[tuple[int, int], tuple[float, float]] = {}
+    signed_segments: dict[tuple[tuple[int, int], tuple[int, int]], int] = {}
+    for i, (a, b) in enumerate(raw_edges):
+        t_values = [0.0, 1.0]
+        for j, (c, d) in enumerate(raw_edges):
+            if i == j or not _merge_edges_collinear(a, b, c, d):
+                continue
+            t_c = _merge_edge_t(a, b, c)
+            t_d = _merge_edge_t(a, b, d)
+            lo = max(0.0, min(t_c, t_d))
+            hi = min(1.0, max(t_c, t_d))
+            if hi - lo > 1.0e-8:
+                t_values.extend((lo, hi))
+        t_values = sorted({round(t, 10) for t in t_values if -1.0e-8 <= t <= 1.0 + 1.0e-8})
+        for t0, t1 in zip(t_values, t_values[1:], strict=False):
+            if t1 - t0 <= 1.0e-8:
+                continue
+            p0 = _merge_lerp(a, b, max(0.0, min(1.0, t0)))
+            p1 = _merge_lerp(a, b, max(0.0, min(1.0, t1)))
+            k0 = _merge_point_key(p0)
+            k1 = _merge_point_key(p1)
+            if k0 == k1:
+                continue
+            point_by_key.setdefault(k0, p0)
+            point_by_key.setdefault(k1, p1)
+            c0, c1 = (k0, k1) if k0 <= k1 else (k1, k0)
+            sign = 1 if (k0, k1) == (c0, c1) else -1
+            signed_segments[(c0, c1)] = signed_segments.get((c0, c1), 0) + sign
+
+    directed: list[tuple[tuple[int, int], tuple[int, int]]] = []
+    for (a_key, b_key), signed in signed_segments.items():
+        if signed > 0:
+            directed.append((a_key, b_key))
+        elif signed < 0:
+            directed.append((b_key, a_key))
+    if not directed:
+        return None
+
+    loops: list[list[tuple[float, float]]] = []
+    unused = set(range(len(directed)))
+    while unused:
+        first = next(iter(unused))
+        unused.remove(first)
+        start, end = directed[first]
+        keys = [start, end]
+        while end != start:
+            next_index = next((idx for idx in list(unused) if directed[idx][0] == end), -1)
+            if next_index < 0:
+                return None
+            unused.remove(next_index)
+            _s, end = directed[next_index]
+            keys.append(end)
+            if len(keys) > len(directed) + 2:
+                return None
+        loop = [point_by_key[key] for key in keys[:-1]]
+        loop = _merge_remove_collinear(loop)
+        if len(loop) >= 3 and _polygon_area(loop) > 0.01:
+            loops.append(loop)
+    if not loops:
+        return None
+    loops.sort(key=_polygon_area, reverse=True)
+    if len(loops) > 1 and _polygon_area(loops[1]) > 0.01:
+        return None
+    return loops[0]
 
 
 def _split_polygon_grid(
@@ -525,6 +692,90 @@ class BNAME_OT_panel_z_order(Operator):
         return {"FINISHED"}
 
 
+class BNAME_OT_panel_merge_selected(Operator):
+    """複数選択中のコマ枠を 1 つの多角形コマへ結合."""
+
+    bl_idname = "bname.panel_merge_selected"
+    bl_label = "コマ結合"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        refs = object_selection.selected_panel_refs(context)
+        if len(refs) < 2:
+            return False
+        page_ids = {str(getattr(page, "id", "") or "") for _pi, page, _idx, _panel in refs}
+        return len(page_ids) == 1
+
+    def execute(self, context):
+        work = get_work(context)
+        if work is None or not getattr(work, "loaded", False):
+            return {"CANCELLED"}
+        refs = object_selection.selected_panel_refs(context)
+        if len(refs) < 2:
+            self.report({"ERROR"}, "結合するコマを2つ以上選択してください")
+            return {"CANCELLED"}
+        page_ids = {str(getattr(page, "id", "") or "") for _pi, page, _idx, _panel in refs}
+        if len(page_ids) != 1:
+            self.report({"ERROR"}, "コマ結合は同じページ内のコマだけが対象です")
+            return {"CANCELLED"}
+        polys = [_panel_polygon(panel) for _pi, _page, _idx, panel in refs]
+        merged = _merge_boundary_polygon(polys)
+        if merged is None or len(merged) < 3:
+            self.report({"ERROR"}, "選択コマの外周を作れません。隣接しているコマを選択してください")
+            return {"CANCELLED"}
+        page_index, page, survivor_index, survivor = refs[0]
+        active_index = int(getattr(page, "active_panel_index", -1))
+        for ref_page_index, ref_page, ref_index, ref_panel in refs:
+            if ref_page == page and ref_index == active_index:
+                page_index, page, survivor_index, survivor = ref_page_index, ref_page, ref_index, ref_panel
+                break
+        survivor_key = layer_stack_utils.gp_parent_key_for_panel(page, survivor)
+        work_dir = Path(work.work_dir)
+        remove_indices = sorted(
+            (idx for _pi, _page, idx, _panel in refs if idx != survivor_index),
+            reverse=True,
+        )
+        try:
+            _set_panel_polygon(survivor, merged)
+            survivor.edge_styles.clear()
+            survivor.title = getattr(survivor, "title", "") or "結合コマ"
+            survivor.z_order = max((int(getattr(panel, "z_order", 0)) for _pi, _page, _idx, panel in refs), default=survivor.z_order)
+            for idx in remove_indices:
+                if not (0 <= idx < len(page.panels)):
+                    continue
+                removed = page.panels[idx]
+                old_key = layer_stack_utils.gp_parent_key_for_panel(page, removed)
+                layer_stack_utils.reparent_gp_layers(context, old_key, survivor_key)
+                try:
+                    panel_io.remove_panel_files(work_dir, page.id, removed.panel_stem)
+                except Exception:  # noqa: BLE001
+                    _logger.exception("panel_merge_selected: remove panel files failed")
+                page.panels.remove(idx)
+                if idx < survivor_index:
+                    survivor_index -= 1
+            page.active_panel_index = max(0, min(survivor_index, len(page.panels) - 1))
+            work.active_page_index = page_index
+            page.panel_count = len(page.panels)
+            for panel in page.panels:
+                panel_io.save_panel_meta(work_dir, page.id, panel)
+            _save_page_and_pages(work, page, work_dir)
+            _sync_layer_stack_after_panel_change(context)
+            edge_selection.set_selection(
+                context,
+                "border",
+                page_index=page_index,
+                panel_index=page.active_panel_index,
+            )
+            object_selection.set_keys(context, [object_selection.panel_key(page, page.panels[page.active_panel_index])])
+        except Exception as exc:  # noqa: BLE001
+            _logger.exception("panel_merge_selected failed")
+            self.report({"ERROR"}, f"コマ結合失敗: {exc}")
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"コマ結合: {len(refs)} 個 → 1 個")
+        return {"FINISHED"}
+
+
 # ---------- 分割テンプレート ----------
 
 
@@ -687,6 +938,7 @@ _CLASSES = (
     BNAME_OT_panel_duplicate,
     BNAME_OT_panel_move_to_page,
     BNAME_OT_panel_z_order,
+    BNAME_OT_panel_merge_selected,
     BNAME_OT_panel_split_template,
 )
 

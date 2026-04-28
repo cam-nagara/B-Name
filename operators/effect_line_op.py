@@ -13,7 +13,7 @@ from bpy.types import Operator
 
 from ..core.mode import MODE_PANEL, get_mode
 from ..core.work import get_work
-from ..utils import detail_popup, log
+from ..utils import detail_popup, log, object_selection
 from ..utils.geom import m_to_mm
 from ..utils import layer_stack as layer_stack_utils
 from . import panel_modal_state, view_event_region
@@ -473,11 +473,28 @@ class BNAME_OT_effect_line_tool(Operator):
         obj, layer, bounds, part = _hit_effect_layer(context, x_mm, y_mm)
         if obj is not None and layer is not None and bounds is not None:
             _select_effect_layer(context, obj, layer)
+            if event.ctrl or event.shift:
+                object_selection.select_key(
+                    context,
+                    object_selection.effect_key(layer),
+                    mode="toggle" if event.ctrl else "add",
+                )
+                return {"RUNNING_MODAL"}
+            object_selection.select_key(
+                context,
+                object_selection.effect_key(layer),
+                mode="single",
+            )
             self._start_drag(layer, part, x_mm, y_mm, bounds)
             return {"RUNNING_MODAL"}
         obj, layer = _create_effect_layer(
             context,
             (x_mm, y_mm, _EFFECT_MIN_SIZE_MM, _EFFECT_MIN_SIZE_MM),
+        )
+        object_selection.select_key(
+            context,
+            object_selection.effect_key(layer),
+            mode="single",
         )
         self._start_drag(layer, "create", x_mm, y_mm, (x_mm, y_mm, _EFFECT_MIN_SIZE_MM, _EFFECT_MIN_SIZE_MM))
         return {"RUNNING_MODAL"}

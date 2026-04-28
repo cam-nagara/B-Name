@@ -35,6 +35,7 @@ from ..utils import (
     page_grid,
     page_range,
     panel_edge_adjacency,
+    object_selection,
     polygon_geom,
     viewport_colors,
 )
@@ -1002,7 +1003,27 @@ class BNAME_OT_panel_edge_move(Operator):
                     self._drag_moved = False
                     self._last_press_time = 0.0
                     self._last_press_edge = None
+                    if not (event.ctrl or event.shift):
+                        object_selection.clear(context)
                 elif hit.get("type") == "edge":
+                    page_for_hit = self._work.pages[int(hit["page"])]
+                    panel_for_hit = page_for_hit.panels[int(hit["panel"])]
+                    if event.ctrl or event.shift:
+                        self._selection = hit
+                        self._dragging = False
+                        self._drag_moved = False
+                        self._last_press_time = 0.0
+                        self._last_press_edge = None
+                        mode = "toggle" if event.ctrl else "add"
+                        object_selection.select_key(
+                            context,
+                            object_selection.panel_key(page_for_hit, panel_for_hit),
+                            mode=mode,
+                        )
+                        self._pending_detail_popup = False
+                        self._update_wm_selection(context)
+                        self._tag_redraw()
+                        return {"RUNNING_MODAL"}
                     edge_key = (hit["page"], hit["panel"], hit["edge"])
                     is_double = (
                         self._last_press_edge == edge_key
@@ -1019,6 +1040,11 @@ class BNAME_OT_panel_edge_move(Operator):
                         self._last_press_time = 0.0
                         self._last_press_edge = None
                         self._pending_detail_popup = True
+                        object_selection.select_key(
+                            context,
+                            object_selection.panel_key(page_for_hit, panel_for_hit),
+                            mode="single",
+                        )
                     else:
                         # シングルクリック → 単一辺選択 + ドラッグ開始
                         self._selection = hit
@@ -1030,15 +1056,29 @@ class BNAME_OT_panel_edge_move(Operator):
                         self._capture_original_geometry()
                         self._last_press_time = now
                         self._last_press_edge = edge_key
+                        object_selection.select_key(
+                            context,
+                            object_selection.panel_key(page_for_hit, panel_for_hit),
+                            mode="single",
+                        )
                 else:
                     # vertex
+                    page_for_hit = self._work.pages[int(hit["page"])]
+                    panel_for_hit = page_for_hit.panels[int(hit["panel"])]
                     self._selection = hit
-                    self._dragging = True
+                    self._dragging = not (event.ctrl or event.shift)
                     self._drag_moved = False
-                    self._drag_start_world = _region_to_world_mm(
-                        self._region, self._rv3d, mx, my,
+                    if self._dragging:
+                        self._drag_start_world = _region_to_world_mm(
+                            self._region, self._rv3d, mx, my,
+                        )
+                        self._capture_original_geometry()
+                    mode = "toggle" if event.ctrl else "add" if event.shift else "single"
+                    object_selection.select_key(
+                        context,
+                        object_selection.panel_key(page_for_hit, panel_for_hit),
+                        mode=mode,
                     )
-                    self._capture_original_geometry()
                     self._last_press_time = 0.0
                     self._last_press_edge = None
                 self._update_wm_selection(context)
@@ -1617,10 +1657,17 @@ def extend_selected_handle_at_event(context, event) -> bool:
     page = work.pages[page_index]
     if not (0 <= panel_index < len(page.panels)):
         return False
+    panel = page.panels[panel_index]
+    work.active_page_index = page_index
     page.active_panel_index = panel_index
     scene = getattr(context, "scene", None)
     if scene is not None and hasattr(scene, "bname_active_layer_kind"):
         scene.bname_active_layer_kind = "panel"
+    object_selection.select_key(
+        context,
+        object_selection.panel_key(page, panel),
+        mode="single",
+    )
     edge_selection.set_selection(
         context,
         "edge",

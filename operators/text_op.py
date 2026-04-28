@@ -17,7 +17,7 @@ from bpy.types import Operator
 
 from ..core.mode import MODE_PANEL, get_mode
 from ..core.work import get_active_page, get_work
-from ..utils import detail_popup, layer_stack as layer_stack_utils, log, page_range, text_style
+from ..utils import detail_popup, layer_stack as layer_stack_utils, log, object_selection, page_range, text_style
 from ..utils.layer_hierarchy import page_stack_key
 from . import panel_modal_state, text_edit_runtime, view_event_region
 
@@ -681,6 +681,18 @@ class BNAME_OT_text_tool(Operator):
         if hit_entry is not None and hit_index >= 0:
             is_double_click = event.value == "DOUBLE_CLICK" or self._is_text_double_click(page, hit_entry, lx, ly)
             _select_text_index(context, work, page, hit_index)
+            if event.ctrl or event.shift:
+                object_selection.select_key(
+                    context,
+                    object_selection.text_key(page, hit_entry),
+                    mode="toggle" if event.ctrl else "add",
+                )
+                return {"RUNNING_MODAL"}
+            object_selection.select_key(
+                context,
+                object_selection.text_key(page, hit_entry),
+                mode="single",
+            )
             if is_double_click:
                 self._clear_click_state()
                 self._start_editing_existing(context, page, hit_entry)
@@ -715,6 +727,11 @@ class BNAME_OT_text_tool(Operator):
         self._selection_anchor = -1
         self._page_id = getattr(page, "id", "")
         self._text_id = getattr(entry, "id", "")
+        object_selection.select_key(
+            context,
+            object_selection.text_key(page, entry),
+            mode="single",
+        )
         self._clear_click_state()
         self._begin_inline_input(context)
         self.report({"INFO"}, "本文を入力してください (Enter: 確定 / Esc: キャンセル)")

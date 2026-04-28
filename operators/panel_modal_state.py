@@ -6,6 +6,7 @@ import weakref
 
 
 _ACTIVE_REFS: dict[str, weakref.ReferenceType | None] = {
+    "object_tool": None,
     "edge_move": None,
     "knife_cut": None,
     "layer_move": None,
@@ -16,6 +17,7 @@ _ACTIVE_REFS: dict[str, weakref.ReferenceType | None] = {
 }
 
 _DEFAULT_KEEP_SELECTION: dict[str, bool] = {
+    "object_tool": True,
     "edge_move": True,
     "knife_cut": False,
     "layer_move": True,

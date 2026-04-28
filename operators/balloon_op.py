@@ -18,7 +18,7 @@ from bpy.types import Operator
 
 from ..core.work import get_active_page, get_work
 from ..io import balloon_presets
-from ..utils import detail_popup, layer_stack as layer_stack_utils, log
+from ..utils import detail_popup, layer_stack as layer_stack_utils, log, object_selection
 from ..utils.layer_hierarchy import page_stack_key
 from . import panel_modal_state, view_event_region
 
@@ -155,7 +155,7 @@ def _creation_violates_layer_scope(context, page, x_mm: float, y_mm: float, widt
     cy = y_mm + height_mm * 0.5
     mode = get_mode(context)
     if mode == MODE_PAGE:
-        return layer_stack.panel_containing_point(page, cx, cy) is not None
+        return False
     if mode == MODE_PANEL:
         idx = int(getattr(page, "active_panel_index", -1))
         if not (0 <= idx < len(page.panels)):
@@ -270,6 +270,11 @@ def _select_balloon_index(context, work, page, index: int, *, mode: str = "singl
     if hasattr(context.scene, "bname_active_gp_folder_key"):
         context.scene.bname_active_gp_folder_key = ""
     _sync_active_balloon_stack_item(context, page, entry)
+    object_selection.select_key(
+        context,
+        object_selection.balloon_key(page, entry),
+        mode=mode,
+    )
     return True
 
 

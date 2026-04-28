@@ -6,7 +6,7 @@ import math
 from collections.abc import Callable
 
 from ..utils.geom import Rect
-from ..utils import viewport_colors
+from ..utils import object_selection, viewport_colors
 
 DrawRectOutline = Callable[..., None]
 DrawPolygonFill = Callable[[list[tuple[float, float]], tuple[float, float, float, float]], None]
@@ -38,6 +38,7 @@ def draw_balloons(
     ox_mm: float = 0.0,
     oy_mm: float = 0.0,
     *,
+    context=None,
     draw_rect_outline: DrawRectOutline,
     draw_polygon_fill: DrawPolygonFill,
     draw_polyline_loop: DrawPolylineLoop,
@@ -103,7 +104,10 @@ def draw_balloons(
                 draw_polyline_loop=draw_polyline_loop,
             )
 
-        selected = active and (i == active_idx or bool(getattr(entry, "selected", False)))
+        selected = (
+            (active and (i == active_idx or bool(getattr(entry, "selected", False))))
+            or object_selection.is_balloon_selected(context, page, entry)
+        )
         if selected:
             draw_rect_outline(rect.inset(-1.0), viewport_colors.SELECTION, width_mm=0.50)
             for handle in _handle_rects(rect):

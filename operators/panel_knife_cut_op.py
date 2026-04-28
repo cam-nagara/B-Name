@@ -21,18 +21,29 @@ from typing import Sequence
 import bpy
 import gpu
 from bpy.types import Operator
-from bpy_extras.view3d_utils import region_2d_to_location_3d
+from bpy_extras.view3d_utils import location_3d_to_region_2d, region_2d_to_location_3d
 from gpu_extras.batch import batch_for_shader
 
 from ..core.work import get_work
 from ..io import page_io, panel_io
 from . import panel_modal_state
-from ..utils import geom, layer_stack as layer_stack_utils, log, page_grid, page_range
+from ..utils import (
+    edge_selection,
+    geom,
+    layer_stack as layer_stack_utils,
+    log,
+    object_selection,
+    page_grid,
+    page_range,
+)
 
 _logger = log.get_logger(__name__)
 
 
 COLOR_CUT_LINE = (1.0, 0.1, 0.1, 0.95)
+COLOR_CUT_PREVIEW_FILL_A = (0.1, 0.65, 1.0, 0.18)
+COLOR_CUT_PREVIEW_FILL_B = (1.0, 0.75, 0.1, 0.18)
+COLOR_CUT_PREVIEW_OUTLINE = (0.05, 0.9, 0.95, 0.95)
 NAV_GIZMO_HITBOX_WIDTH_PX = 112.0
 NAV_GIZMO_HITBOX_HEIGHT_PX = 232.0
 NAV_GIZMO_HITBOX_MARGIN_PX = 8.0
@@ -69,6 +80,17 @@ def _region_to_world_mm(region, rv3d, mx, my) -> tuple[float, float] | None:
     if loc is None:
         return None
     return geom.m_to_mm(loc.x), geom.m_to_mm(loc.y)
+
+
+def _world_to_region_px(region, rv3d, x_mm: float, y_mm: float) -> tuple[float, float] | None:
+    pos = location_3d_to_region_2d(
+        region,
+        rv3d,
+        (geom.mm_to_m(x_mm), geom.mm_to_m(y_mm), 0.0),
+    )
+    if pos is None:
+        return None
+    return float(pos.x), float(pos.y)
 
 
 # ---------- 凸多角形を直線で分割 ----------
@@ -372,6 +394,22 @@ def _sync_layer_stack_after_cut(context) -> None:
         _logger.exception("knife_cut: layer stack sync failed")
 
 
+def _page_world_offset_mm(work, page_index: int, scene=None) -> tuple[float, float]:
+    scene = scene or bpy.context.scene
+    cols = max(1, int(getattr(scene, "bname_overview_cols", 4)))
+    gap = float(getattr(scene, "bname_overview_gap_mm", 30.0))
+    cw = work.paper.canvas_width_mm
+    ch = work.paper.canvas_height_mm
+    start_side = getattr(work.paper, "start_side", "right")
+    read_direction = getattr(work.paper, "read_direction", "left")
+    ox, oy = page_grid.page_grid_offset_mm(
+        page_index, cols, gap, cw, ch, start_side, read_direction
+    )
+    page = work.pages[page_index]
+    add_x, add_y = page_grid.page_manual_offset_mm(page)
+    return ox + add_x, oy + add_y
+
+
 def _find_panel_at_world(
     work, x_mm: float, y_mm: float,
 ) -> tuple[int, int] | None:
@@ -382,21 +420,12 @@ def _find_panel_at_world(
     scene = bpy.context.scene
     if scene is None:
         return None
-    cols = max(1, int(getattr(scene, "bname_overview_cols", 4)))
-    gap = float(getattr(scene, "bname_overview_gap_mm", 30.0))
     cw = work.paper.canvas_width_mm
     ch = work.paper.canvas_height_mm
-    start_side = getattr(work.paper, "start_side", "right")
-    read_direction = getattr(work.paper, "read_direction", "left")
     for i, page in enumerate(work.pages):
         if not page_range.page_in_range(page):
             continue
-        ox, oy = page_grid.page_grid_offset_mm(
-            i, cols, gap, cw, ch, start_side, read_direction
-        )
-        add_x, add_y = page_grid.page_manual_offset_mm(page)
-        ox += add_x
-        oy += add_y
+        ox, oy = _page_world_offset_mm(work, i, scene)
         local_x = x_mm - ox
         local_y = y_mm - oy
         if not (0.0 <= local_x <= cw and 0.0 <= local_y <= ch):
@@ -456,6 +485,8 @@ class BNAME_OT_panel_knife_cut(Operator):
         self._externally_finished = False
         self._navigation_drag_passthrough = False
         self._cursor_modal_set = False
+        self._edge_drag = None
+        self._edge_drag_moved = False
 
         # POST_PIXEL でラバーバンドを描画
         self._draw_handler = bpy.types.SpaceView3D.draw_handler_add(
@@ -551,6 +582,11 @@ class BNAME_OT_panel_knife_cut(Operator):
             except Exception:  # noqa: BLE001
                 pass
             self._draw_handler = None
+        edge_drag = getattr(self, "_edge_drag", None)
+        if edge_drag is not None:
+            edge_drag.cancel()
+        self._edge_drag = None
+        self._edge_drag_moved = False
         self._tag_redraw()
 
     def finish_from_external(self, context, *, keep_selection: bool) -> None:
@@ -565,6 +601,8 @@ class BNAME_OT_panel_knife_cut(Operator):
         if getattr(self, "_externally_finished", False):
             panel_modal_state.clear_active("knife_cut", self, context)
             return {"FINISHED", "PASS_THROUGH"}
+        if getattr(self, "_edge_drag", None) is not None:
+            return self._modal_edge_drag(context, event)
         if getattr(self, "_navigation_drag_passthrough", False):
             if event.type == "LEFTMOUSE" and event.value == "RELEASE":
                 self._navigation_drag_passthrough = False
@@ -649,6 +687,9 @@ class BNAME_OT_panel_knife_cut(Operator):
                     return {"PASS_THROUGH"}
                 if not self._is_inside_region(event):
                     return {"PASS_THROUGH"}
+                if self._try_start_edge_drag(context, event):
+                    self._tag_redraw()
+                    return {"RUNNING_MODAL"}
                 self._p1_px = self._to_window(event)
                 self._p2_px = self._p1_px
                 self._dragging = True
@@ -697,6 +738,98 @@ class BNAME_OT_panel_knife_cut(Operator):
         # 中ボタン (パン) などはビューポート操作にパススルー
         return {"PASS_THROUGH"}
 
+    def _modal_edge_drag(self, context, event):
+        if event.type == "MOUSEMOVE":
+            if self._edge_drag.apply(event):
+                self._edge_drag_moved = True
+            return {"RUNNING_MODAL"}
+        if event.type == "LEFTMOUSE" and event.value == "RELEASE":
+            changed = self._edge_drag.finish("B-Name: 枠線移動")
+            moved = bool(getattr(self, "_edge_drag_moved", False))
+            self._edge_drag = None
+            self._edge_drag_moved = False
+            if not changed and not moved:
+                try:
+                    from ..utils import detail_popup
+
+                    detail_popup.open_active_detail_deferred(context)
+                except Exception:  # noqa: BLE001
+                    pass
+            return {"RUNNING_MODAL"}
+        if event.type in {"ESC", "RIGHTMOUSE"} and event.value == "PRESS":
+            self._edge_drag.cancel()
+            self._edge_drag = None
+            self._edge_drag_moved = False
+            return {"RUNNING_MODAL"}
+        return {"RUNNING_MODAL"}
+
+    def _try_start_edge_drag(self, context, event) -> bool:
+        from . import panel_edge_drag_session, panel_edge_move_op
+
+        mx, my = self._to_window(event)
+        if panel_edge_move_op.extend_selected_handle_at_event(context, event):
+            return True
+        hit = panel_edge_move_op._pick_edge_or_vertex(
+            self._work,
+            self._region,
+            self._rv3d,
+            int(mx),
+            int(my),
+        )
+        if hit is None:
+            return False
+        page_index = int(hit["page"])
+        panel_index = int(hit["panel"])
+        if not (0 <= page_index < len(self._work.pages)):
+            return False
+        page = self._work.pages[page_index]
+        if not (0 <= panel_index < len(page.panels)):
+            return False
+        self._work.active_page_index = page_index
+        page.active_panel_index = panel_index
+        panel = page.panels[panel_index]
+        mode = "toggle" if event.ctrl else "add" if event.shift else "single"
+        object_selection.select_key(context, object_selection.panel_key(page, panel), mode=mode)
+        if hit.get("type") == "vertex":
+            edge_selection.set_selection(
+                context,
+                "vertex",
+                page_index=page_index,
+                panel_index=panel_index,
+                vertex_index=int(hit.get("vertex", -1)),
+            )
+        else:
+            edge_selection.set_selection(
+                context,
+                "edge",
+                page_index=page_index,
+                panel_index=panel_index,
+                edge_index=int(hit.get("edge", -1)),
+            )
+        if event.ctrl or event.shift:
+            return True
+        start_world = _region_to_world_mm(self._region, self._rv3d, mx, my)
+        selection = {
+            "type": "vertex" if hit.get("type") == "vertex" else "edge",
+            "page": page_index,
+            "panel": panel_index,
+        }
+        if selection["type"] == "vertex":
+            selection["vertex"] = int(hit.get("vertex", -1))
+        else:
+            selection["edge"] = int(hit.get("edge", -1))
+        self._edge_drag = panel_edge_drag_session.PanelEdgeDragSession(
+            context,
+            self._work,
+            self._area,
+            self._region,
+            self._rv3d,
+            selection,
+            start_world,
+        )
+        self._edge_drag_moved = False
+        return True
+
     def _apply_cut_world(self) -> None:
         """world mm 座標の切断線を、ドラッグ開始位置のコマ 1 つだけに適用."""
         region = self._region
@@ -723,19 +856,7 @@ class BNAME_OT_panel_knife_cut(Operator):
         page = work.pages[page_idx]
 
         # 対象ページの grid offset を引いてページローカル座標に
-        scene = bpy.context.scene
-        cols = max(1, int(getattr(scene, "bname_overview_cols", 4)))
-        gap = float(getattr(scene, "bname_overview_gap_mm", 30.0))
-        cw = work.paper.canvas_width_mm
-        ch = work.paper.canvas_height_mm
-        start_side = getattr(work.paper, "start_side", "right")
-        read_direction = getattr(work.paper, "read_direction", "left")
-        ox, oy = page_grid.page_grid_offset_mm(
-            page_idx, cols, gap, cw, ch, start_side, read_direction
-        )
-        add_x, add_y = page_grid.page_manual_offset_mm(page)
-        ox += add_x
-        oy += add_y
+        ox, oy = _page_world_offset_mm(work, page_idx)
         A_local = (xa - ox, ya - oy)
         B_local = (xb - ox, yb - oy)
 
@@ -758,7 +879,82 @@ class BNAME_OT_panel_knife_cut(Operator):
             self.report({"INFO"}, "切断線がコマを横切っていません")
 
 
-# ---------- POST_PIXEL ラバーバンド ----------
+# ---------- POST_PIXEL プレビュー ----------
+
+
+def _preview_cut_polygons(
+    op: "BNAME_OT_panel_knife_cut",
+) -> tuple[list[tuple[float, float]], list[tuple[float, float]]] | None:
+    work = getattr(op, "_work", None)
+    if work is None or op._p1_px is None or op._p2_px is None:
+        return None
+    p1 = _region_to_world_mm(op._region, op._rv3d, *op._p1_px)
+    p2 = _region_to_world_mm(op._region, op._rv3d, *op._p2_px)
+    if p1 is None or p2 is None:
+        return None
+    (xa, ya), (xb, yb) = p1, p2
+    if (xa - xb) ** 2 + (ya - yb) ** 2 < 0.25:
+        return None
+    hit = _find_panel_at_world(work, xa, ya)
+    if hit is None:
+        return None
+    page_idx, panel_idx = hit
+    if not (0 <= page_idx < len(work.pages)):
+        return None
+    page = work.pages[page_idx]
+    if not (0 <= panel_idx < len(page.panels)):
+        return None
+    ox, oy = _page_world_offset_mm(work, page_idx)
+    a_local = (xa - ox, ya - oy)
+    b_local = (xb - ox, yb - oy)
+    panel = page.panels[panel_idx]
+    poly = _panel_polygon(panel)
+    if not poly:
+        return None
+    result = _split_convex_polygon_by_line(
+        poly,
+        a_local,
+        b_local,
+        gap_mm=_effective_gap_mm(work, a_local, b_local, panel),
+    )
+    if result is None:
+        return None
+    left_poly, right_poly = result
+    left_world = [(x + ox, y + oy) for x, y in left_poly]
+    right_world = [(x + ox, y + oy) for x, y in right_poly]
+    return left_world, right_world
+
+
+def _poly_region_points(region, rv3d, poly: Sequence[tuple[float, float]]) -> list[tuple[float, float]] | None:
+    points: list[tuple[float, float]] = []
+    for x_mm, y_mm in poly:
+        point = _world_to_region_px(region, rv3d, x_mm, y_mm)
+        if point is None:
+            return None
+        points.append(point)
+    return points
+
+
+def _draw_preview_fill(shader, points: list[tuple[float, float]], color) -> None:
+    if len(points) < 3:
+        return
+    verts: list[tuple[float, float]] = []
+    root = points[0]
+    for index in range(1, len(points) - 1):
+        verts.extend((root, points[index], points[index + 1]))
+    shader.uniform_float("color", color)
+    batch_for_shader(shader, "TRIS", {"pos": verts}).draw(shader)
+
+
+def _draw_preview_outline(shader, points: list[tuple[float, float]]) -> None:
+    if len(points) < 2:
+        return
+    verts: list[tuple[float, float]] = []
+    for index, point in enumerate(points):
+        verts.append(point)
+        verts.append(points[(index + 1) % len(points)])
+    shader.uniform_float("color", COLOR_CUT_PREVIEW_OUTLINE)
+    batch_for_shader(shader, "LINES", {"pos": verts}).draw(shader)
 
 
 def _draw_callback(op: "BNAME_OT_panel_knife_cut") -> None:
@@ -766,6 +962,32 @@ def _draw_callback(op: "BNAME_OT_panel_knife_cut") -> None:
         return
     shader = gpu.shader.from_builtin("UNIFORM_COLOR")
     shader.bind()
+    preview = _preview_cut_polygons(op)
+    if preview is not None:
+        left_world, right_world = preview
+        left_points = _poly_region_points(op._region, op._rv3d, left_world)
+        right_points = _poly_region_points(op._region, op._rv3d, right_world)
+        if left_points is not None and right_points is not None:
+            try:
+                gpu.state.blend_set("ALPHA")
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                _draw_preview_fill(shader, left_points, COLOR_CUT_PREVIEW_FILL_A)
+                _draw_preview_fill(shader, right_points, COLOR_CUT_PREVIEW_FILL_B)
+                try:
+                    gpu.state.line_width_set(2.0)
+                except Exception:  # noqa: BLE001
+                    pass
+                _draw_preview_outline(shader, left_points)
+                _draw_preview_outline(shader, right_points)
+            finally:
+                try:
+                    gpu.state.line_width_set(1.0)
+                    gpu.state.blend_set("NONE")
+                except Exception:  # noqa: BLE001
+                    pass
+            return
     try:
         gpu.state.line_width_set(3.0)
     except Exception:  # noqa: BLE001

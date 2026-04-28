@@ -467,6 +467,7 @@ def _draw_balloons(page, ox_mm: float = 0.0, oy_mm: float = 0.0) -> None:
         page,
         ox_mm=ox_mm,
         oy_mm=oy_mm,
+        context=context,
         draw_rect_outline=_draw_rect_outline,
         draw_polygon_fill=_draw_polygon_fill,
         draw_polyline_loop=_draw_polyline_loop,
