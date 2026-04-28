@@ -256,15 +256,35 @@ def _draw_text_selected_settings(box, context, entry) -> None:
 
 def _draw_effect_type_settings(box, params) -> None:
     param_box = box.box()
-    param_box.label(text="種類 / 基準", icon="STROKE")
+    param_box.label(text="種類", icon="STROKE")
     param_box.prop(params, "effect_type")
-    if params.effect_type == "speed":
-        return
-    param_box.prop(params, "base_shape")
-    if params.base_shape == "polygon":
-        param_box.prop(params, "base_vertex_count")
-    param_box.prop(params, "start_from_center")
     param_box.prop(params, "rotation_deg")
+
+
+def _draw_effect_shape_settings(box, params, prefix: str, label: str, *, frame_toggle: bool = False) -> None:
+    shape_box = box.box()
+    shape_box.label(text=label)
+    if frame_toggle:
+        shape_box.prop(params, "start_to_coma_frame")
+    content = shape_box.column(align=True)
+    if frame_toggle:
+        content.enabled = not bool(params.start_to_coma_frame)
+    shape_attr = f"{prefix}_shape"
+    content.prop(params, shape_attr)
+    shape = balloon_shapes.normalize_shape(getattr(params, shape_attr))
+    if shape == "rect":
+        rounded_attr = f"{prefix}_rounded_corner_enabled"
+        content.prop(params, rounded_attr)
+        sub = content.row()
+        sub.enabled = bool(getattr(params, rounded_attr))
+        sub.prop(params, f"{prefix}_rounded_corner_radius_mm")
+    if balloon_shapes.is_dynamic_meldex_shape(shape):
+        content.prop(params, f"{prefix}_cloud_bump_width_mm")
+        content.prop(params, f"{prefix}_cloud_bump_height_mm")
+        content.prop(params, f"{prefix}_cloud_offset_percent")
+        row = content.row(align=True)
+        row.prop(params, f"{prefix}_cloud_sub_width_ratio")
+        row.prop(params, f"{prefix}_cloud_sub_height_ratio")
 
 
 def _draw_effect_line_settings(box, params) -> None:
@@ -276,32 +296,6 @@ def _draw_effect_line_settings(box, params) -> None:
     sub = row.row()
     sub.enabled = params.brush_jitter_enabled
     sub.prop(params, "brush_jitter_amount", text="")
-
-
-def _draw_effect_position_settings(box, params) -> None:
-    position_box = box.box()
-    position_box.label(text="描画位置")
-    position_box.prop(params, "length_mm")
-    row = position_box.row(align=True)
-    row.prop(params, "length_jitter_enabled", text="乱れ")
-    sub = row.row()
-    sub.enabled = params.length_jitter_enabled
-    sub.prop(params, "length_jitter_amount", text="")
-    position_box.prop(params, "extend_past_coma")
-    if params.effect_type == "speed":
-        return
-    position_box.prop(params, "base_position")
-    row = position_box.row(align=True)
-    row.prop(params, "base_position_offset_enabled", text="基準位置のずれ")
-    sub = row.row()
-    sub.enabled = params.base_position_offset_enabled
-    sub.prop(params, "base_position_offset", text="")
-    position_box.prop(params, "base_jagged_enabled")
-    sub = position_box.column(align=True)
-    sub.enabled = params.base_jagged_enabled
-    row = sub.row(align=True)
-    row.prop(params, "base_jagged_count")
-    row.prop(params, "base_jagged_height_mm")
 
 
 def _draw_effect_interval_settings(box, params) -> None:
@@ -364,8 +358,9 @@ def _draw_effect_selected_settings(box, context, obj, active_layer) -> None:
         return
 
     _draw_effect_type_settings(box, params)
+    _draw_effect_shape_settings(box, params, "start", "始点形状", frame_toggle=True)
+    _draw_effect_shape_settings(box, params, "end", "終点形状")
     _draw_effect_line_settings(box, params)
-    _draw_effect_position_settings(box, params)
     _draw_effect_interval_settings(box, params)
     _draw_effect_tail_settings(box, params)
     box.operator("bname.effect_line_generate", text="効果線を追加", icon="STROKE")

@@ -774,6 +774,7 @@ def add_stroke_to_drawing(
     radius: float = 0.01,
     radii: Iterable[float] | None = None,
     cyclic: bool = False,
+    material_index: int | None = None,
 ) -> bool:
     """GreasePencilDrawing に 1 ストロークを追加.
 
@@ -793,6 +794,13 @@ def add_stroke_to_drawing(
         else:
             stroke = strokes[0]
         stroke.cyclic = cyclic
+        if material_index is not None:
+            try:
+                mat_index = int(material_index)
+                if mat_index >= 0:
+                    stroke.material_index = mat_index
+            except Exception:  # noqa: BLE001
+                pass
         if hasattr(stroke, "points") and len(stroke.points) >= len(pts):
             for i, (x, y, z) in enumerate(pts):
                 point = stroke.points[i]
@@ -810,6 +818,13 @@ def add_stroke_to_drawing(
         if rad_attr is not None:
             for i in range(len(pts)):
                 rad_attr.data[offset + i].value = point_radii[i] if i < len(point_radii) else radius
+        if material_index is not None:
+            try:
+                mat_index = int(material_index)
+                if mat_index >= 0:
+                    stroke.material_index = mat_index
+            except Exception:  # noqa: BLE001
+                pass
         return True
     except Exception as exc:  # noqa: BLE001
         _logger.warning("add_stroke_to_drawing failed: %s", exc)

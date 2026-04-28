@@ -12,8 +12,8 @@ import bpy
 from bpy.types import Operator
 
 from ..core.mode import MODE_COMA, get_mode
-from ..core.work import get_work
-from ..utils import detail_popup, log, object_selection
+from ..core.work import get_active_page, get_work
+from ..utils import detail_popup, layer_hierarchy, log, object_selection
 from ..utils.geom import m_to_mm
 from ..utils import layer_stack as layer_stack_utils
 from . import coma_modal_state, view_event_region
@@ -277,7 +277,46 @@ def _load_layer_params_to_scene(context, obj, layer) -> None:
         _set_scene_params_syncing(scene, False)
 
 
-def _apply_material_settings(obj, layer, params) -> None:
+def _material_slot_index(obj, mat) -> int:
+    mats = getattr(getattr(obj, "data", None), "materials", None)
+    if mats is None or mat is None:
+        return -1
+    for i, existing in enumerate(mats):
+        if existing is mat or getattr(existing, "name", "") == getattr(mat, "name", ""):
+            return i
+    try:
+        mats.append(mat)
+        return len(mats) - 1
+    except Exception:  # noqa: BLE001
+        _logger.exception("effect_line: material slot append failed")
+        return -1
+
+
+def _ensure_effect_material(obj, name: str, color: tuple[float, float, float, float]) -> int:
+    mat = bpy.data.materials.get(name)
+    if mat is None:
+        mat = bpy.data.materials.new(name=name)
+    if getattr(mat, "grease_pencil", None) is None:
+        try:
+            bpy.data.materials.create_gpencil_data(mat)
+        except (AttributeError, RuntimeError):
+            pass
+    gp_style = getattr(mat, "grease_pencil", None)
+    if gp_style is not None:
+        try:
+            gp_style.show_stroke = True
+            gp_style.show_fill = False
+            gp_style.color = color
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        mat.diffuse_color = color
+    except Exception:  # noqa: BLE001
+        pass
+    return _material_slot_index(obj, mat)
+
+
+def _apply_material_settings(obj, layer, params) -> int:
     from ..utils import gpencil
 
     mat = gpencil.ensure_layer_material(
@@ -288,7 +327,7 @@ def _apply_material_settings(obj, layer, params) -> None:
     )
     gp_style = getattr(mat, "grease_pencil", None) if mat is not None else None
     if gp_style is None:
-        return
+        return _material_slot_index(obj, mat)
     try:
         gp_style.show_stroke = True
     except Exception:  # noqa: BLE001
@@ -307,6 +346,7 @@ def _apply_material_settings(obj, layer, params) -> None:
         gp_style.show_fill = bool(params.effect_type == "beta_flash" and params.fill_base_shape)
     except Exception:  # noqa: BLE001
         pass
+    return _material_slot_index(obj, mat)
 
 
 def copy_layer_effect_meta(obj, source_layer, dest_layer) -> None:
@@ -351,6 +391,25 @@ def _params_for_write(context, obj, layer, params_override=None):
     return scene_params
 
 
+def _start_frame_outline_for_bounds(
+    context,
+    params,
+    center_xy_mm: tuple[float, float],
+) -> tuple[list[tuple[float, float]] | None, float]:
+    if not bool(getattr(params, "start_to_coma_frame", False)):
+        return None, 0.0
+    page = get_active_page(context)
+    if page is None:
+        return None, 0.0
+    panel = layer_stack_utils.coma_containing_point(page, center_xy_mm[0], center_xy_mm[1])
+    if panel is None:
+        return None, 0.0
+    outline = layer_hierarchy.coma_polygon(panel)
+    if len(outline) < 3:
+        return None, 0.0
+    return outline, max(0.0, float(getattr(params, "brush_size_mm", 0.0)))
+
+
 def _write_effect_strokes(
     context,
     obj,
@@ -376,15 +435,35 @@ def _write_effect_strokes(
     drawing = _frame_drawing(layer)
     if drawing is None:
         return 0
-    _apply_material_settings(obj, layer, params)
+    line_material_index = _apply_material_settings(obj, layer, params)
+    start_guide_material_index = _ensure_effect_material(
+        obj,
+        "BName_Effect_StartShape_Purple",
+        (0.55, 0.12, 1.0, 1.0),
+    )
+    end_guide_material_index = _ensure_effect_material(
+        obj,
+        "BName_Effect_EndShape_Cyan",
+        (0.0, 0.75, 1.0, 1.0),
+    )
     _clear_drawing(drawing)
+    start_outline, start_extend = _start_frame_outline_for_bounds(context, params, (cx, cy))
     strokes = effect_line_gen.generate_strokes(
         params,
         center_xy_mm=(cx, cy),
         radius_xy_mm=(w * 0.5, h * 0.5),
         seed=seed_value,
+        start_outline_mm=start_outline,
+        start_extend_mm=start_extend,
     )
-    added = 0
+    guide_strokes = effect_line_gen.generate_shape_guide_strokes(
+        params,
+        center_xy_mm=(cx, cy),
+        radius_xy_mm=(w * 0.5, h * 0.5),
+        start_outline_mm=start_outline,
+        start_extend_mm=start_extend,
+    )
+    line_added = 0
     for stroke in strokes:
         if gpencil.add_stroke_to_drawing(
             drawing,
@@ -392,9 +471,20 @@ def _write_effect_strokes(
             radius=stroke.radius,
             radii=getattr(stroke, "radii", None),
             cyclic=stroke.cyclic,
+            material_index=line_material_index,
         ):
-            added += 1
-    gpencil.ensure_layer_material(obj, layer, activate=True, assign_existing=True)
+            line_added += 1
+    for stroke in guide_strokes:
+        material_index = start_guide_material_index if stroke.role == "start_guide" else end_guide_material_index
+        gpencil.add_stroke_to_drawing(
+            drawing,
+            stroke.points_xyz,
+            radius=stroke.radius,
+            radii=getattr(stroke, "radii", None),
+            cyclic=stroke.cyclic,
+            material_index=material_index,
+        )
+    gpencil.ensure_layer_material(obj, layer, activate=True, assign_existing=False)
     _set_layer_bounds(
         obj,
         layer,
@@ -402,7 +492,7 @@ def _write_effect_strokes(
         seed=seed_value,
         params_data=effect_line.effect_params_to_dict(params),
     )
-    return added
+    return line_added
 
 
 def on_effect_params_changed(context, _params) -> None:

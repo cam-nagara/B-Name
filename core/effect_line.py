@@ -13,9 +13,9 @@ from bpy.props import (
     FloatProperty,
     FloatVectorProperty,
     IntProperty,
-    StringProperty,
 )
 
+from . import balloon
 from ..utils import log
 
 _logger = log.get_logger(__name__)
@@ -28,10 +28,8 @@ _EFFECT_TYPE_ITEMS = (
     ("speed", "流線", "動き・速度表現の平行線"),
 )
 
-_BASE_SHAPE_ITEMS = (
-    ("rect", "長方形", ""),
-    ("ellipse", "楕円", ""),
-    ("polygon", "多角形", ""),
+_EFFECT_SHAPE_ITEMS = tuple(
+    item for item in balloon._SHAPE_ITEMS if item[0] not in {"custom", "none"}
 )
 
 _SPACING_MODE_ITEMS = (
@@ -41,16 +39,35 @@ _SPACING_MODE_ITEMS = (
 
 _INOUT_APPLY_ITEMS = (
     ("brush_size", "ブラシサイズ", ""),
-    ("length", "長さ", ""),
     ("opacity", "不透明度", ""),
 )
 
+_LEGACY_BASE_SHAPE_TO_EFFECT_SHAPE = {
+    "rect": "rect",
+    "ellipse": "ellipse",
+    "polygon": "octagon",
+}
+
 EFFECT_PARAM_FIELDS = (
     "effect_type",
-    "base_shape",
-    "base_vertex_count",
-    "start_from_center",
     "rotation_deg",
+    "start_shape",
+    "start_to_coma_frame",
+    "start_rounded_corner_enabled",
+    "start_rounded_corner_radius_mm",
+    "start_cloud_bump_width_mm",
+    "start_cloud_bump_height_mm",
+    "start_cloud_offset_percent",
+    "start_cloud_sub_width_ratio",
+    "start_cloud_sub_height_ratio",
+    "end_shape",
+    "end_rounded_corner_enabled",
+    "end_rounded_corner_radius_mm",
+    "end_cloud_bump_width_mm",
+    "end_cloud_bump_height_mm",
+    "end_cloud_offset_percent",
+    "end_cloud_sub_width_ratio",
+    "end_cloud_sub_height_ratio",
     "brush_size_mm",
     "brush_jitter_enabled",
     "brush_jitter_amount",
@@ -64,16 +81,6 @@ EFFECT_PARAM_FIELDS = (
     "bundle_line_count",
     "bundle_jitter_amount",
     "bundle_gap_mm",
-    "length_mm",
-    "length_jitter_enabled",
-    "length_jitter_amount",
-    "extend_past_coma",
-    "base_position",
-    "base_position_offset_enabled",
-    "base_position_offset",
-    "base_jagged_enabled",
-    "base_jagged_count",
-    "base_jagged_height_mm",
     "inout_apply",
     "in_percent",
     "out_percent",
@@ -114,6 +121,8 @@ def effect_params_to_dict(params) -> dict:
         value = getattr(params, field)
         if field in {"line_color", "fill_color"}:
             data[field] = _color_value(value)
+        elif field == "inout_apply":
+            data[field] = str(value) if str(value) in {"brush_size", "opacity"} else "brush_size"
         elif isinstance(value, bool):
             data[field] = bool(value)
         elif isinstance(value, int):
@@ -127,7 +136,11 @@ def effect_params_to_dict(params) -> dict:
 
 def effect_params_from_dict(params, data: dict) -> None:
     """保存済み dict を BNameEffectLineParams へ戻す。未知項目は無視する。"""
-    data = data or {}
+    data = dict(data or {})
+    if "end_shape" not in data and "base_shape" in data:
+        data["end_shape"] = _LEGACY_BASE_SHAPE_TO_EFFECT_SHAPE.get(str(data["base_shape"]), "rect")
+    if str(data.get("inout_apply", "")) == "length":
+        data["inout_apply"] = "brush_size"
     for field in EFFECT_PARAM_FIELDS:
         if field not in data or not hasattr(params, field):
             continue
@@ -145,10 +158,26 @@ class BNameEffectLineParams(bpy.types.PropertyGroup):
     """効果線ツールのパラメータ (プリセット保存対象)."""
 
     effect_type: EnumProperty(name="種類", items=_EFFECT_TYPE_ITEMS, default="focus", update=_on_params_changed)  # type: ignore[valid-type]
-    base_shape: EnumProperty(name="基準図形", items=_BASE_SHAPE_ITEMS, default="rect", update=_on_params_changed)  # type: ignore[valid-type]
-    base_vertex_count: IntProperty(name="基準頂点数 (多角形)", default=6, min=3, soft_max=24, update=_on_params_changed)  # type: ignore[valid-type]
-    start_from_center: BoolProperty(name="中央から開始", default=False, update=_on_params_changed)  # type: ignore[valid-type]
     rotation_deg: FloatProperty(name="全体回転", default=0.0, update=_on_params_changed)  # type: ignore[valid-type]
+
+    start_shape: EnumProperty(name="始点形状", items=_EFFECT_SHAPE_ITEMS, default="rect", update=_on_params_changed)  # type: ignore[valid-type]
+    start_to_coma_frame: BoolProperty(name="始点をコマ枠に設定", default=False, update=_on_params_changed)  # type: ignore[valid-type]
+    start_rounded_corner_enabled: BoolProperty(name="角丸", default=False, update=_on_params_changed)  # type: ignore[valid-type]
+    start_rounded_corner_radius_mm: FloatProperty(name="角半径", default=3.0, min=0.0, soft_max=30.0, update=_on_params_changed)  # type: ignore[valid-type]
+    start_cloud_bump_width_mm: FloatProperty(name="山の幅", default=10.0, min=2.0, soft_max=50.0, update=_on_params_changed)  # type: ignore[valid-type]
+    start_cloud_bump_height_mm: FloatProperty(name="山の高さ", default=4.0, min=0.5, soft_max=25.0, update=_on_params_changed)  # type: ignore[valid-type]
+    start_cloud_offset_percent: FloatProperty(name="ズラし量 (%)", default=50.0, min=0.0, max=100.0, update=_on_params_changed)  # type: ignore[valid-type]
+    start_cloud_sub_width_ratio: FloatProperty(name="小山幅 (%)", default=0.0, min=0.0, max=100.0, update=_on_params_changed)  # type: ignore[valid-type]
+    start_cloud_sub_height_ratio: FloatProperty(name="小山高 (%)", default=0.0, min=0.0, max=100.0, update=_on_params_changed)  # type: ignore[valid-type]
+
+    end_shape: EnumProperty(name="終点形状", items=_EFFECT_SHAPE_ITEMS, default="ellipse", update=_on_params_changed)  # type: ignore[valid-type]
+    end_rounded_corner_enabled: BoolProperty(name="角丸", default=False, update=_on_params_changed)  # type: ignore[valid-type]
+    end_rounded_corner_radius_mm: FloatProperty(name="角半径", default=3.0, min=0.0, soft_max=30.0, update=_on_params_changed)  # type: ignore[valid-type]
+    end_cloud_bump_width_mm: FloatProperty(name="山の幅", default=10.0, min=2.0, soft_max=50.0, update=_on_params_changed)  # type: ignore[valid-type]
+    end_cloud_bump_height_mm: FloatProperty(name="山の高さ", default=4.0, min=0.5, soft_max=25.0, update=_on_params_changed)  # type: ignore[valid-type]
+    end_cloud_offset_percent: FloatProperty(name="ズラし量 (%)", default=50.0, min=0.0, max=100.0, update=_on_params_changed)  # type: ignore[valid-type]
+    end_cloud_sub_width_ratio: FloatProperty(name="小山幅 (%)", default=0.0, min=0.0, max=100.0, update=_on_params_changed)  # type: ignore[valid-type]
+    end_cloud_sub_height_ratio: FloatProperty(name="小山高 (%)", default=0.0, min=0.0, max=100.0, update=_on_params_changed)  # type: ignore[valid-type]
 
     brush_size_mm: FloatProperty(name="ブラシサイズ", default=0.40, min=0.01, soft_max=5.0, update=_on_params_changed)  # type: ignore[valid-type]
     brush_jitter_enabled: BoolProperty(name="乱れ", default=False, update=_on_params_changed)  # type: ignore[valid-type]
@@ -165,23 +194,6 @@ class BNameEffectLineParams(bpy.types.PropertyGroup):
     bundle_line_count: IntProperty(name="数", default=4, min=1, soft_max=50, update=_on_params_changed)  # type: ignore[valid-type]
     bundle_jitter_amount: FloatProperty(name="まとまりの乱れ", default=0.2, min=0.0, max=1.0, update=_on_params_changed)  # type: ignore[valid-type]
     bundle_gap_mm: FloatProperty(name="まとまり間隔", default=0.2, min=0.0, soft_max=20.0, update=_on_params_changed)  # type: ignore[valid-type]
-
-    length_mm: FloatProperty(name="長さ", default=10.0, min=0.1, soft_max=500.0, update=_on_params_changed)  # type: ignore[valid-type]
-    length_jitter_enabled: BoolProperty(name="乱れ", default=False, update=_on_params_changed)  # type: ignore[valid-type]
-    length_jitter_amount: FloatProperty(name="長さ乱れ量", default=0.2, min=0.0, max=1.0, update=_on_params_changed)  # type: ignore[valid-type]
-    extend_past_coma: BoolProperty(name="コマ外まで延長", default=False, update=_on_params_changed)  # type: ignore[valid-type]
-
-    base_position: EnumProperty(  # type: ignore[valid-type]
-        name="基準位置",
-        items=(("start", "始点", ""), ("middle", "中点", ""), ("end", "終点", "")),
-        default="start",
-        update=_on_params_changed,
-    )
-    base_position_offset_enabled: BoolProperty(name="基準位置のずれ", default=False, update=_on_params_changed)  # type: ignore[valid-type]
-    base_position_offset: FloatProperty(name="ずれ量", default=2.0, min=0.0, soft_max=20.0, update=_on_params_changed)  # type: ignore[valid-type]
-    base_jagged_enabled: BoolProperty(name="基準位置をギザギザにする", default=False, update=_on_params_changed)  # type: ignore[valid-type]
-    base_jagged_count: IntProperty(name="数", default=24, min=3, soft_max=80, update=_on_params_changed)  # type: ignore[valid-type]
-    base_jagged_height_mm: FloatProperty(name="高さ", default=1.0, min=0.0, soft_max=10.0, update=_on_params_changed)  # type: ignore[valid-type]
 
     inout_apply: EnumProperty(name="適用先", items=_INOUT_APPLY_ITEMS, default="brush_size", update=_on_params_changed)  # type: ignore[valid-type]
     in_percent: FloatProperty(name="入り (%)", default=100.0, min=0.0, max=100.0, update=_on_params_changed)  # type: ignore[valid-type]

@@ -5,7 +5,35 @@ from __future__ import annotations
 import bpy
 from bpy.types import Panel
 
+from ..utils import balloon_shapes
+
 B_NAME_CATEGORY = "B-Name"
+
+
+def _draw_shape_settings(layout, params, prefix: str, label: str, *, frame_toggle: bool = False) -> None:
+    box = layout.box()
+    box.label(text=label)
+    if frame_toggle:
+        box.prop(params, "start_to_coma_frame")
+    content = box.column(align=True)
+    if frame_toggle:
+        content.enabled = not bool(params.start_to_coma_frame)
+    shape_attr = f"{prefix}_shape"
+    content.prop(params, shape_attr)
+    shape = balloon_shapes.normalize_shape(getattr(params, shape_attr))
+    if shape == "rect":
+        rounded_attr = f"{prefix}_rounded_corner_enabled"
+        content.prop(params, rounded_attr)
+        sub = content.row()
+        sub.enabled = bool(getattr(params, rounded_attr))
+        sub.prop(params, f"{prefix}_rounded_corner_radius_mm")
+    if balloon_shapes.is_dynamic_meldex_shape(shape):
+        content.prop(params, f"{prefix}_cloud_bump_width_mm")
+        content.prop(params, f"{prefix}_cloud_bump_height_mm")
+        content.prop(params, f"{prefix}_cloud_offset_percent")
+        row = content.row(align=True)
+        row.prop(params, f"{prefix}_cloud_sub_width_ratio")
+        row.prop(params, f"{prefix}_cloud_sub_height_ratio")
 
 
 class BNAME_PT_effect_line(Panel):
@@ -27,11 +55,10 @@ class BNAME_PT_effect_line(Panel):
         box = layout.box()
         box.label(text="種類")
         box.prop(params, "effect_type")
-        box.prop(params, "base_shape")
-        if params.base_shape == "polygon":
-            box.prop(params, "base_vertex_count")
-        box.prop(params, "start_from_center")
         box.prop(params, "rotation_deg")
+
+        _draw_shape_settings(layout, params, "start", "始点形状", frame_toggle=True)
+        _draw_shape_settings(layout, params, "end", "終点形状")
 
         box = layout.box()
         box.label(text="線")
@@ -47,19 +74,6 @@ class BNAME_PT_effect_line(Panel):
             box.prop(params, "spacing_angle_deg")
         else:
             box.prop(params, "spacing_distance_mm")
-
-        box.prop(params, "length_mm")
-        box.prop(params, "extend_past_coma")
-
-        box = layout.box()
-        box.label(text="基準位置 / ギザ")
-        box.prop(params, "base_position")
-        box.prop(params, "base_position_offset")
-        box.prop(params, "base_jagged_enabled")
-        sub = box.column()
-        sub.enabled = params.base_jagged_enabled
-        sub.prop(params, "base_jagged_count")
-        sub.prop(params, "base_jagged_height_mm")
 
         box = layout.box()
         box.label(text="入り抜き")

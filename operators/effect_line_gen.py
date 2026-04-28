@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import math
 import random
+from collections.abc import Sequence
 from dataclasses import dataclass
 
-from ..utils import log
-from ..utils.geom import mm_to_m
+from ..utils import balloon_shapes, log
+from ..utils.geom import Rect, mm_to_m
 
 _logger = log.get_logger(__name__)
 
@@ -25,6 +26,7 @@ class EffectLineStroke:
     radius: float  # m 単位
     cyclic: bool = False
     radii: list[float] | None = None
+    role: str = "line"
 
 
 def _jitter(base: float, amount: float, rng: random.Random) -> float:
@@ -49,6 +51,138 @@ def _ellipse_perimeter_mm(rx: float, ry: float) -> float:
     return math.pi * (a + b) * (1.0 + (3.0 * h) / (10.0 + math.sqrt(4.0 - 3.0 * h)))
 
 
+def _poly_perimeter_mm(points: Sequence[tuple[float, float]]) -> float:
+    if len(points) < 2:
+        return 0.0
+    total = 0.0
+    for i, point in enumerate(points):
+        nxt = points[(i + 1) % len(points)]
+        total += math.hypot(nxt[0] - point[0], nxt[1] - point[1])
+    return total
+
+
+def _scaled_rect(cx: float, cy: float, rx: float, ry: float, scale: float) -> Rect:
+    sx = max(0.001, float(rx) * float(scale))
+    sy = max(0.001, float(ry) * float(scale))
+    return Rect(cx - sx, cy - sy, sx * 2.0, sy * 2.0)
+
+
+def _rotate_points(
+    points: Sequence[tuple[float, float]],
+    center: tuple[float, float],
+    angle_deg: float,
+) -> list[tuple[float, float]]:
+    angle = math.radians(float(angle_deg))
+    if abs(angle) < 1.0e-9:
+        return [(float(x), float(y)) for x, y in points]
+    cx, cy = center
+    ca = math.cos(angle)
+    sa = math.sin(angle)
+    out: list[tuple[float, float]] = []
+    for x, y in points:
+        dx = float(x) - cx
+        dy = float(y) - cy
+        out.append((cx + dx * ca - dy * sa, cy + dx * sa + dy * ca))
+    return out
+
+
+def _shape_outline(
+    params,
+    prefix: str,
+    rect: Rect,
+    center_xy_mm: tuple[float, float],
+) -> list[tuple[float, float]]:
+    shape = getattr(params, f"{prefix}_shape", getattr(params, "base_shape", "rect"))
+    if shape == "polygon":
+        shape = "octagon"
+    points = balloon_shapes.outline_for_shape(
+        shape,
+        rect,
+        rounded_corner_enabled=bool(getattr(params, f"{prefix}_rounded_corner_enabled", False)),
+        rounded_corner_radius_mm=float(getattr(params, f"{prefix}_rounded_corner_radius_mm", 0.0)),
+        cloud_bump_width_mm=float(getattr(params, f"{prefix}_cloud_bump_width_mm", 10.0)),
+        cloud_bump_height_mm=float(getattr(params, f"{prefix}_cloud_bump_height_mm", 4.0)),
+        cloud_offset=float(getattr(params, f"{prefix}_cloud_offset_percent", 50.0)) / 100.0,
+        cloud_sub_width_ratio=float(getattr(params, f"{prefix}_cloud_sub_width_ratio", 0.0)),
+        cloud_sub_height_ratio=float(getattr(params, f"{prefix}_cloud_sub_height_ratio", 0.0)),
+    )
+    return _rotate_points(points, center_xy_mm, getattr(params, "rotation_deg", 0.0))
+
+
+def _cross(ax: float, ay: float, bx: float, by: float) -> float:
+    return ax * by - ay * bx
+
+
+def _ray_outline_point(
+    center_xy_mm: tuple[float, float],
+    outline: Sequence[tuple[float, float]],
+    angle: float,
+    *,
+    extend_mm: float = 0.0,
+) -> tuple[float, float] | None:
+    if len(outline) < 2:
+        return None
+    cx, cy = center_xy_mm
+    dx = math.cos(angle)
+    dy = math.sin(angle)
+    best_t: float | None = None
+    for i, a in enumerate(outline):
+        b = outline[(i + 1) % len(outline)]
+        sx = b[0] - a[0]
+        sy = b[1] - a[1]
+        denom = _cross(dx, dy, sx, sy)
+        if abs(denom) < 1.0e-9:
+            continue
+        qx = a[0] - cx
+        qy = a[1] - cy
+        t = _cross(qx, qy, sx, sy) / denom
+        u = _cross(qx, qy, dx, dy) / denom
+        if t >= -1.0e-6 and -1.0e-6 <= u <= 1.0 + 1.0e-6:
+            if best_t is None or t < best_t:
+                best_t = t
+    if best_t is None:
+        return None
+    distance = max(0.0, best_t + float(extend_mm))
+    return cx + dx * distance, cy + dy * distance
+
+
+def _point_on_outline_or_ellipse(
+    center_xy_mm: tuple[float, float],
+    outline: Sequence[tuple[float, float]],
+    rx: float,
+    ry: float,
+    angle: float,
+    *,
+    extend_mm: float = 0.0,
+) -> tuple[float, float]:
+    point = _ray_outline_point(center_xy_mm, outline, angle, extend_mm=extend_mm)
+    if point is not None:
+        return point
+    cx, cy = center_xy_mm
+    return (
+        cx + math.cos(angle) * (float(rx) + float(extend_mm)),
+        cy + math.sin(angle) * (float(ry) + float(extend_mm)),
+    )
+
+
+def _actual_outline_by_rays(
+    center_xy_mm: tuple[float, float],
+    outline: Sequence[tuple[float, float]],
+    *,
+    extend_mm: float = 0.0,
+    samples: int = 128,
+) -> list[tuple[float, float]]:
+    if len(outline) < 3:
+        return [(float(x), float(y)) for x, y in outline]
+    out: list[tuple[float, float]] = []
+    for i in range(max(12, int(samples))):
+        angle = 2.0 * math.pi * i / max(12, int(samples))
+        point = _ray_outline_point(center_xy_mm, outline, angle, extend_mm=extend_mm)
+        if point is not None:
+            out.append(point)
+    return out
+
+
 def _focus_slot_count(params, radius_x_mm: float, radius_y_mm: float) -> int:
     if params.spacing_mode == "angle":
         step_deg = max(0.1, float(params.spacing_angle_deg))
@@ -56,6 +190,20 @@ def _focus_slot_count(params, radius_x_mm: float, radius_y_mm: float) -> int:
     else:
         step_mm = max(0.01, float(params.spacing_distance_mm))
         raw_count = max(8, int(round(_ellipse_perimeter_mm(radius_x_mm, radius_y_mm) / step_mm)))
+    return min(raw_count, _max_line_count(params))
+
+
+def _focus_slot_count_for_outline(
+    params,
+    outline: Sequence[tuple[float, float]],
+    radius_x_mm: float,
+    radius_y_mm: float,
+) -> int:
+    if params.spacing_mode == "angle":
+        return _focus_slot_count(params, radius_x_mm, radius_y_mm)
+    step_mm = max(0.01, float(params.spacing_distance_mm))
+    perimeter = _poly_perimeter_mm(outline) or _ellipse_perimeter_mm(radius_x_mm, radius_y_mm)
+    raw_count = max(8, int(round(perimeter / step_mm)))
     return min(raw_count, _max_line_count(params))
 
 
@@ -99,38 +247,6 @@ def _slot_fraction(slot: float, count: int, closed: bool) -> float:
     return max(0.0, min(1.0, float(slot) / float(count - 1)))
 
 
-def _base_point_on_shape(params, cx: float, cy: float, rx: float, ry: float, angle: float) -> tuple[float, float]:
-    dx = math.cos(angle)
-    dy = math.sin(angle)
-    shape = getattr(params, "base_shape", "ellipse")
-    if shape == "rect":
-        tx = abs(rx / dx) if abs(dx) > 1e-6 else float("inf")
-        ty = abs(ry / dy) if abs(dy) > 1e-6 else float("inf")
-        t = min(tx, ty)
-        return cx + dx * t, cy + dy * t
-    if shape == "polygon":
-        n = max(3, int(getattr(params, "base_vertex_count", 6)))
-        sector = (2.0 * math.pi) / n
-        local = (angle + math.pi / 2.0 + sector * 0.5) % sector - sector * 0.5
-        scale = math.cos(sector * 0.5) / max(0.1, math.cos(local))
-        return cx + dx * rx * scale, cy + dy * ry * scale
-    return cx + rx * dx, cy + ry * dy
-
-
-def _base_position_offset(params, index: int, angle: float, rng: random.Random) -> float:
-    offset = 0.0
-    if bool(getattr(params, "base_position_offset_enabled", False)):
-        amount = max(0.0, float(getattr(params, "base_position_offset", 0.0)))
-        offset += (rng.random() * 2.0 - 1.0) * amount
-    if bool(getattr(params, "base_jagged_enabled", False)) or getattr(params, "effect_type", "") == "uni_flash":
-        count = max(3, int(getattr(params, "base_jagged_count", 24)))
-        phase = int(((angle % (2.0 * math.pi)) / (2.0 * math.pi)) * count)
-        sign = 1.0 if phase % 2 == 0 else -1.0
-        height = max(0.0, float(getattr(params, "base_jagged_height_mm", 0.0)))
-        offset += sign * height * (0.55 + 0.45 * rng.random())
-    return offset
-
-
 def _stroke_radii(params, radius_mm: float, point_count: int = 2) -> tuple[float, list[float] | None]:
     base = mm_to_m(max(0.01, radius_mm) / 2.0)
     if getattr(params, "inout_apply", "brush_size") != "brush_size" or point_count < 2:
@@ -146,88 +262,55 @@ def _stroke_radii(params, radius_mm: float, point_count: int = 2) -> tuple[float
     return base, radii
 
 
-def _base_shape_points(params, center_xy_mm: tuple[float, float], radius_x_mm: float, radius_y_mm: float) -> list[tuple[float, float]]:
-    """基準図形 (長方形/楕円/多角形) の外周頂点を返す (mm, 閉じた輪郭)."""
-    cx, cy = center_xy_mm
-    shape = params.base_shape
-    if shape == "rect":
-        return [
-            (cx - radius_x_mm, cy - radius_y_mm),
-            (cx + radius_x_mm, cy - radius_y_mm),
-            (cx + radius_x_mm, cy + radius_y_mm),
-            (cx - radius_x_mm, cy + radius_y_mm),
-        ]
-    if shape == "ellipse":
-        count = 64
-        return [
-            (
-                cx + radius_x_mm * math.cos(2 * math.pi * i / count),
-                cy + radius_y_mm * math.sin(2 * math.pi * i / count),
-            )
-            for i in range(count)
-        ]
-    if shape == "polygon":
-        n = max(3, params.base_vertex_count)
-        return [
-            (
-                cx + radius_x_mm * math.cos(2 * math.pi * i / n - math.pi / 2),
-                cy + radius_y_mm * math.sin(2 * math.pi * i / n - math.pi / 2),
-            )
-            for i in range(n)
-        ]
-    return []
-
-
 def generate_focus_strokes(
     params,
     center_xy_mm: tuple[float, float] = (110.0, 160.0),
     radius_x_mm: float = 40.0,
     radius_y_mm: float = 50.0,
     seed: int = 0,
+    start_outline_mm: Sequence[tuple[float, float]] | None = None,
+    start_extend_mm: float = 0.0,
 ) -> list[EffectLineStroke]:
     """集中線 (focus) のストローク生成.
 
-    基準図形の外周上の点から、params.length_mm 方向 (中心から放射状 or
-    中央から外側) に線を引く。
+    始点形状から終点形状へ線を引く。終点形状が CSP の「内側」に相当する。
     """
     rng = random.Random(seed)
     out: list[EffectLineStroke] = []
     cx, cy = center_xy_mm
-    count = _focus_slot_count(params, radius_x_mm, radius_y_mm)
+    end_rect = _scaled_rect(cx, cy, radius_x_mm, radius_y_mm, 1.0)
+    end_outline = _shape_outline(params, "end", end_rect, center_xy_mm)
+    if start_outline_mm is None:
+        start_rect = _scaled_rect(cx, cy, radius_x_mm, radius_y_mm, 2.0)
+        start_outline = _shape_outline(params, "start", start_rect, center_xy_mm)
+        start_extend = 0.0
+    else:
+        start_outline = [(float(x), float(y)) for x, y in start_outline_mm]
+        start_extend = max(0.0, float(start_extend_mm))
+    count = _focus_slot_count_for_outline(params, end_outline, radius_x_mm, radius_y_mm)
     step_angle = (2.0 * math.pi) / max(1, count)
-    length_base = max(0.1, float(params.length_mm))
-    if bool(getattr(params, "extend_past_coma", False)):
-        length_base = max(length_base, max(radius_x_mm, radius_y_mm) * 2.5)
 
-    for stroke_index, slot in enumerate(_slot_positions(count, params, rng)):
+    for slot in _slot_positions(count, params, rng):
         t = _slot_fraction(slot, count, closed=True)
         angle = 2.0 * math.pi * t + math.radians(float(params.rotation_deg))
         if bool(getattr(params, "spacing_jitter_enabled", False)):
             amount = _clamp01(getattr(params, "spacing_jitter_amount", 0.0))
             angle += step_angle * amount * (rng.random() * 2.0 - 1.0)
-        sx, sy = _base_point_on_shape(params, cx, cy, radius_x_mm, radius_y_mm, angle)
-        length_mm = _jitter(
-            length_base,
-            params.length_jitter_amount if params.length_jitter_enabled else 0.0,
-            rng,
+        x0, y0 = _point_on_outline_or_ellipse(
+            center_xy_mm,
+            start_outline,
+            radius_x_mm * 2.0,
+            radius_y_mm * 2.0,
+            angle,
+            extend_mm=start_extend,
         )
-        dx = math.cos(angle)
-        dy = math.sin(angle)
-        base_offset = _base_position_offset(params, stroke_index, angle, rng)
-        sx += dx * base_offset
-        sy += dy * base_offset
-        if params.start_from_center:
-            x0, y0 = cx, cy
-            x1, y1 = sx, sy
-        elif params.base_position == "middle":
-            x0, y0 = sx - dx * length_mm * 0.5, sy - dy * length_mm * 0.5
-            x1, y1 = sx + dx * length_mm * 0.5, sy + dy * length_mm * 0.5
-        elif params.base_position == "end":
-            x0, y0 = sx - dx * length_mm, sy - dy * length_mm
-            x1, y1 = sx, sy
-        else:
-            x0, y0 = sx, sy
-            x1, y1 = sx + dx * length_mm, sy + dy * length_mm
+        x1, y1 = _point_on_outline_or_ellipse(
+            center_xy_mm,
+            end_outline,
+            radius_x_mm,
+            radius_y_mm,
+            angle,
+        )
 
         radius_mm = _jitter(
             params.brush_size_mm,
@@ -254,7 +337,7 @@ def generate_speed_strokes(
     origin_xy_mm: tuple[float, float] = (40.0, 120.0),
     region_width_mm: float = 120.0,
     region_height_mm: float = 80.0,
-    length_mm: float | None = None,
+    fixed_span_mm: float | None = None,
     seed: int = 0,
 ) -> list[EffectLineStroke]:
     """流線 (speed) のストローク生成."""
@@ -272,9 +355,7 @@ def generate_speed_strokes(
     dy = math.sin(angle)
     nx = -dy
     ny = dx
-    length = max(0.1, float(length_mm if length_mm is not None else params.length_mm))
-    if bool(getattr(params, "extend_past_coma", False)):
-        length = max(length, math.hypot(region_width_mm, region_height_mm) * 1.5)
+    span = max(0.1, float(fixed_span_mm if fixed_span_mm is not None else region_width_mm))
     cx, cy = origin_xy_mm
     spacing_step = region_height_mm / max(1, count - 1) if count > 1 else 0.0
     for slot in _slot_positions(count, params, rng):
@@ -283,17 +364,12 @@ def generate_speed_strokes(
         if bool(getattr(params, "spacing_jitter_enabled", False)):
             amount = _clamp01(getattr(params, "spacing_jitter_amount", 0.0))
             offset += spacing_step * amount * (rng.random() * 2.0 - 1.0)
-        line_length_mm = _jitter(
-            length,
-            params.length_jitter_amount if params.length_jitter_enabled else 0.0,
-            rng,
-        )
         mid_x = cx + nx * offset
         mid_y = cy + ny * offset
-        sx = mid_x - dx * line_length_mm * 0.5
-        sy = mid_y - dy * line_length_mm * 0.5
-        ex = mid_x + dx * line_length_mm * 0.5
-        ey = mid_y + dy * line_length_mm * 0.5
+        sx = mid_x - dx * span * 0.5
+        sy = mid_y - dy * span * 0.5
+        ex = mid_x + dx * span * 0.5
+        ey = mid_y + dy * span * 0.5
         radius_mm = _jitter(
             params.brush_size_mm,
             params.brush_jitter_amount if params.brush_jitter_enabled else 0.0,
@@ -317,20 +393,11 @@ def generate_beta_flash_strokes(
     radius_y_mm: float,
     seed: int = 0,
 ) -> list[EffectLineStroke]:
-    """ベタフラ: ウニ状外周を閉じた多角形ストロークとして生成 (塗り設定は別途)."""
-    rng = random.Random(seed)
-    n = max(6, params.base_jagged_count if params.base_jagged_enabled else 24)
-    n = min(n, _max_line_count(params))
-    jaggy = params.base_jagged_height_mm if params.base_jagged_enabled else 0.0
-    points: list[tuple[float, float, float]] = []
-    for i in range(n):
-        angle = 2.0 * math.pi * i / n + math.radians(float(params.rotation_deg))
-        r_offset = jaggy if i % 2 == 0 else -jaggy
-        rx = radius_x_mm + r_offset * (0.5 + 0.5 * rng.random())
-        ry = radius_y_mm + r_offset * (0.5 + 0.5 * rng.random())
-        x = center_xy_mm[0] + rx * math.cos(angle)
-        y = center_xy_mm[1] + ry * math.sin(angle)
-        points.append((mm_to_m(x), mm_to_m(y), 0.0))
+    """ベタフラ: 終点形状を閉じたストロークとして生成 (塗り設定は別途)."""
+    _ = seed
+    rect = _scaled_rect(center_xy_mm[0], center_xy_mm[1], radius_x_mm, radius_y_mm, 1.0)
+    outline = _shape_outline(params, "end", rect, center_xy_mm)
+    points = [(mm_to_m(x), mm_to_m(y), 0.0) for x, y in outline]
     radius, radii = _stroke_radii(params, params.brush_size_mm, len(points))
     return [
         EffectLineStroke(
@@ -342,7 +409,14 @@ def generate_beta_flash_strokes(
     ]
 
 
-def generate_strokes(params, center_xy_mm=(110.0, 160.0), radius_xy_mm=(40.0, 50.0), seed=0):
+def generate_strokes(
+    params,
+    center_xy_mm=(110.0, 160.0),
+    radius_xy_mm=(40.0, 50.0),
+    seed=0,
+    start_outline_mm: Sequence[tuple[float, float]] | None = None,
+    start_extend_mm: float = 0.0,
+):
     etype = params.effect_type
     rx, ry = radius_xy_mm
     if etype == "speed":
@@ -351,10 +425,61 @@ def generate_strokes(params, center_xy_mm=(110.0, 160.0), radius_xy_mm=(40.0, 50
             origin_xy_mm=center_xy_mm,
             region_width_mm=rx * 2.0,
             region_height_mm=ry * 2.0,
-            length_mm=max(params.length_mm, rx * 2.0),
+            fixed_span_mm=rx * 2.0,
             seed=seed,
         )
     if etype == "beta_flash":
         return generate_beta_flash_strokes(params, center_xy_mm, rx, ry, seed=seed)
-    # focus / uni_flash は放射状生成 (uni_flash は基準図形がギザギザ + 放射)
-    return generate_focus_strokes(params, center_xy_mm, rx, ry, seed=seed)
+    return generate_focus_strokes(
+        params,
+        center_xy_mm,
+        rx,
+        ry,
+        seed=seed,
+        start_outline_mm=start_outline_mm,
+        start_extend_mm=start_extend_mm,
+    )
+
+
+def generate_shape_guide_strokes(
+    params,
+    center_xy_mm=(110.0, 160.0),
+    radius_xy_mm=(40.0, 50.0),
+    start_outline_mm: Sequence[tuple[float, float]] | None = None,
+    start_extend_mm: float = 0.0,
+) -> list[EffectLineStroke]:
+    """始点/終点の形状ラインをガイドストロークとして返す。"""
+    rx, ry = radius_xy_mm
+    cx, cy = center_xy_mm
+    end_rect = _scaled_rect(cx, cy, rx, ry, 1.0)
+    end_outline = _shape_outline(params, "end", end_rect, center_xy_mm)
+    if start_outline_mm is None:
+        start_rect = _scaled_rect(cx, cy, rx, ry, 2.0)
+        start_outline = _shape_outline(params, "start", start_rect, center_xy_mm)
+    else:
+        start_outline = _actual_outline_by_rays(
+            center_xy_mm,
+            start_outline_mm,
+            extend_mm=max(0.0, float(start_extend_mm)),
+        )
+    radius = mm_to_m(max(0.05, min(0.25, float(getattr(params, "brush_size_mm", 0.4)) * 0.4)) / 2.0)
+    guides: list[EffectLineStroke] = []
+    if len(start_outline) >= 2:
+        guides.append(
+            EffectLineStroke(
+                points_xyz=[(mm_to_m(x), mm_to_m(y), 0.0) for x, y in start_outline],
+                radius=radius,
+                cyclic=True,
+                role="start_guide",
+            )
+        )
+    if len(end_outline) >= 2:
+        guides.append(
+            EffectLineStroke(
+                points_xyz=[(mm_to_m(x), mm_to_m(y), 0.0) for x, y in end_outline],
+                radius=radius,
+                cyclic=True,
+                role="end_guide",
+            )
+        )
+    return guides
