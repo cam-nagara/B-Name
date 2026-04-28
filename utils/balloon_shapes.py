@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
+from pathlib import Path
 
 from .geom import Rect
 
@@ -28,8 +29,13 @@ def is_dynamic_meldex_shape(shape: str | None) -> bool:
 
 def outline_for_entry(entry, rect: Rect) -> list[tuple[float, float]]:
     sp = getattr(entry, "shape_params", None)
+    shape = normalize_shape(getattr(entry, "shape", "rect"))
+    if shape == "custom":
+        custom = _custom_outline_for_entry(entry, rect)
+        if custom is not None:
+            return custom
     return outline_for_shape(
-        getattr(entry, "shape", "rect"),
+        shape,
         rect,
         rounded_corner_enabled=bool(getattr(entry, "rounded_corner_enabled", False)),
         rounded_corner_radius_mm=float(getattr(entry, "rounded_corner_radius_mm", 0.0)),
@@ -39,6 +45,64 @@ def outline_for_entry(entry, rect: Rect) -> list[tuple[float, float]]:
         cloud_sub_width_ratio=float(getattr(sp, "cloud_sub_width_ratio", 0.0)),
         cloud_sub_height_ratio=float(getattr(sp, "cloud_sub_height_ratio", 0.0)),
     )
+
+
+def _custom_outline_for_entry(entry, rect: Rect) -> list[tuple[float, float]] | None:
+    preset_name = str(getattr(entry, "custom_preset_name", "") or "").strip()
+    if not preset_name:
+        return None
+    preset = _find_custom_preset(preset_name)
+    if preset is None:
+        return None
+    vertices = preset.data.get("vertices", [])
+    pts: list[tuple[float, float]] = []
+    for item in vertices:
+        try:
+            pts.append((float(item[0]), float(item[1])))
+        except Exception:  # noqa: BLE001
+            continue
+    if len(pts) < 3:
+        return None
+    min_x = min(x for x, _y in pts)
+    max_x = max(x for x, _y in pts)
+    min_y = min(y for _x, y in pts)
+    max_y = max(y for _x, y in pts)
+    src_w = max_x - min_x
+    src_h = max_y - min_y
+    if src_w <= 1.0e-6 or src_h <= 1.0e-6:
+        return None
+    return [
+        (
+            rect.x + ((x - min_x) / src_w) * rect.width,
+            rect.y + ((y - min_y) / src_h) * rect.height,
+        )
+        for x, y in pts
+    ]
+
+
+def _find_custom_preset(preset_name: str):
+    try:
+        from ..io import balloon_presets
+
+        work_dir = _active_work_dir()
+        for preset in balloon_presets.list_all_presets(work_dir):
+            if preset.name == preset_name or Path(preset.path).stem == preset_name:
+                return preset
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def _active_work_dir() -> Path | None:
+    try:
+        import bpy
+        from ..core.work import get_work
+
+        work = get_work(bpy.context)
+        path = str(getattr(work, "work_dir", "") or "") if work is not None else ""
+        return Path(path) if path else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def outline_for_shape(

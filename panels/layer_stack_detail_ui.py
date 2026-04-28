@@ -135,6 +135,8 @@ def _draw_balloon_selected_settings(box, context, entry) -> None:
     settings = box.column(align=True)
     settings.label(text=f"選択中: {entry.id} (フキダシ)")
     settings.prop(entry, "shape")
+    if balloon_shapes.normalize_shape(entry.shape) == "custom":
+        settings.prop(entry, "custom_preset_name")
     row = settings.row(align=True)
     row.prop(entry, "x_mm")
     row.prop(entry, "y_mm")

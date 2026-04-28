@@ -94,6 +94,8 @@ class BNAME_PT_balloons(Panel):
 
         box = layout.box()
         box.prop(entry, "shape")
+        if balloon_shapes.normalize_shape(entry.shape) == "custom":
+            box.prop(entry, "custom_preset_name")
         row = box.row(align=True)
         row.prop(entry, "x_mm")
         row.prop(entry, "y_mm")

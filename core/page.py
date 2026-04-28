@@ -116,11 +116,13 @@ class BNamePageEntry(bpy.types.PropertyGroup):
         name="表示X",
         description="全ページ一覧上での手動移動量 X (mm)",
         default=0.0,
+        update=_on_page_visible_changed,
     )
     offset_y_mm: FloatProperty(  # type: ignore[valid-type]
         name="表示Y",
         description="全ページ一覧上での手動移動量 Y (mm)",
         default=0.0,
+        update=_on_page_visible_changed,
     )
 
     # --- コマ一覧 ---

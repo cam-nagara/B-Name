@@ -42,6 +42,7 @@ def render_to_image(
     font_path_for_index: Callable[[int], str] | None = None,
     color_for_index: Callable[[int], tuple[int, int, int, int]] | None = None,
     bold_for_index: Callable[[int], bool] | None = None,
+    italic_for_index: Callable[[int], bool] | None = None,
     px_per_mm: float,
     origin_xy_px: tuple[float, float] = (0.0, 0.0),
     color: tuple[int, int, int, int] = (0, 0, 0, 255),
@@ -77,3 +78,10 @@ def render_to_image(
         draw.text((x, y_px), g.ch, font=font, **kwargs)
         if bold_for_index is not None and bold_for_index(g.index):
             draw.text((x + max(1, size_px // 28), y_px), g.ch, font=font, **kwargs)
+        if italic_for_index is not None and italic_for_index(g.index):
+            draw.text(
+                (x + max(1, int(round(size_px * 0.055))), y_px - max(1, int(round(size_px * 0.025)))),
+                g.ch,
+                font=font,
+                **kwargs,
+            )

@@ -26,19 +26,13 @@ import bpy
 import gpu
 from gpu_extras.batch import batch_for_shader
 
-try:
-    import gpu.texture as gpu_texture  # type: ignore
-    _HAS_GPU_TEXTURE = True
-except ImportError:  # pragma: no cover - 古い Blender
-    gpu_texture = None  # type: ignore
-    _HAS_GPU_TEXTURE = False
-
 from ..core.mode import MODE_PAGE, MODE_COMA, get_mode
 from ..core.work import get_active_page, get_work
-from ..utils import border_geom, color_space, log, page_browser, text_style, viewport_colors
+from ..utils import border_geom, color_space, log, page_browser, stroke_style, text_style, viewport_colors
 from ..utils.geom import Rect, bleed_rect, mm_to_m
 from . import overlay_balloon
 from . import overlay_effect_line
+from . import overlay_image
 from . import overlay_coma_selection
 from . import overlay_shared
 from . import overlay_text
@@ -249,6 +243,34 @@ def _draw_segments_mm(
     batch.draw(shader)
 
 
+def _draw_styled_segment_mm(
+    p0: tuple[float, float],
+    p1: tuple[float, float],
+    color: tuple[float, float, float, float],
+    width_mm: float,
+    style: str = "solid",
+) -> None:
+    for start, end, width in stroke_style.styled_segments_for_line(p0, p1, width_mm, style):
+        _draw_segments_mm([(start, end)], color, width_mm=width)
+
+
+def _draw_styled_path_mm(
+    pts: list[tuple[float, float]],
+    color: tuple[float, float, float, float],
+    width_mm: float,
+    style: str = "solid",
+    *,
+    closed: bool = True,
+) -> None:
+    for start, end, width in stroke_style.styled_segments_for_path(
+        pts,
+        width_mm,
+        style,
+        closed=closed,
+    ):
+        _draw_segments_mm([(start, end)], color, width_mm=width)
+
+
 def _draw_line_segments(
     segs: list[tuple[tuple[float, float], tuple[float, float]]],
     color: tuple[float, float, float, float],
@@ -380,75 +402,6 @@ def _draw_frame_with_hole(outer: Rect, inner: Rect, color: tuple[float, float, f
 # ---------- draw_handler 本体 ----------
 
 
-def _apply_blend_mode(_mode: str) -> None:
-    """ブレンドモード指定を GPU state に反映する (Phase 1 暫定).
-
-    GPU state API の ``blend_set`` には MULTIPLY 相当が無く、現段階では
-    すべて ALPHA ブレンドにフォールバックする。正確な乗算合成は Phase 6 の
-    書き出しパイプライン (Pillow) で実装する。
-    """
-    gpu.state.blend_set("ALPHA")
-
-
-def _draw_image_layers(scene) -> None:
-    """画像レイヤーを gpu.texture 経由でオーバーレイ描画.
-
-    Blender 4.x では gpu.texture モジュール + IMAGE ビルトインシェーダを
-    使うが、ここでは最も簡単な方法として bpy.types.Image.gl_load() が
-    無い環境を想定し、Blender が自動で管理する Image から
-    gpu.texture.from_image を取得する。
-    """
-    coll = getattr(scene, "bname_image_layers", None)
-    if coll is None or not len(coll):
-        return
-    if not _HAS_GPU_TEXTURE:
-        return
-    shader = gpu.shader.from_builtin("IMAGE")
-    for entry in coll:
-        if not entry.visible or not entry.filepath:
-            continue
-        img = _ensure_bpy_image(entry.filepath)
-        if img is None:
-            continue
-        try:
-            tex = gpu_texture.from_image(img)
-        except Exception:  # noqa: BLE001
-            continue
-        # 矩形 (mm) を Blender unit に変換して頂点を組む
-        x0 = mm_to_m(entry.x_mm)
-        y0 = mm_to_m(entry.y_mm)
-        x1 = mm_to_m(entry.x_mm + entry.width_mm)
-        y1 = mm_to_m(entry.y_mm + entry.height_mm)
-        # flip 対応
-        u0, u1 = (1.0, 0.0) if entry.flip_x else (0.0, 1.0)
-        v0, v1 = (1.0, 0.0) if entry.flip_y else (0.0, 1.0)
-        verts = [(x0, y0, 0.0), (x1, y0, 0.0), (x1, y1, 0.0), (x0, y1, 0.0)]
-        uvs = [(u0, v0), (u1, v0), (u1, v1), (u0, v1)]
-        indices = [(0, 1, 2), (0, 2, 3)]
-        batch = batch_for_shader(
-            shader,
-            "TRIS",
-            {"pos": verts, "texCoord": uvs},
-            indices=indices,
-        )
-        shader.bind()
-        shader.uniform_sampler("image", tex)
-        gpu.state.blend_set("ALPHA")
-        batch.draw(shader)
-
-
-def _ensure_bpy_image(filepath: str):
-    """bpy.data.images に対象画像を読み込み (check_existing でキャッシュ)."""
-    if not filepath:
-        return None
-    try:
-        # check_existing=True は filepath で既存画像を再利用する。basename での
-        # 自前ルックアップは同名異パスで誤判定するので使わない。
-        return bpy.data.images.load(bpy.path.abspath(filepath), check_existing=True)
-    except Exception:  # noqa: BLE001
-        return None
-
-
 def _draw_balloons(page, ox_mm: float = 0.0, oy_mm: float = 0.0) -> None:
     """ページ内のフキダシをオーバーレイ描画する."""
     context = bpy.context
@@ -509,8 +462,24 @@ def _draw_stroke_band_fill(
     batch.draw(shader)
 
 
-def _draw_polyline_loop(pts: list[tuple[float, float]], color, line_width: float = 1.0) -> None:
+def _draw_polyline_loop(
+    pts: list[tuple[float, float]],
+    color,
+    line_width: float = 1.0,
+    *,
+    style: str = "solid",
+    width_mm: float | None = None,
+) -> None:
     if len(pts) < 2:
+        return
+    if str(style or "solid") != "solid" or width_mm is not None:
+        _draw_styled_path_mm(
+            pts,
+            color,
+            max(0.001, float(width_mm if width_mm is not None else line_width * 0.25)),
+            style,
+            closed=True,
+        )
         return
     shader = gpu.shader.from_builtin("UNIFORM_COLOR")
     verts = [(mm_to_m(x), mm_to_m(y), 0.0) for x, y in pts] + [(mm_to_m(pts[0][0]), mm_to_m(pts[0][1]), 0.0)]
@@ -642,10 +611,52 @@ def _draw_text_in_rect(context, rect, entry_or_text, color=(0, 0, 0, 1)) -> None
             pass
         x_px = float(coord.x)
         y_px = float(coord.y)
+        stroke_width_px = 0.0
+        if getattr(entry, "stroke_enabled", False):
+            stroke_width_px = max(1.0, float(getattr(entry, "stroke_width_mm", 0.2)) * max(px_per_mm, 0.1))
+            stroke_color = getattr(entry, "stroke_color", (1.0, 1.0, 1.0, 1.0))
+            try:
+                blf.color(
+                    glyph_font_id,
+                    float(stroke_color[0]),
+                    float(stroke_color[1]),
+                    float(stroke_color[2]),
+                    float(stroke_color[3]),
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            offsets = (
+                (-stroke_width_px, 0.0),
+                (stroke_width_px, 0.0),
+                (0.0, -stroke_width_px),
+                (0.0, stroke_width_px),
+                (-stroke_width_px * 0.707, -stroke_width_px * 0.707),
+                (stroke_width_px * 0.707, -stroke_width_px * 0.707),
+                (-stroke_width_px * 0.707, stroke_width_px * 0.707),
+                (stroke_width_px * 0.707, stroke_width_px * 0.707),
+            )
+            for ox, oy in offsets:
+                blf.position(glyph_font_id, x_px + ox, y_px + oy, 0.0)
+                blf.draw(glyph_font_id, glyph.ch)
         blf.position(glyph_font_id, x_px, y_px, 0.0)
+        try:
+            blf.color(
+                glyph_font_id,
+                float(entry_color[0]),
+                float(entry_color[1]),
+                float(entry_color[2]),
+                float(entry_color[3]),
+            )
+        except Exception:  # noqa: BLE001
+            pass
         blf.draw(glyph_font_id, glyph.ch)
         if text_style.bold_for_index(entry, glyph.index):
             blf.position(glyph_font_id, x_px + max(1.0, size_px * 0.035), y_px, 0.0)
+            blf.draw(glyph_font_id, glyph.ch)
+        if text_style.italic_for_index(entry, glyph.index):
+            # BLF has no shear flag; draw a slight upper-right echo so the
+            # setting has an immediate viewport-visible effect.
+            blf.position(glyph_font_id, x_px + max(1.0, size_px * 0.055), y_px + max(1.0, size_px * 0.025), 0.0)
             blf.draw(glyph_font_id, glyph.ch)
 
 
@@ -727,21 +738,61 @@ def _draw_comas(
             coma_preview_overlay.draw_coma_preview(
                 work, page, entry, ox_mm=ox_mm, oy_mm=oy_mm
             )
-        # 白フチ (枠線の外側) — 矩形のみ簡易対応 (polygon は外接矩形で近似)
+        # 白フチ (枠線の外側)
         wm = entry.white_margin
-        if wm.enabled and wm.width_mm > 0.0:
+        wm_has_visible_width = float(getattr(wm, "width_mm", 0.0)) > 0.0 or any(
+            getattr(edge, "use_override", False)
+            and getattr(edge, "enabled", False)
+            and float(getattr(edge, "width_mm", 0.0)) > 0.0
+            for edge in (wm.edge_bottom, wm.edge_right, wm.edge_top, wm.edge_left)
+        )
+        if wm.enabled and wm_has_visible_width:
             xs = [p[0] for p in poly]
             ys = [p[1] for p in poly]
-            outer = Rect(
-                min(xs) - wm.width_mm, min(ys) - wm.width_mm,
-                (max(xs) - min(xs)) + 2 * wm.width_mm,
-                (max(ys) - min(ys)) + 2 * wm.width_mm,
-            )
-            color = (
+            base_color = (
                 float(wm.color[0]), float(wm.color[1]),
                 float(wm.color[2]), float(wm.color[3]),
             )
-            _draw_rect_fill(outer, color)
+            if entry.shape_type == "rect":
+                rect = Rect(
+                    float(entry.rect_x_mm) + ox_mm,
+                    float(entry.rect_y_mm) + oy_mm,
+                    float(entry.rect_width_mm),
+                    float(entry.rect_height_mm),
+                )
+                widths = [float(wm.width_mm)] * 4
+                enabled = [True] * 4
+                colors = [base_color] * 4
+                edge_overrides = [wm.edge_bottom, wm.edge_right, wm.edge_top, wm.edge_left]
+                for idx, edge in enumerate(edge_overrides):
+                    if getattr(edge, "use_override", False):
+                        widths[idx] = max(0.0, float(getattr(edge, "width_mm", 0.0)))
+                        enabled[idx] = bool(getattr(edge, "enabled", False))
+                        edge_color = getattr(edge, "color", wm.color)
+                        colors[idx] = (
+                            float(edge_color[0]), float(edge_color[1]),
+                            float(edge_color[2]), float(edge_color[3]),
+                        )
+                bottom_w = widths[0] if enabled[0] else 0.0
+                right_w = widths[1] if enabled[1] else 0.0
+                top_w = widths[2] if enabled[2] else 0.0
+                left_w = widths[3] if enabled[3] else 0.0
+                if bottom_w > 0.0:
+                    _draw_rect_fill(Rect(rect.x - left_w, rect.y - bottom_w, rect.width + left_w + right_w, bottom_w), colors[0])
+                if right_w > 0.0:
+                    _draw_rect_fill(Rect(rect.x2, rect.y, right_w, rect.height), colors[1])
+                if top_w > 0.0:
+                    _draw_rect_fill(Rect(rect.x - left_w, rect.y2, rect.width + left_w + right_w, top_w), colors[2])
+                if left_w > 0.0:
+                    _draw_rect_fill(Rect(rect.x - left_w, rect.y, left_w, rect.height), colors[3])
+            else:
+                outer = Rect(
+                    min(xs) - wm.width_mm, min(ys) - wm.width_mm,
+                    (max(xs) - min(xs)) + 2 * wm.width_mm,
+                    (max(ys) - min(ys)) + 2 * wm.width_mm,
+                )
+                inner = Rect(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
+                _draw_frame_with_hole(outer, inner, base_color)
         is_active_coma = (
             bool(active_stem)
             and str(getattr(entry, "coma_id", "") or "") == active_stem
@@ -784,20 +835,34 @@ def _draw_comas(
                     continue
             # edge_styles を index 辞書化
             override_map = {int(s.edge_index): s for s in entry.edge_styles}
+            rect_edge_overrides = []
+            if entry.shape_type == "rect":
+                rect_edge_overrides = [b.edge_bottom, b.edge_right, b.edge_top, b.edge_left]
             n = len(poly)
             for i in range(n):
                 seg = (poly[i], poly[(i + 1) % n])
-                style = override_map.get(i)
-                if style is not None:
+                style_name = getattr(b, "style", "solid")
+                edge_style = override_map.get(i)
+                if edge_style is not None:
                     color = (
-                        float(style.color[0]), float(style.color[1]),
-                        float(style.color[2]), float(style.color[3]),
+                        float(edge_style.color[0]), float(edge_style.color[1]),
+                        float(edge_style.color[2]), float(edge_style.color[3]),
                     )
-                    w = max(0.1, float(style.width_mm))
+                    w = max(0.1, float(edge_style.width_mm))
+                elif i < len(rect_edge_overrides) and getattr(rect_edge_overrides[i], "use_override", False):
+                    edge = rect_edge_overrides[i]
+                    if not getattr(edge, "visible", True):
+                        continue
+                    color = (
+                        float(edge.color[0]), float(edge.color[1]),
+                        float(edge.color[2]), float(edge.color[3]),
+                    )
+                    w = max(0.1, float(edge.width_mm))
+                    style_name = getattr(edge, "style", style_name)
                 else:
                     color = base_color
                     w = base_width
-                _draw_segments_mm([seg], color, width_mm=w)
+                _draw_styled_segment_mm(seg[0], seg[1], color, width_mm=w, style=style_name)
         if is_active_coma:
             segs = [
                 (poly[i], poly[(i + 1) % len(poly)])
@@ -908,7 +973,7 @@ def _draw_page_overlay(
 
     # 画像レイヤー (アクティブページのみ — 全ページ一覧時は負荷とレイヤーの per-scene 制約で省略)
     if mode == MODE_PAGE and draw_image_layers:
-        _draw_image_layers(context.scene)
+        overlay_image.draw_image_layers(context.scene)
 
     # コマ枠 / フキダシ / テキスト。コマ編集モードでは参照表示として描く。
     if mode in (MODE_PAGE, MODE_COMA) and page is not None:

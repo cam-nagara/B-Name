@@ -77,6 +77,7 @@ def draw_balloons(
             float(entry.line_color[3]) * op,
         )
         line_width = max(1.0, float(entry.line_width_mm) * 2.0)
+        line_style = str(getattr(entry, "line_style", "solid") or "solid")
 
         try:
             outline = _balloon_outline_mm(entry, rect)
@@ -91,7 +92,13 @@ def draw_balloons(
         )
 
         draw_polygon_fill(outline, fill)
-        draw_polyline_loop(outline, line, line_width=line_width)
+        draw_polyline_loop(
+            outline,
+            line,
+            line_width=line_width,
+            style=line_style,
+            width_mm=max(0.001, float(getattr(entry, "line_width_mm", 0.6))),
+        )
 
         for tail in getattr(entry, "tails", []):
             _draw_balloon_tail(
@@ -102,6 +109,8 @@ def draw_balloons(
                 line_width,
                 draw_polygon_fill=draw_polygon_fill,
                 draw_polyline_loop=draw_polyline_loop,
+                line_style=line_style,
+                line_width_mm=max(0.001, float(getattr(entry, "line_width_mm", 0.6))),
             )
 
         selected = (
@@ -287,6 +296,8 @@ def _draw_balloon_tail(
     *,
     draw_polygon_fill: DrawPolygonFill,
     draw_polyline_loop: DrawPolylineLoop,
+    line_style: str = "solid",
+    line_width_mm: float = 0.6,
 ) -> None:
     cx = (rect.x + rect.x2) * 0.5
     cy = (rect.y + rect.y2) * 0.5
@@ -328,4 +339,10 @@ def _draw_balloon_tail(
             (base_x - nx * rw, base_y - ny * rw),
         ]
     draw_polygon_fill(pts, fill_color)
-    draw_polyline_loop(pts, line_color, line_width=line_width)
+    draw_polyline_loop(
+        pts,
+        line_color,
+        line_width=line_width,
+        style=line_style,
+        width_mm=max(0.001, float(line_width_mm)),
+    )

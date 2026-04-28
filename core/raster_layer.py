@@ -34,6 +34,20 @@ PARENT_KIND_ITEMS = (
 )
 
 
+def _on_raster_runtime_display_changed(self, context) -> None:
+    try:
+        from ..operators import raster_layer_op
+
+        raster_layer_op.sync_raster_runtime_display(context, self)
+    except Exception:  # noqa: BLE001
+        _logger.exception("raster runtime display update failed")
+        screen = getattr(context, "screen", None) if context is not None else None
+        if screen is not None:
+            for area in screen.areas:
+                if area.type == "VIEW_3D":
+                    area.tag_redraw()
+
+
 class BNameRasterLayer(bpy.types.PropertyGroup):
     id: StringProperty(name="ID", default="")  # type: ignore[valid-type]
     title: StringProperty(name="表示名", default="")  # type: ignore[valid-type]
@@ -57,6 +71,7 @@ class BNameRasterLayer(bpy.types.PropertyGroup):
         default=(0.0, 0.0, 0.0, 1.0),
         min=0.0,
         max=1.0,
+        update=_on_raster_runtime_display_changed,
     )
     opacity: FloatProperty(  # type: ignore[valid-type]
         name="不透明度",
@@ -64,8 +79,9 @@ class BNameRasterLayer(bpy.types.PropertyGroup):
         min=0.0,
         max=1.0,
         subtype="FACTOR",
+        update=_on_raster_runtime_display_changed,
     )
-    visible: BoolProperty(name="表示", default=True)  # type: ignore[valid-type]
+    visible: BoolProperty(name="表示", default=True, update=_on_raster_runtime_display_changed)  # type: ignore[valid-type]
     locked: BoolProperty(name="ロック", default=False)  # type: ignore[valid-type]
     scope: EnumProperty(  # type: ignore[valid-type]
         name="所属",

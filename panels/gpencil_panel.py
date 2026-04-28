@@ -316,7 +316,9 @@ def _draw_stack_page_row(row, item, resolved, index: int, work=None) -> None:
         _select_icon_name(row, index, item.label, _kind_icon(item.kind))
         return
     icon = "DOCUMENTS" if target.spread else "FILE_BLANK"
-    _select_icon_name(row, index, layer_stack_detail_ui.page_layer_name(target, work), icon)
+    label = layer_stack_detail_ui.page_layer_name(target, work)
+    title = str(getattr(target, "title", "") or "").strip()
+    _select_icon_name(row, index, f"{label} {title}" if title else label, icon)
 
 
 def _draw_stack_coma_row(row, controls, item, resolved, index: int) -> None:
@@ -324,7 +326,9 @@ def _draw_stack_coma_row(row, controls, item, resolved, index: int) -> None:
     if target is None:
         _select_icon_name(row, index, item.label, _kind_icon(item.kind))
         return
-    _select_icon_name(row, index, layer_stack_detail_ui.coma_layer_name(target), "MOD_WIREFRAME")
+    label = layer_stack_detail_ui.coma_layer_name(target)
+    title = str(getattr(target, "title", "") or "").strip()
+    _select_icon_name(row, index, f"{label} {title}" if title else label, "MOD_WIREFRAME")
     controls["aux"] = "coma_enter"
 
 

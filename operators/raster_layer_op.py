@@ -172,17 +172,55 @@ def ensure_raster_material(entry, image):
     tex.name = "BName Raster Image"
     tex.image = image
     emission = nodes.new("ShaderNodeEmission")
+    line_color = getattr(entry, "line_color", (0.0, 0.0, 0.0, 1.0))
+    try:
+        emission.inputs["Color"].default_value = (
+            float(line_color[0]),
+            float(line_color[1]),
+            float(line_color[2]),
+            1.0,
+        )
+    except Exception:  # noqa: BLE001
+        pass
     transparent = nodes.new("ShaderNodeBsdfTransparent")
+    alpha_scale = nodes.new("ShaderNodeValue")
+    try:
+        alpha_scale.outputs[0].default_value = (
+            max(0.0, min(1.0, float(getattr(entry, "opacity", 1.0))))
+            * max(0.0, min(1.0, float(line_color[3]) if len(line_color) > 3 else 1.0))
+        )
+    except Exception:  # noqa: BLE001
+        alpha_scale.outputs[0].default_value = 1.0
+    alpha_mul = nodes.new("ShaderNodeMath")
+    alpha_mul.operation = "MULTIPLY"
     mix = nodes.new("ShaderNodeMixShader")
     out = nodes.new("ShaderNodeOutputMaterial")
-    links.new(tex.outputs.get("Color"), emission.inputs.get("Color"))
     if tex.outputs.get("Alpha") is not None:
-        links.new(tex.outputs.get("Alpha"), mix.inputs[0])
+        links.new(tex.outputs.get("Alpha"), alpha_mul.inputs[0])
+        links.new(alpha_scale.outputs[0], alpha_mul.inputs[1])
+        links.new(alpha_mul.outputs[0], mix.inputs[0])
     links.new(transparent.outputs.get("BSDF"), mix.inputs[1])
     links.new(emission.outputs.get("Emission"), mix.inputs[2])
     links.new(mix.outputs.get("Shader"), out.inputs.get("Surface"))
     nodes.active = tex
     return mat
+
+
+def sync_raster_runtime_display(context, entry) -> None:
+    raster_id = str(getattr(entry, "id", "") or "")
+    if not raster_id:
+        return
+    obj = bpy.data.objects.get(raster_plane_name(raster_id))
+    if obj is not None:
+        visible = bool(getattr(entry, "visible", True))
+        obj.hide_viewport = not visible
+        obj.hide_render = not visible
+    image = ensure_raster_image(context, entry, create_missing=False)
+    if obj is not None and image is not None:
+        mat = ensure_raster_material(entry, image)
+        obj.data.materials.clear()
+        obj.data.materials.append(mat)
+    layer_stack_utils.tag_view3d_redraw(context)
 
 
 def _ensure_raster_mesh(work, raster_id: str):

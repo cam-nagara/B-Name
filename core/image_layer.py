@@ -30,6 +30,15 @@ _BLEND_MODE_ITEMS = (
 )
 
 
+def _on_image_layer_changed(_self, context) -> None:
+    screen = getattr(context, "screen", None) if context is not None else None
+    if screen is None:
+        return
+    for area in screen.areas:
+        if area.type == "VIEW_3D":
+            area.tag_redraw()
+
+
 class BNameImageLayer(bpy.types.PropertyGroup):
     id: StringProperty(name="ID", default="")  # type: ignore[valid-type]
     title: StringProperty(name="表示名", default="")  # type: ignore[valid-type]
@@ -38,32 +47,84 @@ class BNameImageLayer(bpy.types.PropertyGroup):
         description="PNG/JPG/TIFF/PSD",
         subtype="FILE_PATH",
         default="",
+        update=_on_image_layer_changed,
     )
     # 配置 (mm)
-    x_mm: FloatProperty(name="X", default=0.0)  # type: ignore[valid-type]
-    y_mm: FloatProperty(name="Y", default=0.0)  # type: ignore[valid-type]
-    width_mm: FloatProperty(name="幅", default=100.0, min=0.1)  # type: ignore[valid-type]
-    height_mm: FloatProperty(name="高さ", default=100.0, min=0.1)  # type: ignore[valid-type]
-    rotation_deg: FloatProperty(name="回転", default=0.0)  # type: ignore[valid-type]
-    flip_x: BoolProperty(name="左右反転", default=False)  # type: ignore[valid-type]
-    flip_y: BoolProperty(name="上下反転", default=False)  # type: ignore[valid-type]
+    x_mm: FloatProperty(name="X", default=0.0, update=_on_image_layer_changed)  # type: ignore[valid-type]
+    y_mm: FloatProperty(name="Y", default=0.0, update=_on_image_layer_changed)  # type: ignore[valid-type]
+    width_mm: FloatProperty(  # type: ignore[valid-type]
+        name="幅",
+        default=100.0,
+        min=0.1,
+        update=_on_image_layer_changed,
+    )
+    height_mm: FloatProperty(  # type: ignore[valid-type]
+        name="高さ",
+        default=100.0,
+        min=0.1,
+        update=_on_image_layer_changed,
+    )
+    rotation_deg: FloatProperty(  # type: ignore[valid-type]
+        name="回転",
+        default=0.0,
+        update=_on_image_layer_changed,
+    )
+    flip_x: BoolProperty(  # type: ignore[valid-type]
+        name="左右反転",
+        default=False,
+        update=_on_image_layer_changed,
+    )
+    flip_y: BoolProperty(  # type: ignore[valid-type]
+        name="上下反転",
+        default=False,
+        update=_on_image_layer_changed,
+    )
 
     # 表示属性
-    visible: BoolProperty(name="表示", default=True)  # type: ignore[valid-type]
+    visible: BoolProperty(name="表示", default=True, update=_on_image_layer_changed)  # type: ignore[valid-type]
     locked: BoolProperty(name="ロック", default=False)  # type: ignore[valid-type]
-    opacity: FloatProperty(name="不透明度", default=1.0, min=0.0, max=1.0, subtype="FACTOR")  # type: ignore[valid-type]
-    blend_mode: EnumProperty(name="ブレンド", items=_BLEND_MODE_ITEMS, default="normal")  # type: ignore[valid-type]
+    opacity: FloatProperty(  # type: ignore[valid-type]
+        name="不透明度",
+        default=1.0,
+        min=0.0,
+        max=1.0,
+        subtype="FACTOR",
+        update=_on_image_layer_changed,
+    )
+    blend_mode: EnumProperty(  # type: ignore[valid-type]
+        name="ブレンド",
+        items=_BLEND_MODE_ITEMS,
+        default="normal",
+        update=_on_image_layer_changed,
+    )
 
     # 簡易レベル補正 (下書き取込用途、計画書 3.1.1)
-    brightness: FloatProperty(name="明度", default=0.0, soft_min=-1.0, soft_max=1.0)  # type: ignore[valid-type]
-    contrast: FloatProperty(name="コントラスト", default=0.0, soft_min=-1.0, soft_max=1.0)  # type: ignore[valid-type]
-    binarize_enabled: BoolProperty(name="2値化", default=False)  # type: ignore[valid-type]
+    brightness: FloatProperty(  # type: ignore[valid-type]
+        name="明度",
+        default=0.0,
+        soft_min=-1.0,
+        soft_max=1.0,
+        update=_on_image_layer_changed,
+    )
+    contrast: FloatProperty(  # type: ignore[valid-type]
+        name="コントラスト",
+        default=0.0,
+        soft_min=-1.0,
+        soft_max=1.0,
+        update=_on_image_layer_changed,
+    )
+    binarize_enabled: BoolProperty(  # type: ignore[valid-type]
+        name="2値化",
+        default=False,
+        update=_on_image_layer_changed,
+    )
     binarize_threshold: FloatProperty(  # type: ignore[valid-type]
         name="2値化しきい値",
         default=0.5,
         min=0.0,
         max=1.0,
         subtype="FACTOR",
+        update=_on_image_layer_changed,
     )
 
     tint_color: FloatVectorProperty(  # type: ignore[valid-type]
@@ -73,6 +134,7 @@ class BNameImageLayer(bpy.types.PropertyGroup):
         default=(1.0, 1.0, 1.0, 1.0),
         min=0.0,
         max=1.0,
+        update=_on_image_layer_changed,
     )
 
 

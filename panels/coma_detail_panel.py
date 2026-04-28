@@ -19,7 +19,8 @@ def _same_coma_entry(left, right) -> bool:
 
 
 def draw_coma_shape_settings(layout, context, entry) -> None:
-    layout.prop(entry, "shape_type")
+    shape_label = "矩形" if entry.shape_type == "rect" else "多角形"
+    layout.label(text=f"形状: {shape_label}")
     if entry.shape_type == "rect":
         row = layout.row(align=True)
         row.prop(entry, "rect_x_mm")
@@ -46,7 +47,6 @@ def draw_coma_shape_settings(layout, context, entry) -> None:
     if object_selection.selected_coma_count(context) >= 2:
         layout.operator("bname.coma_merge_selected", text="コマ結合", icon="AUTOMERGE_ON")
 
-    layout.prop(entry, "overlap_clipping")
     layout.prop(entry, "background_color")
     row = layout.row(align=True)
     row.prop(entry, "coma_gap_vertical_mm", text="上下 (個別)")
