@@ -52,6 +52,10 @@ def has_psd_tools() -> bool:
     return export_psd.has_psd_tools()
 
 
+def can_write_layered_psd() -> bool:
+    return export_psd.can_write_layered_psd()
+
+
 @dataclass(frozen=True)
 class ExportOptions:
     color_mode: str = "rgb"  # "rgb" | "monochrome" | "grayscale" | "cmyk"
@@ -1471,8 +1475,8 @@ def merge_pdf(page_image_paths: list[Path], out_path: Path) -> bool:
 def save_page_as_psd(work, page, options: ExportOptions, out_path: Path) -> bool:
     if not _HAS_PIL:
         raise RuntimeError("Pillow が利用できません")
-    if not export_psd.has_psd_tools():
-        raise RuntimeError("psd-tools が未同梱のため PSD レイヤー出力できません")
+    if not export_psd.can_write_layered_psd():
+        raise RuntimeError("PSD レイヤー出力を利用できません")
     if options.color_mode == "cmyk":
         raise RuntimeError("PSD レイヤー出力での CMYK は未対応です")
     layers = build_page_layers(work, page, options)
