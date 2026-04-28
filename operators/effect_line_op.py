@@ -12,7 +12,7 @@ from bpy.types import Operator
 
 from ..core.mode import MODE_COMA, get_mode
 from ..core.work import get_active_page, get_work
-from ..utils import detail_popup, layer_hierarchy, log, object_selection
+from ..utils import layer_hierarchy, log, object_selection
 from ..utils.geom import m_to_mm
 from ..utils import layer_stack as layer_stack_utils
 from . import coma_modal_state, effect_line_link_op, selection_context_menu, view_event_region
@@ -948,18 +948,14 @@ class BNAME_OT_effect_line_tool(Operator):
         obj, layer = self._drag_target(context)
         moved = bool(getattr(self, "_drag_moved", False))
         action = self._drag_action
-        show_detail = False
         if action == "create" and not moved:
             _delete_effect_layer(context, obj, layer)
         elif moved:
             self._push_undo_step("B-Name: 効果線編集")
             layer_stack_utils.sync_layer_stack_after_data_change(context)
         else:
-            show_detail = action != "create" and obj is not None and layer is not None
             layer_stack_utils.tag_view3d_redraw(context)
         self._clear_drag_state()
-        if show_detail:
-            detail_popup.open_active_detail_deferred(context)
 
     def _cancel_drag(self, context) -> None:
         obj, layer = self._drag_target(context)

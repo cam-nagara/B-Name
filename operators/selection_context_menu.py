@@ -23,8 +23,9 @@ def open_for_object_tool(op, context, event) -> bool:
     if not view_event_region.is_view3d_window_event(context, event):
         return False
     hit = op._hit_object(context, event)
-    if hit is not None:
-        op._activate_hit(context, hit, mode="single")
+    if hit is None:
+        return False
+    op._activate_hit(context, hit, mode="single")
     return _call_selection_menu(context)
 
 
@@ -36,7 +37,8 @@ def open_for_balloon_tool(context, event) -> bool:
         hit_index, hit_entry, _hit_part = balloon_op._hit_balloon_entry(page, lx, ly)
         if hit_entry is not None and hit_index >= 0:
             balloon_op._select_balloon_index(context, work, page, hit_index, mode="single")
-    return _call_selection_menu(context)
+            return _call_selection_menu(context)
+    return False
 
 
 def open_for_text_tool(context, event) -> bool:
@@ -52,7 +54,8 @@ def open_for_text_tool(context, event) -> bool:
             object_selection.text_key(page, hit_entry),
             mode="single",
         )
-    return _call_selection_menu(context)
+        return _call_selection_menu(context)
+    return False
 
 
 def open_for_effect_tool(context, event) -> bool:
@@ -68,7 +71,8 @@ def open_for_effect_tool(context, event) -> bool:
                 object_selection.effect_key(layer),
                 mode="single",
             )
-    return _call_selection_menu(context)
+            return _call_selection_menu(context)
+    return False
 
 
 def open_for_coma_edge_tool(op, context, event) -> bool:
@@ -86,6 +90,5 @@ def open_for_coma_edge_tool(op, context, event) -> bool:
             object_selection.coma_key(page, panel),
             mode="single",
         )
-    elif op._selection is not None:
-        op._update_wm_selection(context)
-    return _call_selection_menu(context)
+        return _call_selection_menu(context)
+    return False

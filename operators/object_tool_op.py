@@ -7,7 +7,7 @@ from bpy.props import StringProperty
 from bpy.types import Operator
 
 from ..core.work import get_work
-from ..utils import detail_popup, edge_selection, layer_stack as layer_stack_utils, object_selection
+from ..utils import edge_selection, layer_stack as layer_stack_utils, object_selection
 from . import (
     balloon_op,
     effect_line_op,
@@ -631,10 +631,8 @@ class BNAME_OT_object_tool(Operator):
                     pass
             if not layer_session:
                 layer_stack_utils.sync_layer_stack_after_data_change(context, align_coma_order=True)
-        elif edge_session and not moved:
-            detail_popup.open_active_detail_deferred(context)
-        elif not layer_session and self._drag_action != "coma_edge":
-            detail_popup.open_active_detail_deferred(context)
+        elif not layer_session:
+            layer_stack_utils.tag_view3d_redraw(context)
         self._clear_drag_state()
 
     def _cancel_drag(self, context) -> None:

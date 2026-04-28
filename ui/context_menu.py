@@ -1,9 +1,4 @@
-"""カスタム右クリックコンテキストメニュー (計画書 3.4.5 / 8.13).
-
-3D View のオブジェクト右クリックメニューに B-Name サブメニューを
-追加し、「リンク元を開く」「リンクを記録」オペレータを呼び出せるように
-する。
-"""
+"""カスタム右クリックコンテキストメニュー (計画書 3.4.5 / 8.13)."""
 
 from __future__ import annotations
 
@@ -22,20 +17,35 @@ def _has_active_stack_item(context) -> bool:
     return bool(_active_stack_kind(context))
 
 
+def _active_stack_index(context) -> int:
+    return int(getattr(context.scene, "bname_active_layer_stack_index", -1))
+
+
+def _draw_selection_commands(layout, context) -> None:
+    enabled = _has_active_stack_item(context)
+    active_index = _active_stack_index(context)
+    column = layout.column()
+    column.enabled = enabled
+    detail_row = column.row()
+    detail_row.operator_context = "INVOKE_DEFAULT"
+    detail = detail_row.operator("bname.layer_stack_detail", text="詳細設定", icon="PREFERENCES")
+    detail.index = active_index
+    detail.preserve_edge_selection = True
+
+    column.operator("bname.layer_stack_duplicate", text="複製", icon="DUPLICATE")
+    column.operator("bname.effect_line_create_linked", text="リンク複製", icon="LINKED")
+
+    delete_row = column.row()
+    delete_row.operator_context = "INVOKE_DEFAULT"
+    delete_row.operator("bname.layer_stack_delete", text="削除", icon="TRASH")
+
+
 class BNAME_MT_selection_context(Menu):
     bl_idname = "BNAME_MT_selection_context"
     bl_label = "B-Name"
 
     def draw(self, context):
-        layout = self.layout
-        enabled = _has_active_stack_item(context)
-        column = layout.column()
-        column.enabled = enabled
-        column.operator("bname.layer_stack_duplicate", text="複製", icon="DUPLICATE")
-        column.operator("bname.layer_stack_delete", text="削除", icon="TRASH")
-        if _active_stack_kind(context) == "effect":
-            layout.separator()
-            layout.operator("bname.effect_line_create_linked", text="リンク効果線を作成", icon="LINKED")
+        _draw_selection_commands(self.layout, context)
 
 
 def open_selection_context_menu() -> bool:
@@ -52,7 +62,7 @@ class BNAME_MT_object_context(Menu):
 
     def draw(self, context):
         layout = self.layout
-        layout.menu(BNAME_MT_selection_context.bl_idname, icon="RESTRICT_SELECT_OFF")
+        _draw_selection_commands(layout, context)
         layout.separator()
         layout.operator("bname.open_link_source", icon="FILE_BLEND")
         layout.operator("bname.record_asset_link", icon="LINKED")

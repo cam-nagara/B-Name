@@ -730,13 +730,6 @@ class BNAME_OT_coma_knife_cut(Operator):
             moved = bool(getattr(self, "_edge_drag_moved", False))
             self._edge_drag = None
             self._edge_drag_moved = False
-            if not changed and not moved:
-                try:
-                    from ..utils import detail_popup
-
-                    detail_popup.open_active_detail_deferred(context)
-                except Exception:  # noqa: BLE001
-                    pass
             return {"RUNNING_MODAL"}
         if event.type in {"ESC", "RIGHTMOUSE"} and event.value == "PRESS":
             self._edge_drag.cancel()

@@ -28,7 +28,6 @@ from ..io import page_io, coma_io
 from . import coma_modal_state, selection_context_menu, view_event_region
 from ..utils import (
     edge_selection,
-    detail_popup,
     geom,
     log,
     page_browser,
@@ -724,8 +723,6 @@ class BNAME_OT_coma_edge_move(Operator):
         # シングル/ダブルクリック判定用
         self._last_press_time = 0.0
         self._last_press_edge: Optional[tuple[int, int, int]] = None
-        self._detail_popup_token = 0
-        self._pending_detail_popup = False
 
         self._draw_handler = bpy.types.SpaceView3D.draw_handler_add(
             _draw_callback, (self,), "WINDOW", "POST_PIXEL"
@@ -811,21 +808,6 @@ class BNAME_OT_coma_edge_move(Operator):
     def _tag_redraw(self) -> None:
         if self._region is not None:
             self._region.tag_redraw()
-
-    def _schedule_detail_popup(self, context, *, delay: float = 0.01) -> None:
-        self._detail_popup_token = int(getattr(self, "_detail_popup_token", 0)) + 1
-        token = self._detail_popup_token
-        selection = dict(self._selection) if self._selection is not None else None
-
-        def _still_current() -> bool:
-            return (
-                int(getattr(self, "_detail_popup_token", -1)) == token
-                and not bool(getattr(self, "_dragging", False))
-                and not bool(getattr(self, "_externally_finished", False))
-                and self._selection == selection
-            )
-
-        detail_popup.open_active_detail_deferred_if(context, _still_current, delay=delay)
 
     def _cleanup(self, context=None) -> None:
         if getattr(self, "_cursor_modal_set", False):
@@ -946,8 +928,6 @@ class BNAME_OT_coma_edge_move(Operator):
 
         if event.type == "LEFTMOUSE":
             if event.value == "PRESS":
-                self._detail_popup_token = int(getattr(self, "_detail_popup_token", 0)) + 1
-                self._pending_detail_popup = False
                 if self._is_over_navigation_gizmo(event):
                     self._navigation_drag_passthrough = True
                     return {"PASS_THROUGH"}
@@ -1002,7 +982,6 @@ class BNAME_OT_coma_edge_move(Operator):
                             object_selection.coma_key(page_for_hit, panel_for_hit),
                             mode=mode,
                         )
-                        self._pending_detail_popup = False
                         self._update_wm_selection(context)
                         self._tag_redraw()
                         return {"RUNNING_MODAL"}
@@ -1021,7 +1000,6 @@ class BNAME_OT_coma_edge_move(Operator):
                         self._dragging = False
                         self._last_press_time = 0.0
                         self._last_press_edge = None
-                        self._pending_detail_popup = True
                         object_selection.select_key(
                             context,
                             object_selection.coma_key(page_for_hit, panel_for_hit),
@@ -1070,10 +1048,7 @@ class BNAME_OT_coma_edge_move(Operator):
                 if not self._dragging and not self._is_inside_region(event):
                     return {"PASS_THROUGH"}
                 if not self._dragging:
-                    if bool(getattr(self, "_pending_detail_popup", False)):
-                        self._pending_detail_popup = False
-                        self._schedule_detail_popup(context)
-                        self._tag_redraw()
+                    self._tag_redraw()
                     return {"RUNNING_MODAL"}
                 if self._dragging:
                     changed = self._geometry_changed()
@@ -1085,10 +1060,7 @@ class BNAME_OT_coma_edge_move(Operator):
                         self._save_changes()
                         self._push_undo_step("B-Name: 枠線移動")
                     elif not moved:
-                        delay = DOUBLE_CLICK_INTERVAL + 0.05
-                        if self._selection is not None and self._selection.get("type") == "vertex":
-                            delay = 0.01
-                        self._schedule_detail_popup(context, delay=delay)
+                        self._tag_redraw()
                     self._tag_redraw()
                 return {"RUNNING_MODAL"}
 

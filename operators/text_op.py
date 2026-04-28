@@ -17,7 +17,7 @@ from bpy.types import Operator
 
 from ..core.mode import MODE_COMA, get_mode
 from ..core.work import get_active_page, get_work
-from ..utils import detail_popup, layer_stack as layer_stack_utils, log, object_selection, page_range, text_style
+from ..utils import layer_stack as layer_stack_utils, log, object_selection, page_range, text_style
 from ..utils.layer_hierarchy import page_stack_key
 from . import coma_modal_state, selection_context_menu, text_edit_runtime, view_event_region
 
@@ -988,7 +988,6 @@ class BNAME_OT_text_tool(Operator):
             return {"RUNNING_MODAL"}
         if event.type == "LEFTMOUSE" and event.value == "RELEASE":
             moved = bool(getattr(self, "_drag_moved", False))
-            action = str(getattr(self, "_drag_action", "") or "")
             self._clear_drag_state()
             if moved:
                 self._clear_click_state()
@@ -996,27 +995,6 @@ class BNAME_OT_text_tool(Operator):
                 layer_stack_utils.sync_layer_stack_after_data_change(context)
             else:
                 layer_stack_utils.tag_view3d_redraw(context)
-                if action and action != "move":
-                    detail_popup.open_active_detail_deferred(context)
-                elif action == "move":
-                    click_time = float(getattr(self, "_last_click_time", 0.0) or 0.0)
-                    click_page_id = str(getattr(self, "_last_click_page_id", "") or "")
-                    click_text_id = str(getattr(self, "_last_click_text_id", "") or "")
-
-                    def _still_single_click() -> bool:
-                        return (
-                            not bool(getattr(self, "_editing", False))
-                            and not bool(getattr(self, "_dragging", False))
-                            and float(getattr(self, "_last_click_time", 0.0) or 0.0) == click_time
-                            and str(getattr(self, "_last_click_page_id", "") or "") == click_page_id
-                            and str(getattr(self, "_last_click_text_id", "") or "") == click_text_id
-                        )
-
-                    detail_popup.open_active_detail_deferred_if(
-                        context,
-                        _still_single_click,
-                        delay=_TEXT_DOUBLE_CLICK_SECONDS + 0.05,
-                    )
             return {"RUNNING_MODAL"}
         if event.type in {"ESC", "RIGHTMOUSE"} and event.value == "PRESS":
             self._cancel_text_drag(context)
