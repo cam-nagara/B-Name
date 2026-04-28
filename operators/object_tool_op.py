@@ -17,6 +17,7 @@ from . import (
     coma_edge_move_op,
     coma_modal_state,
     coma_picker,
+    selection_context_menu,
     text_op,
     view_event_region,
 )
@@ -160,7 +161,12 @@ class BNAME_OT_object_tool(Operator):
             return {"FINISHED", "PASS_THROUGH"}
         if getattr(self, "_dragging", False):
             return self._modal_dragging(context, event)
-        if event.type in {"ESC", "RIGHTMOUSE"} and event.value == "PRESS":
+        if event.type == "RIGHTMOUSE" and event.value == "PRESS":
+            if selection_context_menu.open_for_object_tool(self, context, event):
+                return {"RUNNING_MODAL"}
+            self.finish_from_external(context, keep_selection=True)
+            return {"FINISHED"}
+        if event.type == "ESC" and event.value == "PRESS":
             self.finish_from_external(context, keep_selection=True)
             return {"FINISHED"}
         if event.value == "PRESS" and event.type in {"P", "F", "G", "K", "T"} and not event.ctrl and not event.alt:

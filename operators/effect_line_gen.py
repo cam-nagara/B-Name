@@ -27,6 +27,8 @@ class EffectLineStroke:
     cyclic: bool = False
     radii: list[float] | None = None
     role: str = "line"
+    curve_type: str = "POLY"
+    bezier_smooth: bool = False
 
 
 def _jitter(base: float, amount: float, rng: random.Random) -> float:
@@ -107,6 +109,19 @@ def _shape_outline(
         cloud_sub_height_ratio=float(getattr(params, f"{prefix}_cloud_sub_height_ratio", 0.0)),
     )
     return _rotate_points(points, center_xy_mm, getattr(params, "rotation_deg", 0.0))
+
+
+def _shape_guide_uses_smooth_bezier(params, prefix: str, *, frame_outline: bool = False) -> bool:
+    if frame_outline:
+        return False
+    shape = str(getattr(params, f"{prefix}_shape", getattr(params, "base_shape", "rect")) or "rect")
+    if shape in {"polygon", "octagon", "diamond", "hexagon", "star", "thorn", "spike_straight"}:
+        return False
+    if shape == "rect":
+        return bool(getattr(params, f"{prefix}_rounded_corner_enabled", False)) and (
+            float(getattr(params, f"{prefix}_rounded_corner_radius_mm", 0.0)) > 0.0
+        )
+    return shape in {"ellipse", "cloud", "fluffy", "thorn-curve", "spike_curve", "pill"}
 
 
 def _cross(ax: float, ay: float, bx: float, by: float) -> float:
@@ -456,12 +471,14 @@ def generate_shape_guide_strokes(
     if start_outline_mm is None:
         start_rect = _scaled_rect(cx, cy, rx, ry, 2.0)
         start_outline = _shape_outline(params, "start", start_rect, center_xy_mm)
+        start_smooth = _shape_guide_uses_smooth_bezier(params, "start")
     else:
         start_outline = _actual_outline_by_rays(
             center_xy_mm,
             start_outline_mm,
             extend_mm=max(0.0, float(start_extend_mm)),
         )
+        start_smooth = _shape_guide_uses_smooth_bezier(params, "start", frame_outline=True)
     radius = mm_to_m(max(0.05, min(0.25, float(getattr(params, "brush_size_mm", 0.4)) * 0.4)) / 2.0)
     guides: list[EffectLineStroke] = []
     if len(start_outline) >= 2:
@@ -471,6 +488,8 @@ def generate_shape_guide_strokes(
                 radius=radius,
                 cyclic=True,
                 role="start_guide",
+                curve_type="BEZIER",
+                bezier_smooth=start_smooth,
             )
         )
     if len(end_outline) >= 2:
@@ -480,6 +499,8 @@ def generate_shape_guide_strokes(
                 radius=radius,
                 cyclic=True,
                 role="end_guide",
+                curve_type="BEZIER",
+                bezier_smooth=_shape_guide_uses_smooth_bezier(params, "end"),
             )
         )
     return guides

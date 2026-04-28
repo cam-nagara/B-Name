@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import json
-
 import bpy
 from bpy.types import Operator
 
@@ -16,7 +15,7 @@ from ..core.work import get_active_page, get_work
 from ..utils import detail_popup, layer_hierarchy, log, object_selection
 from ..utils.geom import m_to_mm
 from ..utils import layer_stack as layer_stack_utils
-from . import coma_modal_state, view_event_region
+from . import coma_modal_state, effect_line_link_op, selection_context_menu, view_event_region
 
 _logger = log.get_logger(__name__)
 
@@ -349,7 +348,7 @@ def _apply_material_settings(obj, layer, params) -> int:
     return _material_slot_index(obj, mat)
 
 
-def copy_layer_effect_meta(obj, source_layer, dest_layer) -> None:
+def copy_layer_effect_meta(obj, source_layer, dest_layer, *, include_link: bool = False) -> None:
     """効果線レイヤー複製時に描画範囲・詳細設定メタデータを引き継ぐ。"""
     if obj is None or source_layer is None or dest_layer is None:
         return
@@ -362,9 +361,12 @@ def copy_layer_effect_meta(obj, source_layer, dest_layer) -> None:
     if not isinstance(source, dict):
         return
     try:
-        meta[dest_key] = json.loads(json.dumps(source, ensure_ascii=False))
+        copied = json.loads(json.dumps(source, ensure_ascii=False))
     except Exception:  # noqa: BLE001
-        meta[dest_key] = dict(source)
+        copied = dict(source)
+    if not include_link:
+        copied.pop(effect_line_link_op.LINK_ID_PROP, None)
+    meta[dest_key] = copied
     _write_effect_meta(obj, meta)
 
 
@@ -418,6 +420,7 @@ def _write_effect_strokes(
     *,
     seed: int | None = None,
     params_override=None,
+    propagate_link: bool = True,
 ) -> int:
     from ..utils import gpencil
     from ..core import effect_line
@@ -472,6 +475,8 @@ def _write_effect_strokes(
             radii=getattr(stroke, "radii", None),
             cyclic=stroke.cyclic,
             material_index=line_material_index,
+            curve_type=getattr(stroke, "curve_type", "POLY"),
+            bezier_smooth=bool(getattr(stroke, "bezier_smooth", False)),
         ):
             line_added += 1
     for stroke in guide_strokes:
@@ -483,15 +488,26 @@ def _write_effect_strokes(
             radii=getattr(stroke, "radii", None),
             cyclic=stroke.cyclic,
             material_index=material_index,
+            curve_type=getattr(stroke, "curve_type", "POLY"),
+            bezier_smooth=bool(getattr(stroke, "bezier_smooth", False)),
         )
     gpencil.ensure_layer_material(obj, layer, activate=True, assign_existing=False)
+    params_data = effect_line.effect_params_to_dict(params)
     _set_layer_bounds(
         obj,
         layer,
         (float(x), float(y), w, h),
         seed=seed_value,
-        params_data=effect_line.effect_params_to_dict(params),
+        params_data=params_data,
     )
+    if propagate_link:
+        effect_line_link_op.propagate_linked_effect_strokes(
+            context,
+            obj,
+            layer,
+            (float(x), float(y), w, h),
+            params_data,
+        )
     return line_added
 
 
@@ -704,7 +720,12 @@ class BNAME_OT_effect_line_tool(Operator):
             return self._modal_dragging(context, event)
         if not _event_in_view3d_window(context, event):
             return {"PASS_THROUGH"}
-        if event.type in {"ESC", "RIGHTMOUSE"} and event.value == "PRESS":
+        if event.type == "RIGHTMOUSE" and event.value == "PRESS":
+            if selection_context_menu.open_for_effect_tool(context, event):
+                return {"RUNNING_MODAL"}
+            self.finish_from_external(context, keep_selection=True)
+            return {"FINISHED"}
+        if event.type == "ESC" and event.value == "PRESS":
             self.finish_from_external(context, keep_selection=True)
             return {"FINISHED"}
         if self._should_leave_for_tool_key(event):
@@ -910,7 +931,10 @@ class BNAME_OT_effect_line_tool(Operator):
         coma_modal_state.clear_active("effect_line_tool", self, context)
 
 
-_CLASSES = (BNAME_OT_effect_line_generate, BNAME_OT_effect_line_tool)
+_CLASSES = (
+    BNAME_OT_effect_line_generate,
+    BNAME_OT_effect_line_tool,
+)
 
 
 def register() -> None:

@@ -17,6 +17,7 @@ Phase 2 以降は「ページごとに 1 つの GP オブジェクト」モデ�
 
 from __future__ import annotations
 
+import math
 from typing import Iterable
 
 import bpy
@@ -775,6 +776,8 @@ def add_stroke_to_drawing(
     radii: Iterable[float] | None = None,
     cyclic: bool = False,
     material_index: int | None = None,
+    curve_type: str = "POLY",
+    bezier_smooth: bool = False,
 ) -> bool:
     """GreasePencilDrawing に 1 ストロークを追加.
 
@@ -794,19 +797,14 @@ def add_stroke_to_drawing(
         else:
             stroke = strokes[0]
         stroke.cyclic = cyclic
-        if material_index is not None:
-            try:
-                mat_index = int(material_index)
-                if mat_index >= 0:
-                    stroke.material_index = mat_index
-            except Exception:  # noqa: BLE001
-                pass
+        _apply_stroke_material(stroke, material_index)
         if hasattr(stroke, "points") and len(stroke.points) >= len(pts):
             for i, (x, y, z) in enumerate(pts):
                 point = stroke.points[i]
                 point.position = (x, y, z)
                 if hasattr(point, "radius"):
                     point.radius = point_radii[i] if i < len(point_radii) else radius
+            _set_stroke_curve_type(drawing, start_index, stroke, pts, cyclic, curve_type, bezier_smooth)
             return True
         pos_attr = drawing.attributes.get("position")
         if pos_attr is None:
@@ -818,17 +816,87 @@ def add_stroke_to_drawing(
         if rad_attr is not None:
             for i in range(len(pts)):
                 rad_attr.data[offset + i].value = point_radii[i] if i < len(point_radii) else radius
-        if material_index is not None:
-            try:
-                mat_index = int(material_index)
-                if mat_index >= 0:
-                    stroke.material_index = mat_index
-            except Exception:  # noqa: BLE001
-                pass
+        _apply_stroke_material(stroke, material_index)
+        _set_stroke_curve_type(drawing, start_index, stroke, pts, cyclic, curve_type, bezier_smooth)
         return True
     except Exception as exc:  # noqa: BLE001
         _logger.warning("add_stroke_to_drawing failed: %s", exc)
         return False
+
+
+def _apply_stroke_material(stroke, material_index: int | None) -> None:
+    if material_index is None:
+        return
+    try:
+        mat_index = int(material_index)
+        if mat_index >= 0:
+            stroke.material_index = mat_index
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _set_stroke_curve_type(
+    drawing,
+    stroke_index: int,
+    stroke,
+    pts: list[tuple[float, float, float]],
+    cyclic: bool,
+    curve_type: str,
+    bezier_smooth: bool,
+) -> None:
+    if str(curve_type or "").upper() != "BEZIER":
+        return
+    try:
+        drawing.set_types(type="BEZIER", indices=(int(stroke_index),))
+    except Exception:  # noqa: BLE001
+        return
+    _set_bezier_handles(stroke, pts, cyclic, smooth=bezier_smooth)
+
+
+def _set_bezier_handles(
+    stroke,
+    pts: list[tuple[float, float, float]],
+    cyclic: bool,
+    *,
+    smooth: bool,
+) -> None:
+    points = getattr(stroke, "points", None)
+    if points is None or len(points) < 2:
+        return
+    count = min(len(points), len(pts))
+    for i in range(count):
+        left = getattr(points[i], "handle_left", None)
+        right = getattr(points[i], "handle_right", None)
+        if left is None or right is None:
+            continue
+        prev_i = (i - 1) % count if cyclic else max(0, i - 1)
+        next_i = (i + 1) % count if cyclic else min(count - 1, i + 1)
+        p = pts[i]
+        prev_p = pts[prev_i]
+        next_p = pts[next_i]
+        tangent = (next_p[0] - prev_p[0], next_p[1] - prev_p[1], next_p[2] - prev_p[2])
+        if not smooth:
+            tangent = (0.0, 0.0, 0.0)
+        elif not cyclic and (i == 0 or i == count - 1):
+            length = math.sqrt(sum(component * component for component in tangent))
+            scale = 0.0 if length <= 1.0e-12 else 1.0 / 3.0
+        else:
+            scale = 1.0 / 6.0
+        if not smooth:
+            scale = 0.0
+        try:
+            left.position = (
+                p[0] - tangent[0] * scale,
+                p[1] - tangent[1] * scale,
+                p[2] - tangent[2] * scale,
+            )
+            right.position = (
+                p[0] + tangent[0] * scale,
+                p[1] + tangent[1] * scale,
+                p[2] + tangent[2] * scale,
+            )
+        except Exception:  # noqa: BLE001
+            continue
 
 
 def ensure_active_frame(layer, frame_number: int | None = None):

@@ -25,7 +25,7 @@ from gpu_extras.batch import batch_for_shader
 
 from ..core.work import get_work
 from ..io import page_io, coma_io
-from . import coma_modal_state, view_event_region
+from . import coma_modal_state, selection_context_menu, view_event_region
 from ..utils import (
     edge_selection,
     detail_popup,
@@ -1113,6 +1113,8 @@ class BNAME_OT_coma_edge_move(Operator):
         if event.type == "RIGHTMOUSE" and event.value == "PRESS":
             if not self._is_inside_region(event):
                 return {"PASS_THROUGH"}
+            if not self._dragging and selection_context_menu.open_for_coma_edge_tool(self, context, event):
+                return {"RUNNING_MODAL"}
             self.finish_from_external(context, keep_selection=True)
             self.report({"INFO"}, "枠線選択ツール終了")
             return {"FINISHED"}

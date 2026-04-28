@@ -20,7 +20,7 @@ from ..core.work import get_active_page, get_work
 from ..io import balloon_presets
 from ..utils import detail_popup, layer_stack as layer_stack_utils, log, object_selection
 from ..utils.layer_hierarchy import page_stack_key
-from . import coma_modal_state, view_event_region
+from . import coma_modal_state, selection_context_menu, view_event_region
 
 _logger = log.get_logger(__name__)
 
@@ -653,7 +653,12 @@ class BNAME_OT_balloon_tool(Operator):
             return self._modal_dragging(context, event)
         if not _event_in_view3d_window(context, event):
             return {"PASS_THROUGH"}
-        if event.type in {"ESC", "RIGHTMOUSE"} and event.value == "PRESS":
+        if event.type == "RIGHTMOUSE" and event.value == "PRESS":
+            if selection_context_menu.open_for_balloon_tool(context, event):
+                return {"RUNNING_MODAL"}
+            self.finish_from_external(context, keep_selection=True)
+            return {"FINISHED"}
+        if event.type == "ESC" and event.value == "PRESS":
             self.finish_from_external(context, keep_selection=True)
             return {"FINISHED"}
         if self._should_leave_for_tool_key(event):

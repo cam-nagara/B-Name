@@ -19,7 +19,7 @@ from ..core.mode import MODE_COMA, get_mode
 from ..core.work import get_active_page, get_work
 from ..utils import detail_popup, layer_stack as layer_stack_utils, log, object_selection, page_range, text_style
 from ..utils.layer_hierarchy import page_stack_key
-from . import coma_modal_state, text_edit_runtime, view_event_region
+from . import coma_modal_state, selection_context_menu, text_edit_runtime, view_event_region
 
 _logger = log.get_logger(__name__)
 
@@ -658,7 +658,12 @@ class BNAME_OT_text_tool(Operator):
             if event.type == "LEFTMOUSE" and event.value == "PRESS":
                 self._clear_click_state()
             return {"PASS_THROUGH"}
-        if event.type in {"ESC", "RIGHTMOUSE"} and event.value == "PRESS":
+        if event.type == "RIGHTMOUSE" and event.value == "PRESS":
+            if selection_context_menu.open_for_text_tool(context, event):
+                return {"RUNNING_MODAL"}
+            self.finish_from_external(context, keep_selection=True)
+            return {"FINISHED"}
+        if event.type == "ESC" and event.value == "PRESS":
             self.finish_from_external(context, keep_selection=True)
             return {"FINISHED"}
         if event.type == "T" and event.value == "PRESS" and not event.ctrl and not event.alt:
