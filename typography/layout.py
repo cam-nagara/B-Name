@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..utils import text_style
 from ..utils.geom import q_to_pt
 from . import metrics
 
@@ -50,6 +51,7 @@ def typeset_vertical(
     font_size_pt: float = 9.0,
     line_height: float = 1.4,
     letter_spacing: float = 0.0,
+    font_size_pt_for_index=None,
 ) -> TypesetResult:
     """縦書きで文字を配置.
 
@@ -59,48 +61,58 @@ def typeset_vertical(
     - 禁則処理 (行頭/行末) は簡易版
     """
     placements: list[GlyphPlacement] = []
-    em_mm = _mm_per_em_at(font_size_pt)
-    line_pitch_mm = em_mm * line_height
-    char_pitch_mm = em_mm * (1.0 + letter_spacing)
+    base_em_mm = _mm_per_em_at(font_size_pt)
+    line_pitch_mm = base_em_mm * line_height
 
     # 右上から始まる: 1 行目 = 右端列
     col_index = 0
-    row_index = 0
+    y_cursor = region_y_mm + region_height_mm
     overflow = False
 
     for text_index, ch in enumerate(text):
         if ch == "\n":
             col_index += 1
-            row_index = 0
+            y_cursor = region_y_mm + region_height_mm
             continue
+        glyph_size_pt = (
+            float(font_size_pt_for_index(text_index))
+            if font_size_pt_for_index is not None
+            else font_size_pt
+        )
+        em_mm = _mm_per_em_at(glyph_size_pt)
+        char_pitch_mm = em_mm * (1.0 + letter_spacing)
         # 現在の列 X 座標 (右端から左へ)
         x = region_x_mm + region_width_mm - em_mm / 2.0 - col_index * line_pitch_mm
         # 現在の行 Y 座標 (上端から下へ)
-        y = region_y_mm + region_height_mm - em_mm - row_index * char_pitch_mm
+        y = y_cursor - em_mm
 
         if x < region_x_mm:
             overflow = True
             break
         if y < region_y_mm:
             col_index += 1
-            row_index = 0
-            continue
+            y_cursor = region_y_mm + region_height_mm
+            x = region_x_mm + region_width_mm - em_mm / 2.0 - col_index * line_pitch_mm
+            y = y_cursor - em_mm
+            if x < region_x_mm:
+                overflow = True
+                break
 
         # 禁則処理: 行頭に禁則文字が来たら前の行末にぶら下げて追加 (簡易版)。
         # 新しい行の 1 文字目になるのを避け、前行の最終文字のさらに 1 段下に置く。
-        if row_index == 0 and metrics.is_kinsoku_start(ch) and placements:
+        if y_cursor == region_y_mm + region_height_mm and metrics.is_kinsoku_start(ch) and placements:
             prev = placements[-1]
             placements.append(
                 GlyphPlacement(
                     ch=ch,
                     x_mm=prev.x_mm,
                     y_mm=prev.y_mm - char_pitch_mm,
-                    size_pt=font_size_pt,
+                    size_pt=glyph_size_pt,
                     rotation_deg=0.0,
                     index=text_index,
                 )
             )
-            # row_index はそのまま (次の文字も新行の先頭扱い)
+            # y_cursor はそのまま (次の文字も新行の先頭扱い)
             continue
 
         placements.append(
@@ -108,12 +120,12 @@ def typeset_vertical(
                 ch=ch,
                 x_mm=x,
                 y_mm=y,
-                size_pt=font_size_pt,
+                size_pt=glyph_size_pt,
                 rotation_deg=0.0,
                 index=text_index,
             )
         )
-        row_index += 1
+        y_cursor -= char_pitch_mm
 
     return TypesetResult(placements=placements, overflow=overflow)
 
@@ -127,41 +139,52 @@ def typeset_horizontal(
     font_size_pt: float = 9.0,
     line_height: float = 1.4,
     letter_spacing: float = 0.0,
+    font_size_pt_for_index=None,
 ) -> TypesetResult:
     """横書きで文字を配置 (左→右、上→下)."""
     placements: list[GlyphPlacement] = []
-    em_mm = _mm_per_em_at(font_size_pt)
-    line_pitch_mm = em_mm * line_height
-    char_pitch_mm = em_mm * (1.0 + letter_spacing)
+    base_em_mm = _mm_per_em_at(font_size_pt)
+    line_pitch_mm = base_em_mm * line_height
 
     row = 0
-    col = 0
+    x_cursor = region_x_mm
     overflow = False
     for text_index, ch in enumerate(text):
         if ch == "\n":
             row += 1
-            col = 0
+            x_cursor = region_x_mm
             continue
-        x = region_x_mm + col * char_pitch_mm
+        glyph_size_pt = (
+            float(font_size_pt_for_index(text_index))
+            if font_size_pt_for_index is not None
+            else font_size_pt
+        )
+        em_mm = _mm_per_em_at(glyph_size_pt)
+        char_pitch_mm = em_mm * (1.0 + letter_spacing)
+        x = x_cursor
         y = region_y_mm + region_height_mm - em_mm - row * line_pitch_mm
         if y < region_y_mm:
             overflow = True
             break
         if x + char_pitch_mm > region_x_mm + region_width_mm:
             row += 1
-            col = 0
-            continue
+            x_cursor = region_x_mm
+            x = x_cursor
+            y = region_y_mm + region_height_mm - em_mm - row * line_pitch_mm
+            if y < region_y_mm:
+                overflow = True
+                break
         placements.append(
             GlyphPlacement(
                 ch=ch,
                 x_mm=x,
                 y_mm=y,
-                size_pt=font_size_pt,
+                size_pt=glyph_size_pt,
                 rotation_deg=0.0,
                 index=text_index,
             )
         )
-        col += 1
+        x_cursor += char_pitch_mm
     return TypesetResult(placements=placements, overflow=overflow)
 
 
@@ -188,6 +211,7 @@ def typeset(
             font_size_pt=font_size_pt,
             line_height=text_entry.line_height,
             letter_spacing=text_entry.letter_spacing,
+            font_size_pt_for_index=lambda index: q_to_pt(text_style.font_size_q_for_index(text_entry, index)),
         )
     return typeset_vertical(
         text_entry.body,
@@ -198,4 +222,5 @@ def typeset(
         font_size_pt=font_size_pt,
         line_height=text_entry.line_height,
         letter_spacing=text_entry.letter_spacing,
+        font_size_pt_for_index=lambda index: q_to_pt(text_style.font_size_q_for_index(text_entry, index)),
     )

@@ -614,17 +614,6 @@ def _draw_text_in_rect(context, rect, entry_or_text, color=(0, 0, 0, 1)) -> None
         px_per_mm = abs(float(o1.x) - float(o0.x))
     else:
         px_per_mm = 3.78
-    entry_color = getattr(entry, "color", color)
-    try:
-        blf.color(
-            font_id,
-            float(entry_color[0]),
-            float(entry_color[1]),
-            float(entry_color[2]),
-            float(entry_color[3]),
-        )
-    except Exception:  # noqa: BLE001
-        pass
     for glyph in result.placements:
         glyph_font_id = _get_font_id_for_path(text_style.font_for_index(entry, glyph.index))
         coord = location_3d_to_region_2d(
@@ -639,6 +628,7 @@ def _draw_text_in_rect(context, rect, entry_or_text, color=(0, 0, 0, 1)) -> None
             blf.size(glyph_font_id, max(1, int(size_px)))
         except Exception:  # noqa: BLE001
             pass
+        entry_color = text_style.color_for_index(entry, glyph.index)
         try:
             blf.color(
                 glyph_font_id,
@@ -649,8 +639,13 @@ def _draw_text_in_rect(context, rect, entry_or_text, color=(0, 0, 0, 1)) -> None
             )
         except Exception:  # noqa: BLE001
             pass
-        blf.position(glyph_font_id, float(coord.x), float(coord.y), 0.0)
+        x_px = float(coord.x)
+        y_px = float(coord.y)
+        blf.position(glyph_font_id, x_px, y_px, 0.0)
         blf.draw(glyph_font_id, glyph.ch)
+        if text_style.bold_for_index(entry, glyph.index):
+            blf.position(glyph_font_id, x_px + max(1.0, size_px * 0.035), y_px, 0.0)
+            blf.draw(glyph_font_id, glyph.ch)
 
 
 def _edge_selection_targets_panel(work, page, wm) -> bool:

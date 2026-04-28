@@ -40,6 +40,8 @@ def render_to_image(
     *,
     font_path: str,
     font_path_for_index: Callable[[int], str] | None = None,
+    color_for_index: Callable[[int], tuple[int, int, int, int]] | None = None,
+    bold_for_index: Callable[[int], bool] | None = None,
     px_per_mm: float,
     origin_xy_px: tuple[float, float] = (0.0, 0.0),
     color: tuple[int, int, int, int] = (0, 0, 0, 255),
@@ -67,8 +69,11 @@ def render_to_image(
         y = origin_xy_px[1] + g.y_mm * px_per_mm
         # Pillow の座標系は左上原点なので Y 反転
         y_px = image.height - y
-        kwargs: dict = {"fill": color}
+        glyph_color = color_for_index(g.index) if color_for_index is not None else color
+        kwargs: dict = {"fill": glyph_color}
         if stroke_width_px > 0:
             kwargs["stroke_width"] = stroke_width_px
             kwargs["stroke_fill"] = stroke_color
         draw.text((x, y_px), g.ch, font=font, **kwargs)
+        if bold_for_index is not None and bold_for_index(g.index):
+            draw.text((x + max(1, size_px // 28), y_px), g.ch, font=font, **kwargs)

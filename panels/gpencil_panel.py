@@ -20,7 +20,6 @@ from ..core.work import get_active_page, get_work
 from ..utils import gpencil as gp_utils
 from ..utils import layer_stack as layer_stack_utils
 from ..utils import log
-
 B_NAME_CATEGORY = "B-Name"
 _GP_OBJECT_TYPE = "GREASEPENCIL"
 _GP_PAINT_MODE = "PAINT_GREASE_PENCIL"
@@ -575,9 +574,6 @@ def _draw_text_selected_settings(box, context, entry) -> None:
     page = get_active_page(context)
     settings = box.column(align=True)
     settings.label(text=f"選択中: {entry.id} (テキスト)")
-    body_col = settings.column(align=True)
-    body_col.scale_y = 4.0
-    body_col.prop(entry, "body", text="本文")
     settings.prop(entry, "speaker_type")
     row = settings.row(align=True)
     row.prop(entry, "x_mm")
@@ -590,13 +586,6 @@ def _draw_text_selected_settings(box, context, entry) -> None:
     type_box.label(text="組版", icon="FONT_DATA")
     type_box.prop(entry, "writing_mode")
     type_box.prop(entry, "font", text="基本フォント")
-    type_box.prop(context.scene, "bname_text_selection_font", text="選択範囲フォント")
-    row = type_box.row(align=True)
-    op = row.operator("bname.text_apply_font_to_selection", text="選択範囲に適用")
-    op.font = getattr(context.scene, "bname_text_selection_font", "")
-    op.clear = False
-    op = row.operator("bname.text_apply_font_to_selection", text="基本に戻す")
-    op.clear = True
     type_box.prop(entry, "font_size_q")
     row = type_box.row(align=True)
     row.prop(entry, "font_bold", toggle=True)

@@ -683,6 +683,19 @@ def text_entry_to_dict(entry) -> dict[str, Any]:
             }
             for start, end, font in text_style.font_spans_snapshot(entry)
         ],
+        "styleSpans": [
+            {
+                "start": int(start),
+                "length": int(end - start),
+                "font": style[0],
+                "fontSizeQ": round(float(style[1]), 3),
+                "color": color_to_hex(style[2]),
+                "colorAlpha": round(float(style[2][3]), 3),
+                "bold": bool(style[3]),
+                "italic": bool(style[4]),
+            }
+            for start, end, style in text_style.style_spans_snapshot(entry)
+        ],
     }
 
 
@@ -724,6 +737,18 @@ def text_entry_from_dict(entry, data: dict[str, Any]) -> None:
         span.length = max(1, int(item.get("length", 1)))
         span.font = str(item.get("font", "") or "")
     text_style.normalize_font_spans(entry)
+    entry.style_spans.clear()
+    for item in data.get("styleSpans", []):
+        span = entry.style_spans.add()
+        span.start = int(item.get("start", 0))
+        span.length = max(1, int(item.get("length", 1)))
+        span.font = str(item.get("font", "") or "")
+        span.font_size_q = float(item.get("fontSizeQ", entry.font_size_q))
+        alpha = float(item.get("colorAlpha", 1.0))
+        span.color = hex_to_rgba(item.get("color", "#000000"), alpha)
+        span.font_bold = bool(item.get("bold", False))
+        span.font_italic = bool(item.get("italic", False))
+    text_style.normalize_style_spans(entry)
 
 
 # ---------- page.json ----------

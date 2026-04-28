@@ -6,7 +6,6 @@ import bpy
 from bpy.types import Panel, UIList
 
 from ..core.work import get_active_page
-
 B_NAME_CATEGORY = "B-Name"
 
 
@@ -28,7 +27,8 @@ class BNAME_UL_texts(UIList):
         if self.layout_type in {"DEFAULT", "COMPACT"}:
             row = layout.row(align=True)
             row.label(text=item.id, icon="FONT_DATA")
-            row.prop(item, "body", text="", emboss=False)
+            body = str(getattr(item, "body", "") or "")
+            row.label(text=body if body else "本文なし")
             if item.parent_balloon_id:
                 row.label(text=f"→{item.parent_balloon_id}", icon="LINKED")
             else:
@@ -206,7 +206,6 @@ class BNAME_PT_texts(Panel):
         entry = page.texts[idx]
 
         box = layout.box()
-        box.prop(entry, "body")
         box.prop(entry, "speaker_type")
         row = box.row(align=True)
         row.prop(entry, "x_mm")
@@ -220,13 +219,6 @@ class BNAME_PT_texts(Panel):
         box.label(text="組版", icon="FONT_DATA")
         box.prop(entry, "writing_mode")
         box.prop(entry, "font", text="基本フォント")
-        box.prop(context.scene, "bname_text_selection_font", text="選択範囲フォント")
-        row = box.row(align=True)
-        op = row.operator("bname.text_apply_font_to_selection", text="選択範囲に適用")
-        op.font = getattr(context.scene, "bname_text_selection_font", "")
-        op.clear = False
-        op = row.operator("bname.text_apply_font_to_selection", text="基本に戻す")
-        op.clear = True
         box.prop(entry, "font_size_q")
         # Meldex fontBold/fontItalic 相当
         row = box.row(align=True)

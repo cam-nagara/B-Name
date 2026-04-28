@@ -402,7 +402,6 @@ class BNAME_OT_text_add(Operator):
 
     def draw(self, _context):
         layout = self.layout
-        layout.prop(self, "body")
         layout.prop(self, "speaker_type")
         row = layout.row(align=True)
         row.prop(self, "width_mm")
@@ -564,8 +563,6 @@ class BNAME_OT_text_apply_font_to_selection(Operator):
         start, end = bounds
         font = "" if self.clear else str(self.font or "").strip()
         if not self.clear and not font:
-            font = str(getattr(context.scene, "bname_text_selection_font", "") or "").strip()
-        if not self.clear and not font:
             font = str(getattr(entry, "font", "") or "").strip()
         if not self.clear and not font:
             self.report({"ERROR"}, "適用するフォントを指定してください")
@@ -590,7 +587,7 @@ class BNAME_OT_text_tool(Operator):
     _editing: bool
     _editing_created_new: bool
     _edit_original_body: str
-    _edit_original_font_spans: tuple[tuple[int, int, str], ...]
+    _edit_original_font_spans: object
     _cursor_index: int
     _selection_anchor: int
     _page_id: str
@@ -612,6 +609,9 @@ class BNAME_OT_text_tool(Operator):
     _last_click_x: float
     _last_click_y: float
     _ime_timer: object | None
+    _select_dragging: bool
+    _select_drag_page_id: str
+    _select_drag_text_id: str
 
     @classmethod
     def poll(cls, context):
@@ -638,6 +638,7 @@ class BNAME_OT_text_tool(Operator):
         self._page_id = ""
         self._text_id = ""
         self._ime_timer = None
+        self._clear_selection_drag_state()
         self._clear_drag_state()
         self._clear_click_state()
         context.window_manager.modal_handler_add(self)
@@ -720,18 +721,21 @@ class BNAME_OT_text_tool(Operator):
         return {"RUNNING_MODAL"}
 
     def _modal_editing(self, context, event):
+        if getattr(self, "_select_dragging", False):
+            return self._modal_text_selection_drag(context, event)
         queued_text = text_edit_runtime.poll_ime_text()
         if queued_text:
             return self._insert_current_text(context, queued_text)
         if event.type == "TIMER":
             return {"RUNNING_MODAL"}
         if text_edit_runtime.event_is_ime_control(event):
-            return {"RUNNING_MODAL"}
+            return {"PASS_THROUGH"}
         if not _event_in_view3d_window(context, event):
-            if not self._is_text_edit_event(event):
-                return {"PASS_THROUGH"}
+            return {"PASS_THROUGH"}
         if event.type == "LEFTMOUSE" and event.value in {"PRESS", "DOUBLE_CLICK"}:
             if self._set_cursor_from_text_click(context, event):
+                if event.value == "PRESS":
+                    self._begin_text_selection_drag(context)
                 return {"RUNNING_MODAL"}
             self._finish_current_text_edit(context)
             return self.modal(context, event)
@@ -741,17 +745,7 @@ class BNAME_OT_text_tool(Operator):
         if event.value != "PRESS":
             return {"PASS_THROUGH"}
         if event.type in {"ESC", "RIGHTMOUSE"}:
-            if bool(getattr(self, "_editing_created_new", False)):
-                _remove_text_by_id(context, self._page_id, self._text_id)
-            else:
-                page, entry, idx = self._current_text_entry(context)
-                if entry is not None:
-                    entry.body = str(getattr(self, "_edit_original_body", ""))
-                    text_style.restore_font_spans(entry, getattr(self, "_edit_original_font_spans", ()))
-                    if page is not None:
-                        page.active_text_index = idx
-                    layer_stack_utils.sync_layer_stack_after_data_change(context)
-            self._finish_current_text_edit(context)
+            self._cancel_current_text_edit(context)
             return {"RUNNING_MODAL"}
         if event.type in {"RET", "NUMPAD_ENTER"}:
             if event.shift:
@@ -785,32 +779,6 @@ class BNAME_OT_text_tool(Operator):
             return {"RUNNING_MODAL"}
         return {"RUNNING_MODAL"}
 
-    def _is_text_edit_event(self, event) -> bool:
-        if _event_text(event):
-            return True
-        if event.type == "TEXTINPUT":
-            return True
-        if event.value != "PRESS":
-            return False
-        if event.type in {"ESC", "RET", "NUMPAD_ENTER", "BACK_SPACE"}:
-            return True
-        if event.type in {
-            "DEL",
-            "DELETE",
-            "LEFT_ARROW",
-            "RIGHT_ARROW",
-            "UP_ARROW",
-            "DOWN_ARROW",
-            "HOME",
-            "END",
-        }:
-            return True
-        if event.type in {"A", "C", "X"} and event.ctrl and not event.alt:
-            return True
-        if event.type == "V" and event.ctrl and not event.alt:
-            return True
-        return False
-
     def _begin_inline_input(self, context) -> None:
         text_edit_runtime.begin_ime_capture()
         if getattr(self, "_ime_timer", None) is not None:
@@ -834,13 +802,14 @@ class BNAME_OT_text_tool(Operator):
                 except Exception:  # noqa: BLE001
                     pass
         self._ime_timer = None
+        self._clear_selection_drag_state()
         text_edit_runtime.end_ime_capture()
 
     def _finish_current_text_edit(self, context) -> None:
         _page, entry, _idx = self._current_text_entry(context)
         spans_changed = (
             entry is not None
-            and text_style.font_spans_snapshot(entry) != getattr(self, "_edit_original_font_spans", ())
+            and text_style.all_spans_snapshot(entry) != getattr(self, "_edit_original_font_spans", ())
         )
         if (
             entry is not None
@@ -863,11 +832,24 @@ class BNAME_OT_text_tool(Operator):
         self.report({"INFO"}, "テキストツール: クリック位置にテキストを追加")
         layer_stack_utils.tag_view3d_redraw(context)
 
+    def _cancel_current_text_edit(self, context) -> None:
+        if bool(getattr(self, "_editing_created_new", False)):
+            _remove_text_by_id(context, self._page_id, self._text_id)
+        else:
+            page, entry, idx = self._current_text_entry(context)
+            if entry is not None:
+                entry.body = str(getattr(self, "_edit_original_body", ""))
+                text_style.restore_all_spans(entry, getattr(self, "_edit_original_font_spans", ()))
+                if page is not None:
+                    page.active_text_index = idx
+                layer_stack_utils.sync_layer_stack_after_data_change(context)
+        self._finish_current_text_edit(context)
+
     def _start_editing_existing(self, context, page, entry) -> None:
         self._editing = True
         self._editing_created_new = False
         self._edit_original_body = str(getattr(entry, "body", ""))
-        self._edit_original_font_spans = text_style.font_spans_snapshot(entry)
+        self._edit_original_font_spans = text_style.all_spans_snapshot(entry)
         self._cursor_index = len(self._edit_original_body)
         self._selection_anchor = -1
         self._page_id = getattr(page, "id", "")
@@ -910,6 +892,11 @@ class BNAME_OT_text_tool(Operator):
         self._last_click_text_id = ""
         self._last_click_x = 0.0
         self._last_click_y = 0.0
+
+    def _clear_selection_drag_state(self) -> None:
+        self._select_dragging = False
+        self._select_drag_page_id = ""
+        self._select_drag_text_id = ""
 
     def _remember_text_click(self, page, entry, x_mm: float | None, y_mm: float | None) -> None:
         if x_mm is None or y_mm is None:
@@ -1093,12 +1080,79 @@ class BNAME_OT_text_tool(Operator):
         if event.value == "DOUBLE_CLICK":
             self._cursor_index = len(text_edit_runtime.text_body(entry))
             self._selection_anchor = 0
+            self._open_selection_style_popup(context)
         else:
             self._cursor_index = text_edit_runtime.cursor_index_from_point(entry, lx, ly)
             self._selection_anchor = -1
         page.active_text_index = idx
         layer_stack_utils.tag_view3d_redraw(context)
         return True
+
+    def _begin_text_selection_drag(self, context) -> None:
+        _page, entry, _idx = self._current_text_entry(context)
+        if entry is None:
+            return
+        self._selection_anchor = text_edit_runtime.clamp_cursor(entry, self._cursor_index)
+        self._select_dragging = True
+        self._select_drag_page_id = str(getattr(self, "_page_id", "") or "")
+        self._select_drag_text_id = str(getattr(self, "_text_id", "") or "")
+
+    def _modal_text_selection_drag(self, context, event):
+        if event.type == "MOUSEMOVE":
+            self._update_text_selection_drag(context, event)
+            return {"RUNNING_MODAL"}
+        if event.type == "LEFTMOUSE" and event.value == "RELEASE":
+            self._update_text_selection_drag(context, event)
+            self._clear_selection_drag_state()
+            self._open_selection_style_popup(context)
+            return {"RUNNING_MODAL"}
+        if event.type in {"ESC", "RIGHTMOUSE"} and event.value == "PRESS":
+            self._clear_selection_drag_state()
+            self._selection_anchor = -1
+            layer_stack_utils.tag_view3d_redraw(context)
+            return {"RUNNING_MODAL"}
+        return {"RUNNING_MODAL"}
+
+    def _update_text_selection_drag(self, context, event) -> None:
+        page, entry, idx = self._current_text_entry(context)
+        if page is None or entry is None or idx < 0:
+            self._clear_selection_drag_state()
+            return
+        if (
+            str(getattr(page, "id", "") or "") != str(getattr(self, "_select_drag_page_id", "") or "")
+            or str(getattr(entry, "id", "") or "") != str(getattr(self, "_select_drag_text_id", "") or "")
+        ):
+            self._clear_selection_drag_state()
+            return
+        _work, hit_page, lx, ly = _resolve_local_xy_for_page_from_event(
+            context,
+            event,
+            getattr(page, "id", ""),
+        )
+        if hit_page is None or lx is None or ly is None:
+            return
+        self._cursor_index = text_edit_runtime.cursor_index_from_point(entry, lx, ly)
+        page.active_text_index = idx
+        layer_stack_utils.tag_view3d_redraw(context)
+
+    def _open_selection_style_popup(self, context) -> None:
+        page, entry, _idx = self._current_text_entry(context)
+        if page is None or entry is None:
+            return
+        bounds = text_edit_runtime.selection_bounds(self._cursor_index, self._selection_anchor)
+        if bounds is None:
+            return
+        start, end = bounds
+        try:
+            bpy.ops.bname.text_selection_style_popup(
+                "INVOKE_DEFAULT",
+                page_id=getattr(page, "id", ""),
+                text_id=getattr(entry, "id", ""),
+                start=start,
+                end=end,
+            )
+        except Exception:  # noqa: BLE001
+            _logger.exception("text_tool: selection style popup failed")
 
     def _touch_current_text(self, context, page, entry, idx: int) -> None:
         self._cursor_index = text_edit_runtime.clamp_cursor(entry, self._cursor_index)
@@ -1219,6 +1273,7 @@ class BNAME_OT_text_tool(Operator):
         self._selection_anchor = -1
         self._clear_drag_state()
         self._clear_click_state()
+        self._clear_selection_drag_state()
 
     def finish_from_external(self, context, *, keep_selection: bool) -> None:
         _ = keep_selection

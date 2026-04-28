@@ -336,11 +336,11 @@ def replace_selection(entry, cursor_index: int, selection_anchor: int, text: str
     bounds = selection_bounds(cursor_index, selection_anchor)
     if bounds is None:
         index = clamp_cursor(entry, cursor_index)
-        text_style.adjust_font_spans_for_replace(entry, index, index, len(text))
+        text_style.adjust_spans_for_replace(entry, index, index, len(text))
         entry.body = body[:index] + text + body[index:]
         return index + len(text)
     start, end = bounds
-    text_style.adjust_font_spans_for_replace(entry, start, end, len(text))
+    text_style.adjust_spans_for_replace(entry, start, end, len(text))
     entry.body = body[:start] + text + body[end:]
     return start + len(text)
 
@@ -350,13 +350,13 @@ def delete_backward(entry, cursor_index: int, selection_anchor: int) -> int:
     bounds = selection_bounds(cursor_index, selection_anchor)
     if bounds is not None:
         start, end = bounds
-        text_style.adjust_font_spans_for_replace(entry, start, end, 0)
+        text_style.adjust_spans_for_replace(entry, start, end, 0)
         entry.body = body[:start] + body[end:]
         return start
     index = clamp_cursor(entry, cursor_index)
     if index <= 0:
         return 0
-    text_style.adjust_font_spans_for_replace(entry, index - 1, index, 0)
+    text_style.adjust_spans_for_replace(entry, index - 1, index, 0)
     entry.body = body[: index - 1] + body[index:]
     return index - 1
 
@@ -366,13 +366,13 @@ def delete_forward(entry, cursor_index: int, selection_anchor: int) -> int:
     bounds = selection_bounds(cursor_index, selection_anchor)
     if bounds is not None:
         start, end = bounds
-        text_style.adjust_font_spans_for_replace(entry, start, end, 0)
+        text_style.adjust_spans_for_replace(entry, start, end, 0)
         entry.body = body[:start] + body[end:]
         return start
     index = clamp_cursor(entry, cursor_index)
     if index >= len(body):
         return index
-    text_style.adjust_font_spans_for_replace(entry, index, index + 1, 0)
+    text_style.adjust_spans_for_replace(entry, index, index + 1, 0)
     entry.body = body[:index] + body[index + 1:]
     return index
 

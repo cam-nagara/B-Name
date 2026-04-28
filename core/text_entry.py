@@ -37,7 +37,6 @@ _SPEAKER_TYPE_ITEMS = (
     ("custom", "カスタム", ""),
 )
 
-
 class BNameRubySpan(bpy.types.PropertyGroup):
     """親文字範囲とルビ (フリガナ) を対応付ける."""
 
@@ -64,6 +63,18 @@ class BNameTextFontSpan(bpy.types.PropertyGroup):
     font: StringProperty(name="フォント", default="", subtype="FILE_PATH")  # type: ignore[valid-type]
 
 
+class BNameTextStyleSpan(bpy.types.PropertyGroup):
+    """本文内の一部範囲に適用する文字スタイル."""
+
+    start: IntProperty(name="開始", default=0, min=0)  # type: ignore[valid-type]
+    length: IntProperty(name="長さ", default=1, min=1)  # type: ignore[valid-type]
+    font: StringProperty(name="フォント", default="", subtype="FILE_PATH")  # type: ignore[valid-type]
+    font_size_q: FloatProperty(name="サイズ (Q)", default=20.0, min=1.0, soft_max=200.0)  # type: ignore[valid-type]
+    color: FloatVectorProperty(subtype="COLOR", size=4, default=(0.0, 0.0, 0.0, 1.0), min=0.0, max=1.0)  # type: ignore[valid-type]
+    font_bold: BoolProperty(name="太字", default=False)  # type: ignore[valid-type]
+    font_italic: BoolProperty(name="斜体", default=False)  # type: ignore[valid-type]
+
+
 class BNameTextEntry(bpy.types.PropertyGroup):
     """1 つのテキストオブジェクト.
 
@@ -73,7 +84,7 @@ class BNameTextEntry(bpy.types.PropertyGroup):
     """
 
     id: StringProperty(name="ID", default="")  # type: ignore[valid-type]
-    body: StringProperty(name="本文", default="")  # type: ignore[valid-type]
+    body: StringProperty(name="本文", default="", options={"TEXTEDIT_UPDATE"})  # type: ignore[valid-type]
 
     # ページローカル座標 (mm). overlay 描画時にページ grid offset を加算する。
     x_mm: FloatProperty(name="X", default=0.0)  # type: ignore[valid-type]
@@ -123,6 +134,9 @@ class BNameTextEntry(bpy.types.PropertyGroup):
     # 部分フォント。font が空の範囲は基本フォントに戻す扱い。
     font_spans: CollectionProperty(type=BNameTextFontSpan)  # type: ignore[valid-type]
 
+    # 部分スタイル。font が空の範囲は基本フォントに戻す扱い。
+    style_spans: CollectionProperty(type=BNameTextStyleSpan)  # type: ignore[valid-type]
+
     # 縦中横 (horizontal-in-vertical): 指定した範囲を縦書き内で横向きに
     tatechuyoko_ranges: CollectionProperty(type=BNameRubySpan)  # type: ignore[valid-type]
 
@@ -130,6 +144,7 @@ class BNameTextEntry(bpy.types.PropertyGroup):
 _CLASSES = (
     BNameRubySpan,
     BNameTextFontSpan,
+    BNameTextStyleSpan,
     BNameTextEntry,
 )
 
@@ -137,19 +152,10 @@ _CLASSES = (
 def register() -> None:
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
-    bpy.types.Scene.bname_text_selection_font = StringProperty(
-        name="選択範囲フォント",
-        default="",
-        subtype="FILE_PATH",
-    )
     _logger.debug("text_entry registered")
 
 
 def unregister() -> None:
-    try:
-        del bpy.types.Scene.bname_text_selection_font
-    except AttributeError:
-        pass
     for cls in reversed(_CLASSES):
         try:
             bpy.utils.unregister_class(cls)

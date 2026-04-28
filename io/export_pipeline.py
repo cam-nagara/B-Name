@@ -795,6 +795,8 @@ def _render_text_layer(entry, canvas_height_px: int, dpi: int) -> ExportLayer | 
         canvas.image,
         font_path=font_path,
         font_path_for_index=lambda index: _resolve_font_path(text_style.font_for_index(entry, index)),
+        color_for_index=lambda index: _rgb255(text_style.color_for_index(entry, index)),
+        bold_for_index=lambda index: text_style.bold_for_index(entry, index),
         px_per_mm=mm_to_px(1.0, dpi),
         color=_rgb255(getattr(entry, "color", (0.0, 0.0, 0.0, 1.0))),
         stroke_width_px=stroke_width_px,
