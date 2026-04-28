@@ -6,7 +6,7 @@ import math
 from collections.abc import Callable
 
 from ..utils.geom import Rect
-from ..utils import object_selection, viewport_colors
+from ..utils import balloon_shapes, object_selection, viewport_colors
 
 DrawRectOutline = Callable[..., None]
 DrawPolygonFill = Callable[[list[tuple[float, float]], tuple[float, float, float, float]], None]
@@ -255,33 +255,7 @@ def _outline_fluffy(rect: Rect) -> list[tuple[float, float]]:
 
 
 def _balloon_outline_mm(entry, rect: Rect) -> list[tuple[float, float]]:
-    sp = entry.shape_params
-    s = entry.shape
-    if s == "rect":
-        if entry.rounded_corner_enabled and entry.rounded_corner_radius_mm > 0.0:
-            return _outline_rounded_rect(rect, entry.rounded_corner_radius_mm)
-        return _outline_rect(rect)
-    if s == "ellipse":
-        return _outline_ellipse(rect)
-    if s == "pill":
-        return _outline_pill(rect)
-    if s == "diamond":
-        return _outline_diamond(rect)
-    if s == "hexagon":
-        return _outline_hexagon(rect)
-    if s == "octagon":
-        return _outline_octagon(rect)
-    if s == "star":
-        return _outline_star(rect)
-    if s == "fluffy":
-        return _outline_fluffy(rect)
-    if s == "cloud":
-        return _outline_cloud(rect, sp.cloud_wave_count, sp.cloud_wave_amplitude_mm)
-    if s == "spike_straight":
-        return _outline_spike(rect, sp.spike_count, sp.spike_depth_mm, smooth=False)
-    if s == "spike_curve":
-        return _outline_spike(rect, sp.spike_count, sp.spike_depth_mm, smooth=True)
-    return _outline_rect(rect)
+    return balloon_shapes.outline_for_entry(entry, rect)
 
 
 def _apply_balloon_transforms(pts: list[tuple[float, float]], rect: Rect,

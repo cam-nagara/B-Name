@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..utils import color_space
+from ..utils import balloon_shapes, color_space
 
 # ファイルフォーマットのバージョン (破壊的変更があったら繰り上げる)
 WORK_SCHEMA_VERSION = 1
@@ -570,7 +570,7 @@ def panel_entry_from_dict(entry, data: dict[str, Any]) -> None:
 def balloon_entry_to_dict(entry) -> dict[str, Any]:
     return {
         "id": entry.id,
-        "shape": entry.shape,
+        "shape": balloon_shapes.normalize_shape(entry.shape),
         "customPresetName": entry.custom_preset_name,
         "xMm": round(entry.x_mm, 3),
         "yMm": round(entry.y_mm, 3),
@@ -599,6 +599,11 @@ def balloon_entry_to_dict(entry) -> dict[str, Any]:
             for t in entry.tails
         ],
         "shapeParams": {
+            "cloudBumpWidthMm": round(entry.shape_params.cloud_bump_width_mm, 3),
+            "cloudBumpHeightMm": round(entry.shape_params.cloud_bump_height_mm, 3),
+            "cloudOffset": round(entry.shape_params.cloud_offset_percent / 100.0, 3),
+            "cloudSubWidthRatio": round(entry.shape_params.cloud_sub_width_ratio, 3),
+            "cloudSubHeightRatio": round(entry.shape_params.cloud_sub_height_ratio, 3),
             "cloudWaveCount": int(entry.shape_params.cloud_wave_count),
             "cloudWaveAmplitudeMm": round(entry.shape_params.cloud_wave_amplitude_mm, 3),
             "spikeCount": int(entry.shape_params.spike_count),
@@ -612,7 +617,7 @@ def balloon_entry_to_dict(entry) -> dict[str, Any]:
 def balloon_entry_from_dict(entry, data: dict[str, Any]) -> None:
     data = data or {}
     entry.id = data.get("id", entry.id)
-    entry.shape = data.get("shape", entry.shape)
+    entry.shape = balloon_shapes.normalize_shape(data.get("shape", entry.shape))
     entry.custom_preset_name = data.get("customPresetName", "")
     entry.x_mm = float(data.get("xMm", 0.0))
     entry.y_mm = float(data.get("yMm", 0.0))
@@ -639,6 +644,19 @@ def balloon_entry_from_dict(entry, data: dict[str, Any]) -> None:
         tail.tip_width_mm = float(td.get("tipWidthMm", 0.0))
         tail.curve_bend = float(td.get("curveBend", 0.0))
     sp = data.get("shapeParams", {})
+    entry.shape_params.cloud_bump_width_mm = float(sp.get("cloudBumpWidthMm", 10.0))
+    entry.shape_params.cloud_bump_height_mm = float(sp.get("cloudBumpHeightMm", 4.0))
+    if "cloudOffsetPercent" in sp:
+        entry.shape_params.cloud_offset_percent = float(sp.get("cloudOffsetPercent", 50.0))
+    else:
+        offset_value = float(sp.get("cloudOffset", 0.5))
+        entry.shape_params.cloud_offset_percent = offset_value * 100.0 if offset_value <= 1.0 else offset_value
+    entry.shape_params.cloud_sub_width_ratio = float(
+        sp.get("cloudSubWidthRatio", sp.get("cloudSubBumpRatio", 0.0))
+    )
+    entry.shape_params.cloud_sub_height_ratio = float(
+        sp.get("cloudSubHeightRatio", sp.get("cloudSubBumpRatio", 0.0))
+    )
     entry.shape_params.cloud_wave_count = int(sp.get("cloudWaveCount", 12))
     entry.shape_params.cloud_wave_amplitude_mm = float(sp.get("cloudWaveAmplitudeMm", 3.0))
     entry.shape_params.spike_count = int(sp.get("spikeCount", 24))

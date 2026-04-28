@@ -6,6 +6,7 @@ import bpy
 from bpy.types import Panel, UIList
 
 from ..core.work import get_active_page
+from ..utils import balloon_shapes
 B_NAME_CATEGORY = "B-Name"
 
 
@@ -106,10 +107,11 @@ class BNAME_PT_balloons(Panel):
         row.prop(entry, "flip_v", toggle=True)
         box.prop(entry, "opacity", slider=True)
         box.prop(entry, "blend_mode")
-        box.prop(entry, "rounded_corner_enabled")
-        sub = box.row()
-        sub.enabled = entry.rounded_corner_enabled
-        sub.prop(entry, "rounded_corner_radius_mm")
+        if balloon_shapes.normalize_shape(entry.shape) == "rect":
+            box.prop(entry, "rounded_corner_enabled")
+            sub = box.row()
+            sub.enabled = entry.rounded_corner_enabled
+            sub.prop(entry, "rounded_corner_radius_mm")
 
         # 親子連動つき平行移動
         box = layout.box()
@@ -133,17 +135,15 @@ class BNAME_PT_balloons(Panel):
 
         # 形状別パラメータ
         sp = entry.shape_params
-        if entry.shape == "cloud":
+        if balloon_shapes.is_dynamic_meldex_shape(entry.shape):
             box = layout.box()
-            box.label(text="雲パラメータ")
-            box.prop(sp, "cloud_wave_count")
-            box.prop(sp, "cloud_wave_amplitude_mm")
-        elif entry.shape in ("spike_curve", "spike_straight"):
-            box = layout.box()
-            box.label(text="トゲパラメータ")
-            box.prop(sp, "spike_count")
-            box.prop(sp, "spike_depth_mm")
-            box.prop(sp, "spike_jitter")
+            box.label(text="Meldex形状パラメータ")
+            box.prop(sp, "cloud_bump_width_mm")
+            box.prop(sp, "cloud_bump_height_mm")
+            box.prop(sp, "cloud_offset_percent")
+            row = box.row(align=True)
+            row.prop(sp, "cloud_sub_width_ratio")
+            row.prop(sp, "cloud_sub_height_ratio")
 
         # 尻尾
         box = layout.box()

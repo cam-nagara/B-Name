@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from typing import Sequence
 
+from ..utils import balloon_shapes
 from ..utils.geom import Rect, mm_to_px
 
 
@@ -144,36 +145,7 @@ def _outline_fluffy(rect: Rect) -> list[tuple[float, float]]:
 
 
 def _balloon_outline_mm(entry, rect: Rect) -> list[tuple[float, float]]:
-    shape = getattr(entry, "shape", "rect")
-    sp = entry.shape_params
-    if shape == "rect":
-        if (
-            getattr(entry, "rounded_corner_enabled", False)
-            and float(getattr(entry, "rounded_corner_radius_mm", 0.0)) > 0.0
-        ):
-            return _outline_rounded_rect(rect, float(entry.rounded_corner_radius_mm))
-        return _outline_rect(rect)
-    if shape == "ellipse":
-        return _outline_ellipse(rect)
-    if shape == "pill":
-        return _outline_pill(rect)
-    if shape == "diamond":
-        return _outline_diamond(rect)
-    if shape == "hexagon":
-        return _outline_hexagon(rect)
-    if shape == "octagon":
-        return _outline_octagon(rect)
-    if shape == "star":
-        return _outline_star(rect)
-    if shape == "fluffy":
-        return _outline_fluffy(rect)
-    if shape == "cloud":
-        return _outline_cloud(rect, int(sp.cloud_wave_count), float(sp.cloud_wave_amplitude_mm))
-    if shape == "spike_straight":
-        return _outline_spike(rect, int(sp.spike_count), float(sp.spike_depth_mm), smooth=False)
-    if shape == "spike_curve":
-        return _outline_spike(rect, int(sp.spike_count), float(sp.spike_depth_mm), smooth=True)
-    return _outline_rect(rect)
+    return balloon_shapes.outline_for_entry(entry, rect)
 
 
 def _apply_balloon_transforms(

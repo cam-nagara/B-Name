@@ -1,6 +1,6 @@
 """フキダシ (Balloon) の PropertyGroup.
 
-計画書 3.1.4 参照。5 形状プリセット (矩形/楕円/雲/トゲ曲線/トゲ直線) +
+計画書 3.1.4 参照。Meldex ボードカード互換の形状プリセット +
 角丸オプション + 尻尾 3 種 + カスタム形状参照。
 
 描画ロジックは ui/overlay.py および書き出し側 (Phase 6) で扱う。
@@ -26,17 +26,20 @@ _logger = log.get_logger(__name__)
 
 
 _SHAPE_ITEMS = (
-    ("rect", "矩形", "直線で囲まれた長方形"),
-    ("ellipse", "楕円", "楕円形のフキダシ"),
-    ("pill", "ピル", "両端が半円の丸長方形"),
-    ("hexagon", "六角形", "六角形 (Meldex hexagon)"),
-    ("octagon", "八角形", "八角形 (Meldex octagon)"),
-    ("diamond", "ひし形", "ダイヤ形 (Meldex diamond)"),
-    ("star", "星", "5 角星 (Meldex star)"),
-    ("cloud", "雲", "モクモクとした雲形 (思考向け)"),
-    ("fluffy", "もやもや", "緩い波の楕円 (Meldex fluffy)"),
-    ("spike_curve", "トゲ (曲線)", "各トゲが曲線 (叫び向け)"),
-    ("spike_straight", "トゲ (直線)", "各トゲが直線 (叫び向け)"),
+    ("rect", "矩形", "Meldex ボードカードと同じ矩形"),
+    ("ellipse", "楕円", "Meldex ボードカードと同じ楕円"),
+    ("cloud", "雲", "Meldex ボードカードと同じ雲形"),
+    ("fluffy", "もやもや", "Meldex ボードカードと同じもやもや形"),
+    ("thorn", "トゲ（直線）", "Meldex ボードカードと同じ直線トゲ形"),
+    ("thorn-curve", "トゲ（曲線）", "Meldex ボードカードと同じ曲線トゲ形"),
+    ("octagon", "八角形", "Meldex ボードカードと同じ八角形"),
+    # Legacy B-Name values kept so existing files keep rendering.
+    ("pill", "ピル（旧）", "旧 B-Name 互換のピル形"),
+    ("hexagon", "六角形（旧）", "旧 B-Name 互換の六角形"),
+    ("diamond", "ひし形（旧）", "旧 B-Name 互換のひし形"),
+    ("star", "星（旧）", "旧 B-Name 互換の星形"),
+    ("spike_straight", "トゲ（直線・旧）", "旧 B-Name 互換。Meldex のトゲ（直線）として描画"),
+    ("spike_curve", "トゲ（曲線・旧）", "旧 B-Name 互換。Meldex のトゲ（曲線）として描画"),
     ("custom", "カスタム", "カスタム形状プリセット参照"),
     ("none", "本体なし", "テキスト単体 (擬音/ナレーション用)"),
 )
@@ -76,8 +79,15 @@ class BNameBalloonTail(bpy.types.PropertyGroup):
 
 
 class BNameBalloonShapeParams(bpy.types.PropertyGroup):
-    """形状固有パラメータ (雲の波数/トゲの本数等)."""
+    """形状固有パラメータ."""
 
+    cloud_bump_width_mm: FloatProperty(name="山の幅", default=10.0, min=2.0, soft_max=50.0)  # type: ignore[valid-type]
+    cloud_bump_height_mm: FloatProperty(name="山の高さ", default=4.0, min=0.5, soft_max=25.0)  # type: ignore[valid-type]
+    cloud_offset_percent: FloatProperty(name="ズラし量 (%)", default=50.0, min=0.0, max=100.0)  # type: ignore[valid-type]
+    cloud_sub_width_ratio: FloatProperty(name="小山幅 (%)", default=0.0, min=0.0, max=100.0)  # type: ignore[valid-type]
+    cloud_sub_height_ratio: FloatProperty(name="小山高 (%)", default=0.0, min=0.0, max=100.0)  # type: ignore[valid-type]
+
+    # Legacy parameters kept for older B-Name files/presets.
     cloud_wave_count: IntProperty(name="雲の波数", default=12, min=3, soft_max=60)  # type: ignore[valid-type]
     cloud_wave_amplitude_mm: FloatProperty(name="波の振幅", default=3.0, min=0.0, soft_max=20.0)  # type: ignore[valid-type]
     spike_count: IntProperty(name="トゲ数", default=24, min=3, soft_max=80)  # type: ignore[valid-type]

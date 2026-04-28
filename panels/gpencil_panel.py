@@ -17,6 +17,7 @@ from bpy.types import Panel, UIList
 
 from ..core.mode import MODE_PANEL, get_mode
 from ..core.work import get_active_page, get_work
+from ..utils import balloon_shapes
 from ..utils import gpencil as gp_utils
 from ..utils import layer_stack as layer_stack_utils
 from ..utils import log
@@ -516,10 +517,11 @@ def _draw_balloon_selected_settings(box, context, entry) -> None:
     page = get_active_page(context)
     if page is not None and sum(1 for b in page.balloons if getattr(b, "selected", False)) >= 2:
         settings.operator("bname.balloon_merge_selected", text="フキダシを結合", icon="FILE_FOLDER")
-    settings.prop(entry, "rounded_corner_enabled")
-    sub = settings.row()
-    sub.enabled = entry.rounded_corner_enabled
-    sub.prop(entry, "rounded_corner_radius_mm")
+    if balloon_shapes.normalize_shape(entry.shape) == "rect":
+        settings.prop(entry, "rounded_corner_enabled")
+        sub = settings.row()
+        sub.enabled = entry.rounded_corner_enabled
+        sub.prop(entry, "rounded_corner_radius_mm")
 
     line_box = box.box()
     line_box.label(text="線・塗り")
@@ -529,17 +531,15 @@ def _draw_balloon_selected_settings(box, context, entry) -> None:
     line_box.prop(entry, "fill_color")
 
     sp = entry.shape_params
-    if entry.shape == "cloud":
+    if balloon_shapes.is_dynamic_meldex_shape(entry.shape):
         shape_box = box.box()
-        shape_box.label(text="雲パラメータ")
-        shape_box.prop(sp, "cloud_wave_count")
-        shape_box.prop(sp, "cloud_wave_amplitude_mm")
-    elif entry.shape in ("spike_curve", "spike_straight"):
-        shape_box = box.box()
-        shape_box.label(text="トゲパラメータ")
-        shape_box.prop(sp, "spike_count")
-        shape_box.prop(sp, "spike_depth_mm")
-        shape_box.prop(sp, "spike_jitter")
+        shape_box.label(text="Meldex形状パラメータ")
+        shape_box.prop(sp, "cloud_bump_width_mm")
+        shape_box.prop(sp, "cloud_bump_height_mm")
+        shape_box.prop(sp, "cloud_offset_percent")
+        row = shape_box.row(align=True)
+        row.prop(sp, "cloud_sub_width_ratio")
+        row.prop(sp, "cloud_sub_height_ratio")
 
     move_box = box.box()
     move_box.label(text="親子連動移動", icon="CON_TRACKTO")
@@ -947,7 +947,7 @@ class BNAME_OT_gpencil_master_mode_set(bpy.types.Operator):
         if mode == "PAINT_GREASE_PENCIL":
             return "描画ツールに切り替えます"
         if mode == "EDIT":
-            return "編集ツールに切り替えます"
+            return "線編集ツールに切り替えます"
         return "B-Nameツールを切り替えます"
 
     def execute(self, context):

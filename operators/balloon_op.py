@@ -34,8 +34,10 @@ _SHAPE_FOR_ADD = (
     ("rect", "矩形", ""),
     ("ellipse", "楕円", ""),
     ("cloud", "雲", ""),
-    ("spike_curve", "トゲ (曲線)", ""),
-    ("spike_straight", "トゲ (直線)", ""),
+    ("fluffy", "もやもや", ""),
+    ("thorn", "トゲ（直線）", ""),
+    ("thorn-curve", "トゲ（曲線）", ""),
+    ("octagon", "八角形", ""),
     ("none", "本体なし (テキスト単体)", ""),
 )
 
