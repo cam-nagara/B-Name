@@ -39,6 +39,7 @@ def _draw_shape_settings(layout, params, prefix: str, label: str, *, frame_toggl
 def _draw_white_outline_settings(layout, params) -> None:
     box = layout.box()
     box.label(text="白抜き線")
+    box.prop(params, "opacity", slider=True)
     row = box.row(align=True)
     row.prop(params, "white_outline_count")
     row.prop(params, "white_outline_spacing_mm")
@@ -103,11 +104,12 @@ class BNAME_PT_effect_line(Panel):
         sub.enabled = params.brush_jitter_enabled
         sub.prop(params, "brush_jitter_amount", text="")
 
-        box.prop(params, "spacing_mode")
-        if params.spacing_mode == "angle":
-            box.prop(params, "spacing_angle_deg")
-        else:
-            box.prop(params, "spacing_distance_mm")
+        if params.effect_type != "beta_flash":
+            box.prop(params, "spacing_mode")
+            if params.spacing_mode == "angle":
+                box.prop(params, "spacing_angle_deg")
+            else:
+                box.prop(params, "spacing_distance_mm")
 
         box = layout.box()
         box.label(text="入り抜き")
@@ -118,6 +120,7 @@ class BNAME_PT_effect_line(Panel):
 
         box = layout.box()
         box.label(text="色")
+        box.prop(params, "opacity", slider=True)
         box.prop(params, "line_color")
         if params.effect_type == "beta_flash":
             box.prop(params, "fill_color")

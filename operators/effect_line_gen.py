@@ -26,6 +26,7 @@ class EffectLineStroke:
     radius: float  # m 単位
     cyclic: bool = False
     radii: list[float] | None = None
+    opacities: list[float] | None = None
     role: str = "line"
     curve_type: str = "POLY"
     bezier_smooth: bool = False
@@ -43,7 +44,7 @@ def _clamp01(value: float) -> float:
 
 
 def _max_line_count(params) -> int:
-    return max(1, int(getattr(params, "max_line_count", 300)))
+    return max(1, int(getattr(params, "max_line_count", 1000)))
 
 
 def _ellipse_perimeter_mm(rx: float, ry: float) -> float:
@@ -277,6 +278,20 @@ def _stroke_radii(params, radius_mm: float, point_count: int = 2) -> tuple[float
     return base, radii
 
 
+def _stroke_opacities(params, point_count: int = 2) -> list[float] | None:
+    if getattr(params, "inout_apply", "brush_size") != "opacity" or point_count < 2:
+        return None
+    start = _clamp01(float(getattr(params, "in_percent", 100.0)) / 100.0)
+    end = _clamp01(float(getattr(params, "out_percent", 100.0)) / 100.0)
+    if point_count == 2:
+        return [start, end]
+    opacities = []
+    for i in range(point_count):
+        t = i / max(1, point_count - 1)
+        opacities.append(start + (end - start) * t)
+    return opacities
+
+
 def generate_focus_strokes(
     params,
     center_xy_mm: tuple[float, float] = (110.0, 160.0),
@@ -333,6 +348,7 @@ def generate_focus_strokes(
             rng,
         )
         radius, radii = _stroke_radii(params, radius_mm, 2)
+        opacities = _stroke_opacities(params, 2)
 
         out.append(
             EffectLineStroke(
@@ -342,6 +358,7 @@ def generate_focus_strokes(
                 ],
                 radius=radius,
                 radii=radii,
+                opacities=opacities,
             )
         )
     return out
@@ -363,7 +380,8 @@ def generate_speed_strokes(
         step_mm = max(0.01, float(params.spacing_distance_mm))
         count = max(1, int(round(region_height_mm / step_mm)) + 1)
     else:
-        count = line_cap
+        step_deg = max(0.1, float(params.spacing_angle_deg))
+        count = max(1, int(round(180.0 / step_deg)) + 1)
     count = min(count, line_cap)
     angle = math.radians(params.speed_angle_deg)
     dx = math.cos(angle)
@@ -391,11 +409,13 @@ def generate_speed_strokes(
             rng,
         )
         radius, radii = _stroke_radii(params, radius_mm, 2)
+        opacities = _stroke_opacities(params, 2)
         out.append(
             EffectLineStroke(
                 points_xyz=[(mm_to_m(sx), mm_to_m(sy), 0.0), (mm_to_m(ex), mm_to_m(ey), 0.0)],
                 radius=radius,
                 radii=radii,
+                opacities=opacities,
             )
         )
     return out
@@ -471,12 +491,14 @@ def generate_beta_flash_strokes(
     outline = _shape_outline(params, "end", rect, center_xy_mm)
     points = [(mm_to_m(x), mm_to_m(y), 0.0) for x, y in outline]
     radius, radii = _stroke_radii(params, params.brush_size_mm, len(points))
+    opacities = _stroke_opacities(params, len(points))
     return [
         EffectLineStroke(
             points_xyz=points,
             radius=radius,
             cyclic=True,
             radii=radii,
+            opacities=opacities,
         )
     ]
 
@@ -702,6 +724,37 @@ def generate_white_outline_strokes(
     return black_strokes + white_strokes
 
 
+def _apply_uni_flash_jag(
+    strokes: list[EffectLineStroke],
+    center_xy_mm: tuple[float, float],
+) -> list[EffectLineStroke]:
+    """ウニフラ用に終点側を交互に出入りさせ、通常の集中線と差別化する。"""
+    cx = mm_to_m(center_xy_mm[0])
+    cy = mm_to_m(center_xy_mm[1])
+    out: list[EffectLineStroke] = []
+    for i, stroke in enumerate(strokes):
+        if len(stroke.points_xyz) < 2:
+            out.append(stroke)
+            continue
+        pts = list(stroke.points_xyz)
+        ex, ey, ez = pts[-1]
+        scale = 0.84 if i % 2 == 0 else 1.10
+        pts[-1] = (cx + (ex - cx) * scale, cy + (ey - cy) * scale, ez)
+        out.append(
+            EffectLineStroke(
+                points_xyz=pts,
+                radius=stroke.radius,
+                cyclic=stroke.cyclic,
+                radii=stroke.radii,
+                opacities=stroke.opacities,
+                role=stroke.role,
+                curve_type=stroke.curve_type,
+                bezier_smooth=stroke.bezier_smooth,
+            )
+        )
+    return out
+
+
 def generate_strokes(
     params,
     center_xy_mm=(110.0, 160.0),
@@ -725,7 +778,7 @@ def generate_strokes(
         return generate_beta_flash_strokes(params, center_xy_mm, rx, ry, seed=seed)
     if etype == "white_outline":
         return generate_white_outline_strokes(params, center_xy_mm, rx, ry, seed=seed)
-    return generate_focus_strokes(
+    focus_strokes = generate_focus_strokes(
         params,
         center_xy_mm,
         rx,
@@ -734,6 +787,9 @@ def generate_strokes(
         start_outline_mm=start_outline_mm,
         start_extend_mm=start_extend_mm,
     )
+    if etype == "uni_flash":
+        return _apply_uni_flash_jag(focus_strokes, center_xy_mm)
+    return focus_strokes
 
 
 def generate_shape_guide_strokes(

@@ -206,9 +206,9 @@ def _dynamic_base(width: float, height: float, opts: _DynamicOpts, *, fluffy: bo
 
 def _bump_sequence(rx: float, ry: float, opts: _DynamicOpts, *, min_slots: int):
     perimeter = _ellipse_perimeter(rx, ry)
-    sub_enabled = opts.sub_w > 0.0 and opts.sub_h > 0.0
-    sub_w_ratio = opts.sub_w / 100.0
-    sub_h_ratio = opts.sub_h / 100.0
+    sub_enabled = opts.sub_w > 0.0 or opts.sub_h > 0.0
+    sub_w_ratio = (opts.sub_w if opts.sub_w > 0.0 else 50.0) / 100.0
+    sub_h_ratio = (opts.sub_h if opts.sub_h > 0.0 else 50.0) / 100.0
     slot_width = opts.bump_w * (1.0 + sub_w_ratio) if sub_enabled else opts.bump_w
     slots = max(3 if sub_enabled else min_slots, round(perimeter / max(0.001, slot_width)))
     bumps = slots * 2 if sub_enabled else slots
@@ -353,9 +353,9 @@ def _outline_fluffy(rect: Rect, opts: _DynamicOpts) -> list[tuple[float, float]]
     period = (2.0 * math.pi) / num_bumps
     base_angle = -math.pi * 0.5 + opts.offset * period
     steps = num_bumps * 6
-    sub_enabled = opts.sub_w > 0.0 and opts.sub_h > 0.0
+    sub_enabled = opts.sub_w > 0.0 or opts.sub_h > 0.0
     sub_freq = num_bumps * 2 if sub_enabled else 0
-    sub_amp_ratio = (opts.sub_h / 100.0) * 0.4 if sub_enabled else 0.0
+    sub_amp_ratio = ((opts.sub_h if opts.sub_h > 0.0 else 50.0) / 100.0) * 0.4 if sub_enabled else 0.0
 
     raw: list[tuple[float, float]] = []
     for i in range(steps):

@@ -376,14 +376,13 @@ def _draw_effect_selected_settings(box, context, obj, active_layer) -> None:
     settings = box.column(align=True)
     name = getattr(active_layer, "name", "効果線")
     settings.label(text=f"選択中: {name} (効果線)")
-    if active_layer is not None and hasattr(active_layer, "opacity"):
-        settings.prop(active_layer, "opacity", text="不透明度", slider=True)
-    if active_layer is not None and hasattr(active_layer, "hide"):
-        settings.prop(active_layer, "hide", text="非表示")
     params = getattr(context.scene, "bname_effect_line_params", None)
     if params is None:
         settings.label(text="効果線パラメータが未初期化です", icon="ERROR")
         return
+    settings.prop(params, "opacity", text="不透明度", slider=True)
+    if active_layer is not None and hasattr(active_layer, "hide"):
+        settings.prop(active_layer, "hide", text="非表示")
 
     _draw_effect_type_settings(box, params)
     if params.effect_type == "white_outline":
@@ -394,7 +393,8 @@ def _draw_effect_selected_settings(box, context, obj, active_layer) -> None:
         _draw_effect_shape_settings(box, params, "start", "始点形状", frame_toggle=True)
         _draw_effect_shape_settings(box, params, "end", "終点形状")
     _draw_effect_line_settings(box, params)
-    _draw_effect_interval_settings(box, params)
+    if params.effect_type != "beta_flash":
+        _draw_effect_interval_settings(box, params)
     _draw_effect_tail_settings(box, params)
     box.operator("bname.effect_line_generate", text="効果線を追加", icon="STROKE")
 

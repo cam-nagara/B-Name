@@ -30,6 +30,29 @@ _sync_order_moved_uid = ""
 _draw_stack_signatures: dict[int, tuple[str, ...]] = {}
 
 
+def _place_effect_gp_object(obj) -> None:
+    if obj is None:
+        return
+    try:
+        from .page_grid import GP_Z_LIFT_M
+
+        obj.location = (0.0, 0.0, GP_Z_LIFT_M)
+    except Exception:  # noqa: BLE001
+        _logger.exception("effect GP location lift failed")
+
+
+def ensure_effect_gp_object(scene=None):
+    scene = scene or bpy.context.scene
+    root = gp_utils.ensure_root_collection(scene)
+    obj = gp_utils.ensure_gpencil_object(EFFECT_GP_OBJECT_NAME, link_to_collection=False)
+    try:
+        gp_utils._relink_object_to_collection_only(scene, obj, root)
+    except Exception:  # noqa: BLE001
+        _logger.exception("effect GP relink failed")
+    _place_effect_gp_object(obj)
+    return obj
+
+
 @dataclass(frozen=True)
 class LayerTarget:
     kind: str
@@ -76,6 +99,7 @@ def set_active_stack_index_silently(context, index: int) -> None:
 def get_effect_gp_object():
     obj = bpy.data.objects.get(EFFECT_GP_OBJECT_NAME)
     if obj is not None and getattr(obj, "type", "") == "GREASEPENCIL":
+        _place_effect_gp_object(obj)
         return obj
     return None
 

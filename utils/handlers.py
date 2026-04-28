@@ -215,6 +215,14 @@ def _reconcile_gpencil_collections(context, work) -> None:
         _logger.exception("load_post: ensure_master_gpencil failed")
 
     try:
+        from . import layer_stack as layer_stack_utils
+
+        if layer_stack_utils.get_effect_gp_object() is not None:
+            layer_stack_utils.ensure_effect_gp_object(scene)
+    except Exception:  # noqa: BLE001
+        _logger.exception("load_post: ensure_effect_gp_object failed")
+
+    try:
         page_grid.apply_page_collection_transforms(context, work)
     except Exception:  # noqa: BLE001
         _logger.exception("load_post: apply_page_collection_transforms failed")

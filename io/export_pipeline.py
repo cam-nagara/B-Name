@@ -1045,12 +1045,13 @@ def _gp_layer_frame(layer):
     return frames[0]
 
 
-def _gp_stroke_points_mm(obj, stroke, page_offset_mm: tuple[float, float]) -> tuple[list[tuple[float, float]], float]:
+def _gp_stroke_points_mm(obj, stroke, page_offset_mm: tuple[float, float]) -> tuple[list[tuple[float, float]], float, list[float]]:
     obj_loc = getattr(obj, "location", None)
     obj_x = float(getattr(obj_loc, "x", 0.0))
     obj_y = float(getattr(obj_loc, "y", 0.0))
     pts: list[tuple[float, float]] = []
     radii: list[float] = []
+    opacities: list[float] = []
     for point in getattr(stroke, "points", []):
         pos = getattr(point, "position", None)
         if pos is None:
@@ -1062,8 +1063,47 @@ def _gp_stroke_points_mm(obj, stroke, page_offset_mm: tuple[float, float]) -> tu
             radii.append(m_to_mm(float(getattr(point, "radius", 0.0002))) * 2.0)
         except Exception:  # noqa: BLE001
             pass
+        try:
+            opacities.append(max(0.0, min(1.0, float(getattr(point, "opacity", 1.0)))))
+        except Exception:  # noqa: BLE001
+            opacities.append(1.0)
     width_mm = max(radii) if radii else 0.4
-    return (pts, max(0.05, width_mm))
+    return (pts, max(0.05, width_mm), opacities)
+
+
+def _rgba_with_alpha_scale(color: tuple[int, int, int, int], scale: float) -> tuple[int, int, int, int]:
+    return (
+        color[0],
+        color[1],
+        color[2],
+        max(0, min(255, int(round(color[3] * max(0.0, min(1.0, float(scale))))))),
+    )
+
+
+def _draw_gp_line_with_point_opacity(draw, pts_px, color, width_px: int, opacities: list[float]) -> None:
+    if len(pts_px) < 2:
+        return
+    if len(opacities) != len(pts_px) or all(abs(op - 1.0) < 1.0e-6 for op in opacities):
+        draw.line(pts_px, fill=color, width=width_px)
+        return
+    for i in range(len(pts_px) - 1):
+        p0 = pts_px[i]
+        p1 = pts_px[i + 1]
+        o0 = opacities[i]
+        o1 = opacities[i + 1]
+        # PIL の line は頂点ごとの alpha を持てないため、区間を細分して近似する。
+        segments = 16 if abs(o1 - o0) > 1.0e-4 else 1
+        prev = p0
+        for j in range(1, segments + 1):
+            t0 = (j - 1) / segments
+            t1 = j / segments
+            cur = (
+                p0[0] + (p1[0] - p0[0]) * t1,
+                p0[1] + (p1[1] - p0[1]) * t1,
+            )
+            alpha = o0 + (o1 - o0) * ((t0 + t1) * 0.5)
+            draw.line([prev, cur], fill=_rgba_with_alpha_scale(color, alpha), width=width_px)
+            prev = cur
 
 
 def _render_gp_object_layers(
@@ -1123,11 +1163,12 @@ def _render_gp_object_layers(
                 tuple[int, int, int, int],
                 bool,
                 bool,
+                list[float],
             ]
         ] = []
         bbox_pts: list[tuple[float, float]] = []
         for stroke in strokes:
-            pts_mm, width_mm = _gp_stroke_points_mm(obj, stroke, page_offset_mm)
+            pts_mm, width_mm, point_opacities = _gp_stroke_points_mm(obj, stroke, page_offset_mm)
             if len(pts_mm) < 2:
                 continue
             bbox = _points_bbox(pts_mm)
@@ -1138,7 +1179,7 @@ def _render_gp_object_layers(
                 continue
             stroke_color, fill_color, show_fill = _gp_material_info(obj, stroke)
             cyclic = bool(getattr(stroke, "cyclic", False))
-            stroke_payloads.append((pts_mm, width_mm, stroke_color, fill_color, show_fill, cyclic))
+            stroke_payloads.append((pts_mm, width_mm, stroke_color, fill_color, show_fill, cyclic, point_opacities))
             bbox_pts.extend(pts_mm)
         if not stroke_payloads:
             continue
@@ -1150,14 +1191,20 @@ def _render_gp_object_layers(
         if canvas is None:
             continue
         draw = ImageDraw.Draw(canvas.image)
-        for pts_mm, width_mm, stroke_color, fill_color, show_fill, cyclic in stroke_payloads:
+        for pts_mm, width_mm, stroke_color, fill_color, show_fill, cyclic, point_opacities in stroke_payloads:
             pts_px = canvas.points_px(pts_mm)
             width_px = max(1, int(round(mm_to_px(width_mm, dpi))))
             if cyclic and show_fill and len(pts_px) >= 3:
                 draw.polygon(pts_px, fill=fill_color)
-            draw.line(pts_px, fill=stroke_color, width=width_px)
+            _draw_gp_line_with_point_opacity(draw, pts_px, stroke_color, width_px, point_opacities)
             if cyclic and len(pts_px) >= 3:
-                draw.line([*pts_px, pts_px[0]], fill=stroke_color, width=width_px)
+                _draw_gp_line_with_point_opacity(
+                    draw,
+                    [*pts_px, pts_px[0]],
+                    stroke_color,
+                    width_px,
+                    [*point_opacities, point_opacities[0] if point_opacities else 1.0],
+                )
         out.append(
             ExportLayer(
                 str(getattr(layer, "name", "layer")),

@@ -272,6 +272,8 @@ def _load_layer_params_to_scene(context, obj, layer) -> None:
 
         _set_scene_params_syncing(scene, True)
         effect_line.effect_params_from_dict(params, data)
+        if "opacity" not in data and hasattr(layer, "opacity") and hasattr(params, "opacity"):
+            params.opacity = float(getattr(layer, "opacity", 1.0))
     finally:
         _set_scene_params_syncing(scene, False)
 
@@ -289,6 +291,34 @@ def _material_slot_index(obj, mat) -> int:
     except Exception:  # noqa: BLE001
         _logger.exception("effect_line: material slot append failed")
         return -1
+
+
+def _effect_opacity(params) -> float:
+    try:
+        return max(0.0, min(1.0, float(getattr(params, "opacity", 1.0))))
+    except Exception:  # noqa: BLE001
+        return 1.0
+
+
+def _rgba_with_opacity(color, opacity: float) -> tuple[float, float, float, float]:
+    try:
+        r, g, b, a = (float(color[i]) for i in range(4))
+    except Exception:  # noqa: BLE001
+        r, g, b, a = 0.0, 0.0, 0.0, 1.0
+    alpha = max(0.0, min(1.0, a * float(opacity)))
+    return (
+        max(0.0, min(1.0, r)),
+        max(0.0, min(1.0, g)),
+        max(0.0, min(1.0, b)),
+        alpha,
+    )
+
+
+def _effect_role_material_name(layer, role: str) -> str:
+    base = str(getattr(layer, "name", "") or "Layer")
+    safe = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in base)
+    safe = safe.strip("_") or "Layer"
+    return f"BName_Effect_{role}_{safe}"
 
 
 def _ensure_effect_material(obj, name: str, color: tuple[float, float, float, float]) -> int:
@@ -331,18 +361,28 @@ def _apply_material_settings(obj, layer, params) -> int:
         gp_style.show_stroke = True
     except Exception:  # noqa: BLE001
         pass
+    opacity = _effect_opacity(params)
     try:
-        gp_style.color = tuple(float(c) for c in params.line_color[:4])
+        if hasattr(layer, "opacity"):
+            layer.opacity = 1.0
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        gp_style.color = _rgba_with_opacity(params.line_color, opacity)
     except Exception:  # noqa: BLE001
         pass
     try:
         fill = [float(c) for c in params.fill_color[:4]]
-        fill[3] = max(0.0, min(1.0, fill[3] * float(params.fill_opacity)))
+        fill[3] = max(0.0, min(1.0, fill[3] * float(params.fill_opacity) * opacity))
         gp_style.fill_color = tuple(fill)
     except Exception:  # noqa: BLE001
         pass
     try:
         gp_style.show_fill = bool(params.effect_type == "beta_flash" and params.fill_base_shape)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        mat.diffuse_color = tuple(getattr(gp_style, "color", mat.diffuse_color))
     except Exception:  # noqa: BLE001
         pass
     return _material_slot_index(obj, mat)
@@ -389,6 +429,12 @@ def _params_for_write(context, obj, layer, params_override=None):
         return None
     data = _layer_params_data(obj, layer)
     if data:
+        if "opacity" not in data and hasattr(layer, "opacity"):
+            data = dict(data)
+            try:
+                data["opacity"] = float(getattr(layer, "opacity", 1.0))
+            except Exception:  # noqa: BLE001
+                data["opacity"] = 1.0
         return _EffectParamProxy(scene_params, data)
     return scene_params
 
@@ -441,26 +487,27 @@ def _write_effect_strokes(
     line_material_index = _apply_material_settings(obj, layer, params)
     white_outline_black_material_index = line_material_index
     white_outline_white_material_index = line_material_index
+    opacity = _effect_opacity(params)
     if getattr(params, "effect_type", "") == "white_outline":
         white_outline_black_material_index = _ensure_effect_material(
             obj,
-            "BName_Effect_WhiteOutline_Black",
-            (0.0, 0.0, 0.0, 1.0),
+            _effect_role_material_name(layer, "WhiteOutline_Black"),
+            (0.0, 0.0, 0.0, opacity),
         )
         white_outline_white_material_index = _ensure_effect_material(
             obj,
-            "BName_Effect_WhiteOutline_White",
-            (1.0, 1.0, 1.0, 1.0),
+            _effect_role_material_name(layer, "WhiteOutline_White"),
+            (1.0, 1.0, 1.0, opacity),
         )
     start_guide_material_index = _ensure_effect_material(
         obj,
-        "BName_Effect_StartShape_Purple",
-        (0.55, 0.12, 1.0, 1.0),
+        _effect_role_material_name(layer, "StartShape_Purple"),
+        (0.55, 0.12, 1.0, opacity),
     )
     end_guide_material_index = _ensure_effect_material(
         obj,
-        "BName_Effect_EndShape_Cyan",
-        (0.0, 0.75, 1.0, 1.0),
+        _effect_role_material_name(layer, "EndShape_Cyan"),
+        (0.0, 0.75, 1.0, opacity),
     )
     _clear_drawing(drawing)
     start_outline, start_extend = _start_frame_outline_for_bounds(context, params, (cx, cy))
@@ -491,6 +538,7 @@ def _write_effect_strokes(
             stroke.points_xyz,
             radius=stroke.radius,
             radii=getattr(stroke, "radii", None),
+            opacities=getattr(stroke, "opacities", None),
             cyclic=stroke.cyclic,
             material_index=material_index,
             curve_type=getattr(stroke, "curve_type", "POLY"),
@@ -504,6 +552,7 @@ def _write_effect_strokes(
             stroke.points_xyz,
             radius=stroke.radius,
             radii=getattr(stroke, "radii", None),
+            opacities=getattr(stroke, "opacities", None),
             cyclic=stroke.cyclic,
             material_index=material_index,
             curve_type=getattr(stroke, "curve_type", "POLY"),
@@ -546,9 +595,7 @@ def on_effect_params_changed(context, _params) -> None:
 
 
 def _create_effect_layer(context, bounds: tuple[float, float, float, float] | None = None):
-    from ..utils import gpencil
-
-    obj = gpencil.ensure_gpencil_object(layer_stack_utils.EFFECT_GP_OBJECT_NAME)
+    obj = layer_stack_utils.ensure_effect_gp_object(context.scene)
     gp_data = obj.data
     params = getattr(context.scene, "bname_effect_line_params", None)
     suffix = getattr(params, "effect_type", "effect") if params is not None else "effect"

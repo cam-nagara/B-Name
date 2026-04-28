@@ -49,6 +49,12 @@ _LEGACY_BASE_SHAPE_TO_EFFECT_SHAPE = {
     "polygon": "octagon",
 }
 
+EFFECT_PARAM_SCHEMA_VERSION = 2
+_LEGACY_DEFAULT_MAX_LINE_COUNT = 300
+_DEFAULT_MAX_LINE_COUNT = 1000
+_LEGACY_DEFAULT_SPEED_LINE_COUNT = 20
+_DEFAULT_SPEED_LINE_COUNT = 300
+
 EFFECT_PARAM_FIELDS = (
     "effect_type",
     "rotation_deg",
@@ -85,6 +91,7 @@ EFFECT_PARAM_FIELDS = (
     "inout_apply",
     "in_percent",
     "out_percent",
+    "opacity",
     "line_color",
     "fill_color",
     "fill_opacity",
@@ -128,7 +135,7 @@ def _color_value(value) -> list[float]:
 
 def effect_params_to_dict(params) -> dict:
     """BNameEffectLineParams をレイヤーメタデータ保存用 dict に変換する。"""
-    data = {}
+    data = {"schema_version": EFFECT_PARAM_SCHEMA_VERSION}
     for field in EFFECT_PARAM_FIELDS:
         if not hasattr(params, field):
             continue
@@ -151,10 +158,26 @@ def effect_params_to_dict(params) -> dict:
 def effect_params_from_dict(params, data: dict) -> None:
     """保存済み dict を BNameEffectLineParams へ戻す。未知項目は無視する。"""
     data = dict(data or {})
+    try:
+        schema_version = int(data.get("schema_version", 1) or 1)
+    except Exception:  # noqa: BLE001
+        schema_version = 1
     if "end_shape" not in data and "base_shape" in data:
         data["end_shape"] = _LEGACY_BASE_SHAPE_TO_EFFECT_SHAPE.get(str(data["base_shape"]), "rect")
     if str(data.get("inout_apply", "")) == "length":
         data["inout_apply"] = "brush_size"
+    if (
+        schema_version < EFFECT_PARAM_SCHEMA_VERSION
+        and int(data.get("max_line_count", _LEGACY_DEFAULT_MAX_LINE_COUNT) or 0)
+        == _LEGACY_DEFAULT_MAX_LINE_COUNT
+    ):
+        data["max_line_count"] = _DEFAULT_MAX_LINE_COUNT
+    if (
+        schema_version < EFFECT_PARAM_SCHEMA_VERSION
+        and int(data.get("speed_line_count", _LEGACY_DEFAULT_SPEED_LINE_COUNT) or 0)
+        == _LEGACY_DEFAULT_SPEED_LINE_COUNT
+    ):
+        data["speed_line_count"] = _DEFAULT_SPEED_LINE_COUNT
     for field in EFFECT_PARAM_FIELDS:
         if field not in data or not hasattr(params, field):
             continue
@@ -202,7 +225,7 @@ class BNameEffectLineParams(bpy.types.PropertyGroup):
     spacing_distance_mm: FloatProperty(name="線の間隔 (距離)", default=0.40, min=0.01, soft_max=50.0, update=_on_params_changed)  # type: ignore[valid-type]
     spacing_jitter_enabled: BoolProperty(name="乱れ", default=False, update=_on_params_changed)  # type: ignore[valid-type]
     spacing_jitter_amount: FloatProperty(name="間隔乱れ量", default=0.2, min=0.0, max=1.0, update=_on_params_changed)  # type: ignore[valid-type]
-    max_line_count: IntProperty(name="最大本数", default=300, min=1, soft_max=1000, update=_on_params_changed)  # type: ignore[valid-type]
+    max_line_count: IntProperty(name="最大本数", default=_DEFAULT_MAX_LINE_COUNT, min=1, soft_max=2000, update=_on_params_changed)  # type: ignore[valid-type]
 
     bundle_enabled: BoolProperty(name="まとまり", default=False, update=_on_params_changed)  # type: ignore[valid-type]
     bundle_line_count: IntProperty(name="数", default=4, min=1, soft_max=50, update=_on_params_changed)  # type: ignore[valid-type]
@@ -213,6 +236,7 @@ class BNameEffectLineParams(bpy.types.PropertyGroup):
     in_percent: FloatProperty(name="入り (%)", default=100.0, min=0.0, max=100.0, update=_on_params_changed)  # type: ignore[valid-type]
     out_percent: FloatProperty(name="抜き (%)", default=100.0, min=0.0, max=100.0, update=_on_params_changed)  # type: ignore[valid-type]
 
+    opacity: FloatProperty(name="不透明度", default=1.0, min=0.0, max=1.0, subtype="FACTOR", update=_on_params_changed)  # type: ignore[valid-type]
     line_color: FloatVectorProperty(subtype="COLOR", size=4, default=(0.0, 0.0, 0.0, 1.0), min=0.0, max=1.0, update=_on_params_changed)  # type: ignore[valid-type]
     fill_color: FloatVectorProperty(subtype="COLOR", size=4, default=(0.0, 0.0, 0.0, 1.0), min=0.0, max=1.0, update=_on_params_changed)  # type: ignore[valid-type]
     fill_opacity: FloatProperty(name="塗り不透明度", default=1.0, min=0.0, max=1.0, update=_on_params_changed)  # type: ignore[valid-type]
@@ -220,7 +244,7 @@ class BNameEffectLineParams(bpy.types.PropertyGroup):
 
     # 流線固有
     speed_angle_deg: FloatProperty(name="流線の角度", default=0.0, update=_on_params_changed)  # type: ignore[valid-type]
-    speed_line_count: IntProperty(name="流線の本数上限", default=20, min=1, soft_max=200, update=_on_params_changed)  # type: ignore[valid-type]
+    speed_line_count: IntProperty(name="流線の本数上限", default=_DEFAULT_SPEED_LINE_COUNT, min=1, soft_max=1000, update=_on_params_changed)  # type: ignore[valid-type]
 
     # 白抜き線固有
     white_outline_count: IntProperty(name="本数", default=5, min=1, soft_max=100, update=_on_params_changed)  # type: ignore[valid-type]
