@@ -10,6 +10,15 @@ from ..core.work import get_work
 from ..operators import panel_modal_state
 
 B_NAME_CATEGORY = "B-Name"
+_MODAL_TOOL_NAMES = (
+    "knife_cut",
+    "edge_move",
+    "layer_move",
+    "balloon_tool",
+    "text_tool",
+    "effect_line_tool",
+    "panel_vertex_edit",
+)
 
 
 def _active_stack_kind(context) -> str:
@@ -19,6 +28,10 @@ def _active_stack_kind(context) -> str:
     if stack is None or not (0 <= idx < len(stack)):
         return ""
     return str(getattr(stack[idx], "kind", "") or "")
+
+
+def _any_bname_modal_tool_active() -> bool:
+    return any(panel_modal_state.is_active(name) for name in _MODAL_TOOL_NAMES)
 
 
 class BNAME_PT_tools(Panel):
@@ -49,13 +62,14 @@ class BNAME_PT_tools(Panel):
             active_stack_kind == "gp"
             and getattr(context.scene, "bname_active_layer_kind", "") == "gp"
         )
+        modal_tool_active = _any_bname_modal_tool_active()
 
         row = layout.row(align=True)
         op = row.operator(
             "bname.gpencil_master_mode_set",
             text="",
             icon="OBJECT_DATAMODE",
-            depress=(mode == "OBJECT"),
+            depress=(not modal_tool_active and mode == "OBJECT"),
         )
         op.mode = "OBJECT"
         draw_slot = row.row(align=True)
@@ -64,7 +78,11 @@ class BNAME_PT_tools(Panel):
             "bname.gpencil_master_mode_set",
             text="",
             icon="OUTLINER_OB_GREASEPENCIL",
-            depress=(gp_layer_active and mode == "PAINT_GREASE_PENCIL"),
+            depress=(
+                not modal_tool_active
+                and gp_layer_active
+                and mode == "PAINT_GREASE_PENCIL"
+            ),
         )
         op.mode = "PAINT_GREASE_PENCIL"
         edit_slot = row.row(align=True)
@@ -73,7 +91,7 @@ class BNAME_PT_tools(Panel):
             "bname.gpencil_master_mode_set",
             text="",
             icon="EDITMODE_HLT",
-            depress=(gp_layer_active and mode == "EDIT"),
+            depress=(not modal_tool_active and gp_layer_active and mode == "EDIT"),
         )
         op.mode = "EDIT"
 

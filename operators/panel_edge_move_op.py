@@ -25,7 +25,7 @@ from gpu_extras.batch import batch_for_shader
 
 from ..core.work import get_work
 from ..io import page_io, panel_io
-from . import panel_modal_state
+from . import panel_modal_state, view_event_region
 from ..utils import (
     edge_selection,
     detail_popup,
@@ -584,26 +584,7 @@ def _compute_handle_centers_px(
 
 
 def _event_view_context(context, event):
-    screen = getattr(context, "screen", None)
-    if screen is None:
-        return None
-    for area in screen.areas:
-        if area.type != "VIEW_3D":
-            continue
-        for region in area.regions:
-            if region.type != "WINDOW":
-                continue
-            if not (
-                region.x <= event.mouse_x < region.x + region.width
-                and region.y <= event.mouse_y < region.y + region.height
-            ):
-                continue
-            space = area.spaces.active
-            rv3d = getattr(space, "region_3d", None)
-            if rv3d is None:
-                continue
-            return area, region, rv3d, event.mouse_x - region.x, event.mouse_y - region.y
-    return None
+    return view_event_region.view3d_window_under_event(context, event)
 
 
 def _page_offset_for_area(context, work, area, page_index: int) -> tuple[float, float]:
@@ -810,8 +791,21 @@ class BNAME_OT_panel_edge_move(Operator):
         return None
 
     def _is_inside_region(self, ev) -> bool:
-        region = self._region_at_mouse(ev)
-        return region is not None and region.type == "WINDOW" and region == self._region
+        mouse_x = int(getattr(ev, "mouse_x", -10_000_000))
+        mouse_y = int(getattr(ev, "mouse_y", -10_000_000))
+        for region in self._area.regions:
+            if region.type == "WINDOW":
+                continue
+            if (
+                region.x <= mouse_x < region.x + region.width
+                and region.y <= mouse_y < region.y + region.height
+            ):
+                return False
+        region = self._region
+        return (
+            region.x <= mouse_x < region.x + region.width
+            and region.y <= mouse_y < region.y + region.height
+        )
 
     def _is_over_navigation_gizmo(self, ev) -> bool:
         if not self._is_inside_region(ev):

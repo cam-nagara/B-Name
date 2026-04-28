@@ -653,6 +653,23 @@ def _draw_text_in_rect(context, rect, entry_or_text, color=(0, 0, 0, 1)) -> None
         blf.draw(glyph_font_id, glyph.ch)
 
 
+def _edge_selection_targets_panel(work, page, wm) -> bool:
+    if (
+        wm is None
+        or getattr(wm, "bname_edge_select_kind", "none")
+        not in {"edge", "border", "vertex"}
+    ):
+        return False
+    page_index = int(getattr(wm, "bname_edge_select_page", -1))
+    panel_index = int(getattr(wm, "bname_edge_select_panel", -1))
+    if not (0 <= page_index < len(work.pages)):
+        return False
+    selected_page = work.pages[page_index]
+    if str(getattr(selected_page, "id", "") or "") != str(getattr(page, "id", "") or ""):
+        return False
+    return 0 <= panel_index < len(getattr(page, "panels", []))
+
+
 def _draw_panels(
     work,
     page,
@@ -673,14 +690,7 @@ def _draw_panels(
     active_page_idx = int(getattr(work, "active_page_index", -1))
     active_page = work.pages[active_page_idx] if 0 <= active_page_idx < len(work.pages) else None
     wm = getattr(bpy.context, "window_manager", None)
-    edge_selection_matches = False
-    if wm is not None and getattr(wm, "bname_edge_select_kind", "none") in {"edge", "border", "vertex"}:
-        edge_selection_matches = (
-            int(getattr(wm, "bname_edge_select_page", -1)) == active_page_idx
-            and active_page is page
-            and int(getattr(wm, "bname_edge_select_panel", -1))
-            == int(getattr(page, "active_panel_index", -1))
-        )
+    edge_selection_matches = _edge_selection_targets_panel(work, page, wm)
     is_active_page = (
         active_kind == "panel"
         and not edge_selection_matches
@@ -1246,6 +1256,17 @@ def _should_highlight_active_page(context) -> bool:
     return getattr(scene, "bname_active_layer_kind", "") == "page"
 
 
+def _page_highlight_rect(rects, ox_mm: float, oy_mm: float) -> Rect:
+    canvas_r = _translate_rect(rects.canvas, ox_mm, oy_mm)
+    return canvas_r.inset(-5.0)
+
+
+def _draw_page_highlight(rect: Rect | None) -> None:
+    if rect is None:
+        return
+    _draw_rect_outline(rect, viewport_colors.SELECTION, width_mm=1.00)
+
+
 def _draw_callback() -> None:
     context = bpy.context
     work = get_work(context)
@@ -1283,6 +1304,7 @@ def _draw_callback() -> None:
             read_direction = getattr(paper, "read_direction", "left")
             active_idx = work.active_page_index
             highlight_active_page = _should_highlight_active_page(context)
+            active_highlight_rect = None
             for i, page in enumerate(work.pages):
                 if not overlay_visibility.page_visible(page):
                     continue
@@ -1299,9 +1321,8 @@ def _draw_callback() -> None:
                 )
                 # アクティブページにハイライト枠 (ズーム連動)
                 if highlight_active_page and i == active_idx:
-                    canvas_r = _translate_rect(rects.canvas, ox, oy)
-                    highlight = canvas_r.inset(-5.0)
-                    _draw_rect_outline(highlight, viewport_colors.SELECTION, width_mm=1.00)
+                    active_highlight_rect = _page_highlight_rect(rects, ox, oy)
+            _draw_page_highlight(active_highlight_rect)
         elif mode == MODE_PANEL and len(work.pages) > 0:
             from ..utils.page_grid import (
                 is_left_half_page as _is_left_half,
@@ -1315,6 +1336,7 @@ def _draw_callback() -> None:
             read_direction = getattr(paper, "read_direction", "left")
             active_idx = work.active_page_index
             highlight_active_page = _should_highlight_active_page(context)
+            active_highlight_rect = None
             for i, page in enumerate(work.pages):
                 if not overlay_visibility.page_visible(page):
                     continue
@@ -1329,9 +1351,8 @@ def _draw_callback() -> None:
                     is_left_half=left_half,
                 )
                 if highlight_active_page and i == active_idx:
-                    canvas_r = _translate_rect(rects.canvas, ox, oy)
-                    highlight = canvas_r.inset(-5.0)
-                    _draw_rect_outline(highlight, viewport_colors.SELECTION, width_mm=1.00)
+                    active_highlight_rect = _page_highlight_rect(rects, ox, oy)
+            _draw_page_highlight(active_highlight_rect)
         else:
             from ..utils.page_grid import (
                 is_left_half_page as _is_left_half,

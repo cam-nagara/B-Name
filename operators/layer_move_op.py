@@ -8,7 +8,7 @@ from bpy.types import Operator
 from ..core.mode import MODE_PANEL, MODE_PAGE, get_mode
 from ..core.work import get_active_page, get_work
 from ..utils import geom, gp_layer_parenting as gp_parent, layer_stack as layer_stack_utils, page_grid
-from . import panel_modal_state, panel_picker
+from . import panel_modal_state, panel_picker, view_event_region
 
 
 def _move_panel(panel, dx_mm: float, dy_mm: float) -> None:
@@ -218,6 +218,8 @@ class BNAME_OT_layer_move_tool(Operator):
             panel_modal_state.clear_active("layer_move", self, context)
             return {"CANCELLED"}
         if event.type == "LEFTMOUSE" and event.value == "PRESS":
+            if not view_event_region.is_view3d_window_event(context, event):
+                return {"PASS_THROUGH"}
             coords = panel_picker._event_world_mm(context, event)
             if coords is None:
                 return {"PASS_THROUGH"}
@@ -225,7 +227,7 @@ class BNAME_OT_layer_move_tool(Operator):
                 return {"RUNNING_MODAL"}
             return {"RUNNING_MODAL"}
         if event.type == "LEFTMOUSE" and event.value == "RELEASE":
-            if not self._dragging and panel_picker._event_world_mm(context, event) is None:
+            if not self._dragging and not view_event_region.is_view3d_window_event(context, event):
                 return {"PASS_THROUGH"}
             if self._dragging:
                 if self._moved:
@@ -240,6 +242,8 @@ class BNAME_OT_layer_move_tool(Operator):
             return {"RUNNING_MODAL"}
         if event.type != "MOUSEMOVE":
             return {"PASS_THROUGH"}
+        if not view_event_region.is_view3d_window_event(context, event):
+            return {"RUNNING_MODAL"} if self._dragging else {"PASS_THROUGH"}
         coords = panel_picker._event_world_mm(context, event)
         if coords is None or self._last_world is None or not self._dragging:
             return {"PASS_THROUGH"}

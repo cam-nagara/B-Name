@@ -16,7 +16,7 @@ from ..core.work import get_work
 from ..utils import detail_popup, log
 from ..utils.geom import m_to_mm
 from ..utils import layer_stack as layer_stack_utils
-from . import panel_modal_state
+from . import panel_modal_state, view_event_region
 
 _logger = log.get_logger(__name__)
 
@@ -303,55 +303,18 @@ def _event_world_xy_mm(context, event) -> tuple[float | None, float | None]:
 
     from ..utils import geom
 
-    screen = getattr(context, "screen", None)
-    if screen is None:
+    view = view_event_region.view3d_window_under_event(context, event)
+    if view is None:
         return None, None
-    mouse_x = int(getattr(event, "mouse_x", -10_000_000))
-    mouse_y = int(getattr(event, "mouse_y", -10_000_000))
-    for area in screen.areas:
-        if area.type != "VIEW_3D":
-            continue
-        for region in area.regions:
-            if region.type != "WINDOW":
-                continue
-            if not (
-                region.x <= mouse_x < region.x + region.width
-                and region.y <= mouse_y < region.y + region.height
-            ):
-                continue
-            rv3d = getattr(area.spaces.active, "region_3d", None)
-            if rv3d is None:
-                continue
-            loc = region_2d_to_location_3d(
-                region,
-                rv3d,
-                (mouse_x - region.x, mouse_y - region.y),
-                (0.0, 0.0, 0.0),
-            )
-            if loc is None:
-                continue
-            return geom.m_to_mm(loc.x), geom.m_to_mm(loc.y)
-    return None, None
+    _area, region, rv3d, mouse_x, mouse_y = view
+    loc = region_2d_to_location_3d(region, rv3d, (mouse_x, mouse_y), (0.0, 0.0, 0.0))
+    if loc is None:
+        return None, None
+    return geom.m_to_mm(loc.x), geom.m_to_mm(loc.y)
 
 
 def _event_in_view3d_window(context, event) -> bool:
-    screen = getattr(context, "screen", None)
-    if screen is None:
-        return False
-    mouse_x = int(getattr(event, "mouse_x", -10_000_000))
-    mouse_y = int(getattr(event, "mouse_y", -10_000_000))
-    for area in screen.areas:
-        if area.type != "VIEW_3D":
-            continue
-        for region in area.regions:
-            if region.type != "WINDOW":
-                continue
-            if (
-                region.x <= mouse_x < region.x + region.width
-                and region.y <= mouse_y < region.y + region.height
-            ):
-                return True
-    return False
+    return view_event_region.is_view3d_window_event(context, event)
 
 
 def _effect_hit_part(bounds: tuple[float, float, float, float], x_mm: float, y_mm: float) -> str:
@@ -470,7 +433,9 @@ class BNAME_OT_effect_line_tool(Operator):
         return bool(work and work.loaded and get_mode(context) != MODE_PANEL)
 
     def invoke(self, context, _event):
-        if panel_modal_state.get_active("effect_line_tool") is not None:
+        active = panel_modal_state.get_active("effect_line_tool")
+        if active is not None:
+            active.finish_from_external(context, keep_selection=True)
             return {"FINISHED"}
         panel_modal_state.finish_active("panel_vertex_edit", context, keep_selection=True)
         panel_modal_state.finish_active("knife_cut", context, keep_selection=False)
@@ -557,6 +522,12 @@ class BNAME_OT_effect_line_tool(Operator):
         self._drag_moved = False
 
     def _modal_dragging(self, context, event):
+        if not _event_in_view3d_window(context, event):
+            if event.type == "LEFTMOUSE" and event.value == "RELEASE":
+                self._finish_drag(context)
+            elif event.type in {"ESC", "RIGHTMOUSE"} and event.value == "PRESS":
+                self._cancel_drag(context)
+            return {"RUNNING_MODAL"}
         if event.type == "MOUSEMOVE":
             self._update_drag(context, event)
             return {"RUNNING_MODAL"}

@@ -19,7 +19,7 @@ from ..core.mode import MODE_PANEL, get_mode
 from ..core.work import get_active_page, get_work
 from ..utils import detail_popup, layer_stack as layer_stack_utils, log, page_range, text_style
 from ..utils.layer_hierarchy import page_stack_key
-from . import panel_modal_state, text_edit_runtime
+from . import panel_modal_state, text_edit_runtime, view_event_region
 
 _logger = log.get_logger(__name__)
 
@@ -73,35 +73,14 @@ def _event_world_xy_mm(context, event) -> tuple[float | None, float | None]:
 
     from ..utils import geom
 
-    screen = getattr(context, "screen", None)
-    if screen is None:
+    view = view_event_region.view3d_window_under_event(context, event)
+    if view is None:
         return None, None
-    mouse_x = int(getattr(event, "mouse_x", -10_000_000))
-    mouse_y = int(getattr(event, "mouse_y", -10_000_000))
-    for area in screen.areas:
-        if area.type != "VIEW_3D":
-            continue
-        for region in area.regions:
-            if region.type != "WINDOW":
-                continue
-            if not (
-                region.x <= mouse_x < region.x + region.width
-                and region.y <= mouse_y < region.y + region.height
-            ):
-                continue
-            rv3d = getattr(area.spaces.active, "region_3d", None)
-            if rv3d is None:
-                continue
-            loc = region_2d_to_location_3d(
-                region,
-                rv3d,
-                (mouse_x - region.x, mouse_y - region.y),
-                (0.0, 0.0, 0.0),
-            )
-            if loc is None:
-                continue
-            return geom.m_to_mm(loc.x), geom.m_to_mm(loc.y)
-    return None, None
+    _area, region, rv3d, mx, my = view
+    loc = region_2d_to_location_3d(region, rv3d, (mx, my), (0.0, 0.0, 0.0))
+    if loc is None:
+        return None, None
+    return geom.m_to_mm(loc.x), geom.m_to_mm(loc.y)
 
 
 def _resolve_local_xy_for_page_from_event(context, event, page_id: str):
@@ -182,23 +161,7 @@ def _creation_blocked(context, page, x_mm: float, y_mm: float, width_mm: float, 
 
 
 def _event_in_view3d_window(context, event) -> bool:
-    screen = getattr(context, "screen", None)
-    if screen is None:
-        return False
-    mouse_x = int(getattr(event, "mouse_x", -10_000_000))
-    mouse_y = int(getattr(event, "mouse_y", -10_000_000))
-    for area in screen.areas:
-        if area.type != "VIEW_3D":
-            continue
-        for region in area.regions:
-            if region.type != "WINDOW":
-                continue
-            if (
-                region.x <= mouse_x < region.x + region.width
-                and region.y <= mouse_y < region.y + region.height
-            ):
-                return True
-    return False
+    return view_event_region.is_view3d_window_event(context, event)
 
 
 def _create_text_entry(

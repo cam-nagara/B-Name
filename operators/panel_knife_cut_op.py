@@ -502,8 +502,21 @@ class BNAME_OT_panel_knife_cut(Operator):
         return (x1, y2)  # 垂直にスナップ
 
     def _is_inside_region(self, ev) -> bool:
-        region = self._region_at_mouse(ev)
-        return region is not None and region.type == "WINDOW" and region == self._region
+        mouse_x = int(getattr(ev, "mouse_x", -10_000_000))
+        mouse_y = int(getattr(ev, "mouse_y", -10_000_000))
+        for region in self._area.regions:
+            if region.type == "WINDOW":
+                continue
+            if (
+                region.x <= mouse_x < region.x + region.width
+                and region.y <= mouse_y < region.y + region.height
+            ):
+                return False
+        region = self._region
+        return (
+            region.x <= mouse_x < region.x + region.width
+            and region.y <= mouse_y < region.y + region.height
+        )
 
     def _is_over_navigation_gizmo(self, ev) -> bool:
         if not self._is_inside_region(ev):

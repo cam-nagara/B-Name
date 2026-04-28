@@ -20,7 +20,7 @@ from ..core.work import get_active_page, get_work
 from ..io import balloon_presets
 from ..utils import detail_popup, layer_stack as layer_stack_utils, log
 from ..utils.layer_hierarchy import page_stack_key
-from . import panel_modal_state
+from . import panel_modal_state, view_event_region
 
 _logger = log.get_logger(__name__)
 
@@ -66,49 +66,33 @@ def _resolve_page_from_event(context, event):
     if work is None or not work.loaded or page is None:
         return work, page, None, None
 
-    screen = getattr(context, "screen", None)
-    if screen is None:
+    view = view_event_region.view3d_window_under_event(context, event)
+    if view is None:
         return work, page, None, None
-    for area in screen.areas:
-        if area.type != "VIEW_3D":
-            continue
-        for region in area.regions:
-            if region.type != "WINDOW":
-                continue
-            if not (
-                region.x <= event.mouse_x < region.x + region.width
-                and region.y <= event.mouse_y < region.y + region.height
-            ):
-                continue
-            rv3d = getattr(area.spaces.active, "region_3d", None)
-            if rv3d is None:
-                continue
-            mx = event.mouse_x - region.x
-            my = event.mouse_y - region.y
-            loc = region_2d_to_location_3d(region, rv3d, (mx, my), (0.0, 0.0, 0.0))
-            if loc is None:
-                continue
-            x_mm = geom.m_to_mm(loc.x)
-            y_mm = geom.m_to_mm(loc.y)
-            scene = context.scene
-            page_idx = page_grid.page_index_at_world_mm(work, scene, x_mm, y_mm)
-            if page_idx is not None and 0 <= page_idx < len(work.pages):
-                work.active_page_index = page_idx
-                page = work.pages[page_idx]
-                cols = max(1, int(getattr(scene, "bname_overview_cols", 4)))
-                gap = float(getattr(scene, "bname_overview_gap_mm", 30.0))
-                cw = work.paper.canvas_width_mm
-                ch = work.paper.canvas_height_mm
-                start_side = getattr(work.paper, "start_side", "right")
-                read_direction = getattr(work.paper, "read_direction", "left")
-                ox, oy = page_grid.page_grid_offset_mm(
-                    page_idx, cols, gap, cw, ch, start_side, read_direction
-                )
-                add_x, add_y = page_grid.page_manual_offset_mm(page)
-                ox += add_x
-                oy += add_y
-                return work, page, x_mm - ox, y_mm - oy
-            return work, page, None, None
+    _area, region, rv3d, mx, my = view
+    loc = region_2d_to_location_3d(region, rv3d, (mx, my), (0.0, 0.0, 0.0))
+    if loc is None:
+        return work, page, None, None
+    x_mm = geom.m_to_mm(loc.x)
+    y_mm = geom.m_to_mm(loc.y)
+    scene = context.scene
+    page_idx = page_grid.page_index_at_world_mm(work, scene, x_mm, y_mm)
+    if page_idx is not None and 0 <= page_idx < len(work.pages):
+        work.active_page_index = page_idx
+        page = work.pages[page_idx]
+        cols = max(1, int(getattr(scene, "bname_overview_cols", 4)))
+        gap = float(getattr(scene, "bname_overview_gap_mm", 30.0))
+        cw = work.paper.canvas_width_mm
+        ch = work.paper.canvas_height_mm
+        start_side = getattr(work.paper, "start_side", "right")
+        read_direction = getattr(work.paper, "read_direction", "left")
+        ox, oy = page_grid.page_grid_offset_mm(
+            page_idx, cols, gap, cw, ch, start_side, read_direction
+        )
+        add_x, add_y = page_grid.page_manual_offset_mm(page)
+        ox += add_x
+        oy += add_y
+        return work, page, x_mm - ox, y_mm - oy
     return work, page, None, None
 
 
@@ -126,35 +110,14 @@ def _event_world_xy_mm(context, event) -> tuple[float | None, float | None]:
 
     from ..utils import geom
 
-    screen = getattr(context, "screen", None)
-    if screen is None:
+    view = view_event_region.view3d_window_under_event(context, event)
+    if view is None:
         return None, None
-    mouse_x = int(getattr(event, "mouse_x", -10_000_000))
-    mouse_y = int(getattr(event, "mouse_y", -10_000_000))
-    for area in screen.areas:
-        if area.type != "VIEW_3D":
-            continue
-        for region in area.regions:
-            if region.type != "WINDOW":
-                continue
-            if not (
-                region.x <= mouse_x < region.x + region.width
-                and region.y <= mouse_y < region.y + region.height
-            ):
-                continue
-            rv3d = getattr(area.spaces.active, "region_3d", None)
-            if rv3d is None:
-                continue
-            loc = region_2d_to_location_3d(
-                region,
-                rv3d,
-                (mouse_x - region.x, mouse_y - region.y),
-                (0.0, 0.0, 0.0),
-            )
-            if loc is None:
-                continue
-            return geom.m_to_mm(loc.x), geom.m_to_mm(loc.y)
-    return None, None
+    _area, region, rv3d, mx, my = view
+    loc = region_2d_to_location_3d(region, rv3d, (mx, my), (0.0, 0.0, 0.0))
+    if loc is None:
+        return None, None
+    return geom.m_to_mm(loc.x), geom.m_to_mm(loc.y)
 
 
 def _resolve_local_xy_for_page_from_event(context, event, page_id: str):
@@ -444,23 +407,7 @@ def _add_tail_to_point(entry, tip_x: float, tip_y: float) -> bool:
 
 
 def _event_in_view3d_window(context, event) -> bool:
-    screen = getattr(context, "screen", None)
-    if screen is None:
-        return False
-    mouse_x = int(getattr(event, "mouse_x", -10_000_000))
-    mouse_y = int(getattr(event, "mouse_y", -10_000_000))
-    for area in screen.areas:
-        if area.type != "VIEW_3D":
-            continue
-        for region in area.regions:
-            if region.type != "WINDOW":
-                continue
-            if (
-                region.x <= mouse_x < region.x + region.width
-                and region.y <= mouse_y < region.y + region.height
-            ):
-                return True
-    return False
+    return view_event_region.is_view3d_window_event(context, event)
 
 
 class BNAME_OT_balloon_add(Operator):
