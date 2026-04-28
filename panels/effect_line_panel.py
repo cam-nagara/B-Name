@@ -36,6 +36,33 @@ def _draw_shape_settings(layout, params, prefix: str, label: str, *, frame_toggl
         row.prop(params, f"{prefix}_cloud_sub_height_ratio")
 
 
+def _draw_white_outline_settings(layout, params) -> None:
+    box = layout.box()
+    box.label(text="白抜き線")
+    row = box.row(align=True)
+    row.prop(params, "white_outline_count")
+    row.prop(params, "white_outline_spacing_mm")
+    box.prop(params, "white_outline_width_mm")
+    row = box.row(align=True)
+    row.prop(params, "white_outline_width_jitter_enabled")
+    sub = row.row()
+    sub.enabled = params.white_outline_width_jitter_enabled
+    sub.prop(params, "white_outline_width_min_percent", text="最小")
+    row = box.row(align=True)
+    row.prop(params, "white_outline_length_jitter_enabled")
+    sub = row.row()
+    sub.enabled = params.white_outline_length_jitter_enabled
+    sub.prop(params, "white_outline_length_min_percent", text="最小")
+    box.prop(params, "white_outline_white_ratio_percent")
+    row = box.row(align=True)
+    row.prop(params, "white_outline_white_brush_mm")
+    row.prop(params, "white_outline_white_attenuation")
+    row = box.row(align=True)
+    row.prop(params, "white_outline_black_brush_mm")
+    row.prop(params, "white_outline_black_attenuation")
+    box.prop(params, "white_outline_angle_deg")
+
+
 class BNAME_PT_effect_line(Panel):
     bl_idname = "BNAME_PT_effect_line"
     bl_label = "効果線"
@@ -55,7 +82,13 @@ class BNAME_PT_effect_line(Panel):
         box = layout.box()
         box.label(text="種類")
         box.prop(params, "effect_type")
-        box.prop(params, "rotation_deg")
+        if params.effect_type != "white_outline":
+            box.prop(params, "rotation_deg")
+
+        if params.effect_type == "white_outline":
+            _draw_white_outline_settings(layout, params)
+            layout.operator("bname.effect_line_generate", icon="STROKE")
+            return
 
         _draw_shape_settings(layout, params, "start", "始点形状", frame_toggle=True)
         _draw_shape_settings(layout, params, "end", "終点形状")

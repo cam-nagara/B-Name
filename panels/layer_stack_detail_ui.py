@@ -258,7 +258,8 @@ def _draw_effect_type_settings(box, params) -> None:
     param_box = box.box()
     param_box.label(text="種類", icon="STROKE")
     param_box.prop(params, "effect_type")
-    param_box.prop(params, "rotation_deg")
+    if params.effect_type != "white_outline":
+        param_box.prop(params, "rotation_deg")
 
 
 def _draw_effect_shape_settings(box, params, prefix: str, label: str, *, frame_toggle: bool = False) -> None:
@@ -344,6 +345,33 @@ def _draw_effect_tail_settings(box, params) -> None:
         color_box.prop(params, "fill_base_shape")
 
 
+def _draw_effect_white_outline_settings(box, params) -> None:
+    outline_box = box.box()
+    outline_box.label(text="白抜き線")
+    row = outline_box.row(align=True)
+    row.prop(params, "white_outline_count")
+    row.prop(params, "white_outline_spacing_mm")
+    outline_box.prop(params, "white_outline_width_mm")
+    row = outline_box.row(align=True)
+    row.prop(params, "white_outline_width_jitter_enabled")
+    sub = row.row()
+    sub.enabled = params.white_outline_width_jitter_enabled
+    sub.prop(params, "white_outline_width_min_percent", text="最小")
+    row = outline_box.row(align=True)
+    row.prop(params, "white_outline_length_jitter_enabled")
+    sub = row.row()
+    sub.enabled = params.white_outline_length_jitter_enabled
+    sub.prop(params, "white_outline_length_min_percent", text="最小")
+    outline_box.prop(params, "white_outline_white_ratio_percent")
+    row = outline_box.row(align=True)
+    row.prop(params, "white_outline_white_brush_mm")
+    row.prop(params, "white_outline_white_attenuation")
+    row = outline_box.row(align=True)
+    row.prop(params, "white_outline_black_brush_mm")
+    row.prop(params, "white_outline_black_attenuation")
+    outline_box.prop(params, "white_outline_angle_deg")
+
+
 def _draw_effect_selected_settings(box, context, obj, active_layer) -> None:
     settings = box.column(align=True)
     name = getattr(active_layer, "name", "効果線")
@@ -358,6 +386,10 @@ def _draw_effect_selected_settings(box, context, obj, active_layer) -> None:
         return
 
     _draw_effect_type_settings(box, params)
+    if params.effect_type == "white_outline":
+        _draw_effect_white_outline_settings(box, params)
+        box.operator("bname.effect_line_generate", text="効果線を追加", icon="STROKE")
+        return
     _draw_effect_shape_settings(box, params, "start", "始点形状", frame_toggle=True)
     _draw_effect_shape_settings(box, params, "end", "終点形状")
     _draw_effect_line_settings(box, params)

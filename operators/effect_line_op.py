@@ -439,6 +439,19 @@ def _write_effect_strokes(
     if drawing is None:
         return 0
     line_material_index = _apply_material_settings(obj, layer, params)
+    white_outline_black_material_index = line_material_index
+    white_outline_white_material_index = line_material_index
+    if getattr(params, "effect_type", "") == "white_outline":
+        white_outline_black_material_index = _ensure_effect_material(
+            obj,
+            "BName_Effect_WhiteOutline_Black",
+            (0.0, 0.0, 0.0, 1.0),
+        )
+        white_outline_white_material_index = _ensure_effect_material(
+            obj,
+            "BName_Effect_WhiteOutline_White",
+            (1.0, 1.0, 1.0, 1.0),
+        )
     start_guide_material_index = _ensure_effect_material(
         obj,
         "BName_Effect_StartShape_Purple",
@@ -468,13 +481,18 @@ def _write_effect_strokes(
     )
     line_added = 0
     for stroke in strokes:
+        material_index = line_material_index
+        if stroke.role == "white_outline_black":
+            material_index = white_outline_black_material_index
+        elif stroke.role == "white_outline_white":
+            material_index = white_outline_white_material_index
         if gpencil.add_stroke_to_drawing(
             drawing,
             stroke.points_xyz,
             radius=stroke.radius,
             radii=getattr(stroke, "radii", None),
             cyclic=stroke.cyclic,
-            material_index=line_material_index,
+            material_index=material_index,
             curve_type=getattr(stroke, "curve_type", "POLY"),
             bezier_smooth=bool(getattr(stroke, "bezier_smooth", False)),
         ):

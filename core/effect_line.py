@@ -1,4 +1,4 @@
-"""効果線 (集中線/ウニフラ/ベタフラ/流線) の PropertyGroup.
+"""効果線 (集中線/ウニフラ/ベタフラ/流線/白抜き線) の PropertyGroup.
 
 計画書 3.1.6 参照。ツール起動時のパラメータセットと、生成済み効果線
 レイヤーのメタデータを保持する。
@@ -26,6 +26,7 @@ _EFFECT_TYPE_ITEMS = (
     ("uni_flash", "ウニフラ", "ギザギザ基準図形の集中線"),
     ("beta_flash", "ベタフラ", "塗りつぶし版ウニフラ"),
     ("speed", "流線", "動き・速度表現の平行線"),
+    ("white_outline", "白抜き線", "白線群の両側に黒線群を重ねた効果線"),
 )
 
 _EFFECT_SHAPE_ITEMS = tuple(
@@ -90,6 +91,19 @@ EFFECT_PARAM_FIELDS = (
     "fill_base_shape",
     "speed_angle_deg",
     "speed_line_count",
+    "white_outline_count",
+    "white_outline_spacing_mm",
+    "white_outline_width_mm",
+    "white_outline_width_jitter_enabled",
+    "white_outline_width_min_percent",
+    "white_outline_length_jitter_enabled",
+    "white_outline_length_min_percent",
+    "white_outline_white_ratio_percent",
+    "white_outline_white_brush_mm",
+    "white_outline_white_attenuation",
+    "white_outline_black_brush_mm",
+    "white_outline_black_attenuation",
+    "white_outline_angle_deg",
 )
 
 
@@ -207,6 +221,21 @@ class BNameEffectLineParams(bpy.types.PropertyGroup):
     # 流線固有
     speed_angle_deg: FloatProperty(name="流線の角度", default=0.0, update=_on_params_changed)  # type: ignore[valid-type]
     speed_line_count: IntProperty(name="流線の本数上限", default=20, min=1, soft_max=200, update=_on_params_changed)  # type: ignore[valid-type]
+
+    # 白抜き線固有
+    white_outline_count: IntProperty(name="本数", default=5, min=1, soft_max=100, update=_on_params_changed)  # type: ignore[valid-type]
+    white_outline_spacing_mm: FloatProperty(name="間隔", default=0.2, min=0.0, soft_max=20.0, update=_on_params_changed)  # type: ignore[valid-type]
+    white_outline_width_mm: FloatProperty(name="太さ", default=10.0, min=0.01, soft_max=100.0, update=_on_params_changed)  # type: ignore[valid-type]
+    white_outline_width_jitter_enabled: BoolProperty(name="太さ乱れ", default=False, update=_on_params_changed)  # type: ignore[valid-type]
+    white_outline_width_min_percent: FloatProperty(name="最小太さ (%)", default=50.0, min=0.0, max=100.0, update=_on_params_changed)  # type: ignore[valid-type]
+    white_outline_length_jitter_enabled: BoolProperty(name="長さ乱れ", default=False, update=_on_params_changed)  # type: ignore[valid-type]
+    white_outline_length_min_percent: FloatProperty(name="最小長さ (%)", default=50.0, min=0.0, max=100.0, update=_on_params_changed)  # type: ignore[valid-type]
+    white_outline_white_ratio_percent: FloatProperty(name="白線割合 (%)", default=30.0, min=0.0, max=100.0, update=_on_params_changed)  # type: ignore[valid-type]
+    white_outline_white_brush_mm: FloatProperty(name="白線太さ", default=0.3, min=0.01, soft_max=5.0, update=_on_params_changed)  # type: ignore[valid-type]
+    white_outline_white_attenuation: FloatProperty(name="白線減衰", default=0.0, min=-100.0, max=100.0, update=_on_params_changed)  # type: ignore[valid-type]
+    white_outline_black_brush_mm: FloatProperty(name="黒線太さ", default=0.3, min=0.01, soft_max=5.0, update=_on_params_changed)  # type: ignore[valid-type]
+    white_outline_black_attenuation: FloatProperty(name="黒線減衰", default=0.0, min=-100.0, max=100.0, update=_on_params_changed)  # type: ignore[valid-type]
+    white_outline_angle_deg: FloatProperty(name="角度", default=0.0, update=_on_params_changed)  # type: ignore[valid-type]
 
 
 _CLASSES = (BNameEffectLineParams,)

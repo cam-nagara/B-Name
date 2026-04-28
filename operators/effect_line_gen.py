@@ -424,6 +424,227 @@ def generate_beta_flash_strokes(
     ]
 
 
+def _value_between_min_percent(base: float, min_percent: float, enabled: bool, rng: random.Random) -> float:
+    base = max(0.0, float(base))
+    if not enabled:
+        return base
+    lo = base * _clamp01(float(min_percent) / 100.0)
+    return lo + (base - lo) * rng.random()
+
+
+def _span_offsets(center: float, width: float, step: float, *, include_edges: bool = False) -> list[float]:
+    width = max(0.0, float(width))
+    if width <= 1.0e-6:
+        return []
+    step = max(0.01, float(step))
+    if include_edges and width > step:
+        count = max(2, int(math.floor(width / step)) + 1)
+        count = min(count, 256)
+        start = float(center) - width * 0.5
+        unit = width / max(1, count - 1)
+        return [start + unit * i for i in range(count)]
+    count = max(1, int(math.ceil(width / step)))
+    count = min(count, 256)
+    start = float(center) - width * 0.5
+    unit = width / count
+    return [start + unit * (i + 0.5) for i in range(count)]
+
+
+def _attenuated_length(base_length: float, offset_from_center: float, half_width: float, attenuation: float) -> float:
+    norm = 0.0 if half_width <= 1.0e-6 else min(1.0, abs(float(offset_from_center)) / half_width)
+    factor = 1.0 - (float(attenuation) / 100.0) * norm
+    return max(0.0, float(base_length) * factor)
+
+
+def _white_outline_stroke(
+    center_xy_mm: tuple[float, float],
+    direction_xy: tuple[float, float],
+    normal_xy: tuple[float, float],
+    total_offset_mm: float,
+    band_offset_mm: float,
+    band_half_width_mm: float,
+    base_length_mm: float,
+    brush_mm: float,
+    attenuation: float,
+    role: str,
+) -> EffectLineStroke | None:
+    cx, cy = center_xy_mm
+    dx, dy = direction_xy
+    nx, ny = normal_xy
+    length = _attenuated_length(base_length_mm, band_offset_mm, band_half_width_mm, attenuation)
+    if length <= 1.0e-6:
+        return None
+    mid_x = cx + nx * total_offset_mm
+    mid_y = cy + ny * total_offset_mm
+    sx = mid_x - dx * length * 0.5
+    sy = mid_y - dy * length * 0.5
+    ex = mid_x + dx * length * 0.5
+    ey = mid_y + dy * length * 0.5
+    return EffectLineStroke(
+        points_xyz=[(mm_to_m(sx), mm_to_m(sy), 0.0), (mm_to_m(ex), mm_to_m(ey), 0.0)],
+        radius=mm_to_m(max(0.01, float(brush_mm)) / 2.0),
+        role=role,
+    )
+
+
+def _white_outline_bands(
+    params,
+    count: int,
+    base_width: float,
+    base_length: float,
+    rng: random.Random,
+) -> list[tuple[float, float]]:
+    bands: list[tuple[float, float]] = []
+    for _i in range(count):
+        band_width = _value_between_min_percent(
+            base_width,
+            float(getattr(params, "white_outline_width_min_percent", 50.0)),
+            bool(getattr(params, "white_outline_width_jitter_enabled", False)),
+            rng,
+        )
+        band_length = _value_between_min_percent(
+            base_length,
+            float(getattr(params, "white_outline_length_min_percent", 50.0)),
+            bool(getattr(params, "white_outline_length_jitter_enabled", False)),
+            rng,
+        )
+        bands.append((band_width, band_length))
+    return bands
+
+
+def _append_white_outline_region_strokes(
+    out: list[EffectLineStroke],
+    center_xy_mm: tuple[float, float],
+    direction: tuple[float, float],
+    normal: tuple[float, float],
+    band_center_offset: float,
+    band_half: float,
+    band_length: float,
+    *,
+    region_center: float,
+    region_width: float,
+    brush_mm: float,
+    attenuation: float,
+    role: str,
+    include_edges: bool = False,
+) -> None:
+    for local_offset in _span_offsets(region_center, region_width, brush_mm, include_edges=include_edges):
+        stroke = _white_outline_stroke(
+            center_xy_mm,
+            direction,
+            normal,
+            band_center_offset + local_offset,
+            local_offset,
+            band_half,
+            band_length,
+            brush_mm,
+            attenuation,
+            role,
+        )
+        if stroke is not None:
+            out.append(stroke)
+
+
+def _append_white_outline_band_strokes(
+    black_strokes: list[EffectLineStroke],
+    white_strokes: list[EffectLineStroke],
+    params,
+    center_xy_mm: tuple[float, float],
+    direction: tuple[float, float],
+    normal: tuple[float, float],
+    band_center_offset: float,
+    band_width: float,
+    band_length: float,
+    *,
+    white_ratio: float,
+    white_brush: float,
+    black_brush: float,
+) -> None:
+    band_half = max(0.005, band_width * 0.5)
+    white_width = band_width * white_ratio
+    black_width = max(0.0, (band_width - white_width) * 0.5)
+    white_half = white_width * 0.5
+    black_regions = (
+        (-white_half - black_width * 0.5, black_width),
+        (white_half + black_width * 0.5, black_width),
+    )
+    for region_center, region_width in black_regions:
+        _append_white_outline_region_strokes(
+            black_strokes,
+            center_xy_mm,
+            direction,
+            normal,
+            band_center_offset,
+            band_half,
+            band_length,
+            region_center=region_center,
+            region_width=region_width,
+            brush_mm=black_brush,
+            attenuation=float(getattr(params, "white_outline_black_attenuation", 0.0)),
+            role="white_outline_black",
+            include_edges=True,
+        )
+    _append_white_outline_region_strokes(
+        white_strokes,
+        center_xy_mm,
+        direction,
+        normal,
+        band_center_offset,
+        band_half,
+        band_length,
+        region_center=0.0,
+        region_width=white_width,
+        brush_mm=white_brush,
+        attenuation=float(getattr(params, "white_outline_white_attenuation", 0.0)),
+        role="white_outline_white",
+    )
+
+
+def generate_white_outline_strokes(
+    params,
+    center_xy_mm: tuple[float, float],
+    radius_x_mm: float,
+    radius_y_mm: float,
+    seed: int = 0,
+) -> list[EffectLineStroke]:
+    """白抜き線: 白線群の両側に黒線群を重ねた平行線群を生成."""
+    rng = random.Random(seed)
+    count = max(1, min(500, int(getattr(params, "white_outline_count", 5))))
+    base_width = max(0.01, float(getattr(params, "white_outline_width_mm", 10.0)))
+    spacing = max(0.0, float(getattr(params, "white_outline_spacing_mm", 0.2)))
+    white_ratio = _clamp01(float(getattr(params, "white_outline_white_ratio_percent", 30.0)) / 100.0)
+    white_brush = max(0.01, float(getattr(params, "white_outline_white_brush_mm", 0.3)))
+    black_brush = max(0.01, float(getattr(params, "white_outline_black_brush_mm", 0.3)))
+    angle = math.radians(float(getattr(params, "white_outline_angle_deg", 0.0)))
+    direction = (math.cos(angle), math.sin(angle))
+    normal = (-direction[1], direction[0])
+    base_length = max(0.1, math.hypot(float(radius_x_mm) * 2.0, float(radius_y_mm) * 2.0))
+    bands = _white_outline_bands(params, count, base_width, base_length, rng)
+    black_strokes: list[EffectLineStroke] = []
+    white_strokes: list[EffectLineStroke] = []
+
+    total_span = sum(width for width, _length in bands) + spacing * max(0, len(bands) - 1)
+    band_edge_offset = -total_span * 0.5
+    for band_width, band_length in bands:
+        band_center_offset = band_edge_offset + band_width * 0.5
+        band_edge_offset += band_width + spacing
+        _append_white_outline_band_strokes(
+            black_strokes,
+            white_strokes,
+            params,
+            center_xy_mm,
+            direction,
+            normal,
+            band_center_offset,
+            band_width,
+            band_length,
+            white_ratio=white_ratio,
+            white_brush=white_brush,
+            black_brush=black_brush,
+        )
+    return black_strokes + white_strokes
+
+
 def generate_strokes(
     params,
     center_xy_mm=(110.0, 160.0),
@@ -445,6 +666,8 @@ def generate_strokes(
         )
     if etype == "beta_flash":
         return generate_beta_flash_strokes(params, center_xy_mm, rx, ry, seed=seed)
+    if etype == "white_outline":
+        return generate_white_outline_strokes(params, center_xy_mm, rx, ry, seed=seed)
     return generate_focus_strokes(
         params,
         center_xy_mm,
@@ -464,6 +687,8 @@ def generate_shape_guide_strokes(
     start_extend_mm: float = 0.0,
 ) -> list[EffectLineStroke]:
     """始点/終点の形状ラインをガイドストロークとして返す。"""
+    if getattr(params, "effect_type", "") == "white_outline":
+        return []
     rx, ry = radius_xy_mm
     cx, cy = center_xy_mm
     end_rect = _scaled_rect(cx, cy, rx, ry, 1.0)
