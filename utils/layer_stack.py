@@ -335,16 +335,21 @@ def _collect_page_layer_targets(
     return targets
 
 
-def _partition_gp_targets(obj, work) -> tuple[list[LayerTarget], dict[str, list[LayerTarget]]]:
+def _partition_gp_targets(
+    obj,
+    work,
+    *,
+    kind: str = "gp",
+) -> tuple[list[LayerTarget], dict[str, list[LayerTarget]]]:
     root_targets: list[LayerTarget] = []
     targets_by_parent: dict[str, list[LayerTarget]] = {}
     if obj is None:
         return root_targets, targets_by_parent
-    for target in _iter_gp_targets(obj, kind="gp"):
-        if target.kind == "gp" and gp_parent.parent_key_exists(work, target.parent_key):
+    for target in _iter_gp_targets(obj, kind=kind):
+        if target.kind == kind and gp_parent.parent_key_exists(work, target.parent_key):
             targets_by_parent.setdefault(target.parent_key, []).append(target)
         else:
-            if target.kind == "gp" and target.parent_key:
+            if target.kind == kind and target.parent_key:
                 root_targets.append(LayerTarget(target.kind, target.key, target.label))
             else:
                 root_targets.append(target)
@@ -358,6 +363,12 @@ def collect_targets(context) -> list[LayerTarget]:
     targets: list[LayerTarget] = []
     gp_obj = gp_utils.get_master_gpencil()
     gp_root_targets, gp_targets_by_parent = _partition_gp_targets(gp_obj, work)
+    effect_obj = get_effect_gp_object()
+    effect_root_targets, effect_targets_by_parent = _partition_gp_targets(
+        effect_obj,
+        work,
+        kind="effect",
+    )
 
     if work is not None and getattr(work, "loaded", False):
         from . import page_range
@@ -382,6 +393,7 @@ def collect_targets(context) -> list[LayerTarget]:
                 panel_label = getattr(panel, "title", "") or getattr(panel, "coma_id", "") or key
                 targets.append(LayerTarget(COMA_KIND, key, panel_label, page_key, 1))
                 targets.extend(gp_targets_by_parent.get(key, []))
+                targets.extend(effect_targets_by_parent.get(key, []))
                 targets.extend(
                     _collect_page_layer_targets(
                         page, {key: panel}, include_page_children=False
@@ -393,14 +405,15 @@ def collect_targets(context) -> list[LayerTarget]:
             for target in gp_targets_by_parent.get(page_key, []):
                 targets.append(target)
                 visible_parent_keys.add(target.key)
+            for target in effect_targets_by_parent.get(page_key, []):
+                targets.append(target)
+                visible_parent_keys.add(target.key)
             for target in all_page_layers:
                 if target.parent_key in visible_parent_keys:
                     targets.append(target)
                     visible_parent_keys.add(target.key)
 
-    effect_obj = get_effect_gp_object()
-    if effect_obj is not None:
-        targets.extend(_iter_gp_targets(effect_obj, kind="effect"))
+    targets.extend(effect_root_targets)
 
     image_layers = getattr(scene, "bname_image_layers", None)
     if image_layers is not None:
@@ -733,17 +746,36 @@ def _target_index_for_stack_move(
     return siblings[target_pos]
 
 
-def _gp_parent_key_from_flat_drop(stack, moved_index: int) -> str:
-    """UIList の平坦D&D位置から GP レイヤーの親を推定する."""
+def _parent_item_allows_child(parent, child_kind: str) -> bool:
+    parent_kind = getattr(parent, "kind", "")
+    if parent_kind in {PAGE_KIND, COMA_KIND}:
+        return child_kind in {"gp", "effect", "raster"}
+    if parent_kind == "gp_folder":
+        return child_kind in {"gp", "gp_folder"}
+    return False
+
+
+def _parent_key_exists_for_child(context, child_kind: str, parent_key: str) -> bool:
+    parent_key = str(parent_key or "")
+    if not parent_key:
+        return True
+    work = get_work(context)
+    if child_kind in {"gp", "effect", "raster"} and gp_parent.parent_key_exists(work, parent_key):
+        return True
+    if child_kind in {"gp", "gp_folder"}:
+        stack = getattr(getattr(context, "scene", None), "bname_layer_stack", None)
+        return bool(_find_stack_item(stack, "gp_folder", parent_key))
+    return False
+
+
+def _parent_key_from_flat_drop(stack, moved_index: int, child_kind: str) -> str:
+    """UIList の平坦D&D位置から、移動した行の親キーを推定する."""
     if stack is None or moved_index <= 0:
         return ""
     previous = stack[moved_index - 1]
-    previous_kind = getattr(previous, "kind", "")
-    if previous_kind in {PAGE_KIND, COMA_KIND}:
+    if _parent_item_allows_child(previous, child_kind):
         return str(getattr(previous, "key", "") or "")
-    if previous_kind == "gp_folder":
-        return str(getattr(previous, "key", "") or "")
-    if previous_kind == "gp":
+    if child_kind in {"gp", "effect", "raster"} and getattr(previous, "kind", "") in {"gp", "effect", "raster"}:
         return str(getattr(previous, "parent_key", "") or "")
     previous_parent_key = str(getattr(previous, "parent_key", "") or "")
     if previous_parent_key:
@@ -765,29 +797,58 @@ def _is_stack_folder_descendant(stack, ancestor_key: str, candidate_key: str) ->
     return False
 
 
-def _apply_gp_folder_drop_hint(context, moved_uid: str) -> bool:
-    """GP レイヤー/フォルダを別階層へ落としたUIList D&Dを親変更へ変換する."""
+def _parent_key_one_level_up(stack, parent_key: str) -> str:
+    parent = (
+        _find_stack_item(stack, "gp_folder", parent_key)
+        or _find_stack_item(stack, COMA_KIND, parent_key)
+        or _find_stack_item(stack, PAGE_KIND, parent_key)
+    )
+    if parent is None:
+        page_key, _child_key = split_child_key(parent_key)
+        return page_key if page_key != parent_key else ""
+    if getattr(parent, "kind", "") == COMA_KIND:
+        page_key, _child_key = split_child_key(parent_key)
+        return page_key
+    return str(getattr(parent, "parent_key", "") or "")
+
+
+def _drop_parent_from_nesting_delta(stack, item, moved_index: int, nesting_delta: int) -> str:
+    old_parent_key = str(getattr(item, "parent_key", "") or "")
+    if nesting_delta < 0:
+        return _parent_key_one_level_up(stack, old_parent_key)
+    if nesting_delta > 0:
+        return _parent_key_from_flat_drop(stack, moved_index, getattr(item, "kind", ""))
+    return _parent_key_from_flat_drop(stack, moved_index, getattr(item, "kind", ""))
+
+
+def _apply_stack_drop_hint(context, moved_uid: str, *, nesting_delta: int = 0) -> bool:
+    """UIList D&Dの位置/横方向ヒントを、保存可能な親変更へ変換する."""
     scene = getattr(context, "scene", None)
     stack = getattr(scene, "bname_layer_stack", None) if scene is not None else None
     moved_index = _find_stack_index_by_uid(stack, moved_uid)
     if moved_index < 0:
         return False
     item = stack[moved_index]
-    if getattr(item, "kind", "") not in {"gp", "gp_folder"}:
-        return False
-    parent_key = _gp_parent_key_from_flat_drop(stack, moved_index)
-    old_parent_key = str(getattr(item, "parent_key", "") or "")
     kind = getattr(item, "kind", "")
-    work = get_work(context)
-    parent_is_page_coma = parent_key and gp_parent.parent_key_exists(work, parent_key)
-    parent_is_gp_folder = bool(_find_stack_item(stack, "gp_folder", parent_key)) if parent_key else False
-    if parent_key and not parent_is_page_coma and not parent_is_gp_folder:
+    if kind not in {"gp", "gp_folder", "effect", "raster"}:
+        return False
+    parent_key = _drop_parent_from_nesting_delta(stack, item, moved_index, nesting_delta)
+    old_parent_key = str(getattr(item, "parent_key", "") or "")
+    if parent_key and not _parent_key_exists_for_child(context, kind, parent_key):
         return False
     if kind == "gp_folder":
-        if parent_is_page_coma:
-            return False
         item_key = str(getattr(item, "key", "") or "")
         if parent_key == item_key or _is_stack_folder_descendant(stack, item_key, parent_key):
+            return False
+    if kind in {"effect", "raster"} and _find_stack_item(stack, "gp_folder", parent_key):
+        return False
+    if nesting_delta == 0 and old_parent_key and parent_key:
+        old_page_key, _old_child_key = split_child_key(old_parent_key)
+        new_page_key, _new_child_key = split_child_key(parent_key)
+        if (
+            old_page_key == new_page_key
+            and gp_parent.parent_depth(parent_key) > gp_parent.parent_depth(old_parent_key)
+        ):
             return False
     if parent_key == old_parent_key:
         return False
@@ -800,15 +861,25 @@ def _apply_gp_folder_drop_hint(context, moved_uid: str) -> bool:
             or _find_stack_item(stack, COMA_KIND, parent_key)
         )
     item.depth = int(getattr(parent, "depth", -1)) + 1 if parent is not None else 0
-    obj = gp_utils.get_master_gpencil()
-    groups = getattr(getattr(obj, "data", None), "layer_groups", None) if obj is not None else None
-    group = _find_gp_group_by_key(groups, parent_key) if parent_key else None
-    if group is not None and hasattr(group, "is_expanded"):
-        try:
-            group.is_expanded = True
-        except Exception:  # noqa: BLE001
-            pass
+    if kind in {"gp", "gp_folder"}:
+        obj = gp_utils.get_master_gpencil()
+        groups = getattr(getattr(obj, "data", None), "layer_groups", None) if obj is not None else None
+        group = _find_gp_group_by_key(groups, parent_key) if parent_key else None
+        if group is not None and hasattr(group, "is_expanded"):
+            try:
+                group.is_expanded = True
+            except Exception:  # noqa: BLE001
+                pass
     return True
+
+
+def apply_stack_drop_hint(context, moved_uid: str, *, nesting_delta: int = 0) -> bool:
+    """D&D中の同一行ドロップや横方向ドラッグを親変更として適用する。"""
+    changed = _apply_stack_drop_hint(context, moved_uid, nesting_delta=nesting_delta)
+    if changed:
+        apply_stack_order(context)
+        _remember_stack_signature(context)
+    return changed
 
 
 def _infer_moved_uid(previous: tuple[str, ...], current: tuple[str, ...]) -> str:
@@ -860,7 +931,7 @@ def apply_stack_order_if_ui_changed(context, *, moved_uid: str = "") -> bool:
         moved_uid = _active_uid_from_signature(scene, signature)
     if not moved_uid:
         moved_uid = _infer_moved_uid(previous, signature)
-    _apply_gp_folder_drop_hint(context, moved_uid)
+    _apply_stack_drop_hint(context, moved_uid)
     apply_stack_order(context)
     _remember_stack_signature(context)
     return True
@@ -1710,6 +1781,50 @@ def _apply_gp_parenting(obj, stack, work) -> None:
         item.parent_key = desired_parent_key
 
 
+def _apply_effect_parenting(obj, stack, work) -> None:
+    gp_data = getattr(obj, "data", None)
+    layers = getattr(gp_data, "layers", None) if gp_data is not None else None
+    if layers is None:
+        return
+    for item in stack:
+        if getattr(item, "kind", "") != "effect":
+            continue
+        node = _find_gp_layer_by_key(layers, str(getattr(item, "key", "") or ""))
+        if node is None:
+            continue
+        desired_parent_key = str(getattr(item, "parent_key", "") or "")
+        if desired_parent_key and not gp_parent.parent_key_exists(work, desired_parent_key):
+            desired_parent_key = ""
+        gp_parent.set_parent_key(node, desired_parent_key)
+        item.parent_key = desired_parent_key
+
+
+def _apply_raster_parenting(context, stack) -> None:
+    scene = getattr(context, "scene", None)
+    coll = getattr(scene, "bname_raster_layers", None) if scene is not None else None
+    if coll is None:
+        return
+    work = get_work(context)
+    by_key = {
+        str(getattr(item, "key", "") or ""): str(getattr(item, "parent_key", "") or "")
+        for item in stack
+        if getattr(item, "kind", "") == "raster"
+    }
+    for entry in coll:
+        key = str(getattr(entry, "id", "") or "")
+        if key not in by_key:
+            continue
+        parent_key = by_key[key]
+        if not parent_key or not gp_parent.parent_key_exists(work, parent_key):
+            continue
+        try:
+            entry.scope = "page"
+            entry.parent_kind = "coma" if ":" in parent_key else "page"
+            entry.parent_key = parent_key
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _reorder_gp_parent(gp_data, parent_key: str, desired_front_uids: list[str], *, effect: bool):
     siblings = _siblings_for_parent(gp_data, parent_key)
     actual = [_node_uid_for_stack(node, effect=effect) for node in siblings]
@@ -1741,7 +1856,8 @@ def _apply_gp_order(obj, stack, *, effect: bool) -> None:
         if effect:
             if item.kind != "effect":
                 continue
-            native_parent_key = str(getattr(item, "parent_key", "") or "")
+            parent_key = str(getattr(item, "parent_key", "") or "")
+            native_parent_key = parent_key if _find_gp_group_by_key(groups, parent_key) else ""
         elif item.kind not in {"gp", "gp_folder"}:
             continue
         else:
@@ -1764,7 +1880,9 @@ def apply_stack_order(context) -> None:
         _apply_gp_order(gp_obj, stack, effect=False)
     effect_obj = get_effect_gp_object()
     if effect_obj is not None:
+        _apply_effect_parenting(effect_obj, stack, get_work(context))
         _apply_gp_order(effect_obj, stack, effect=True)
+    _apply_raster_parenting(context, stack)
     tag_view3d_redraw(context)
 
 

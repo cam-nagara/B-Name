@@ -327,8 +327,13 @@ class BNAME_OT_layer_stack_drag(Operator):
 
     _moved_uid: str
     _initial_order: tuple[str, ...]
+    _initial_parents: dict[str, str]
     _start_y: float
+    _start_x: float
     _row_height: float
+    _indent_width: float
+    _last_nesting_delta: int
+    _last_nesting_anchor: str
     _current_index: int
     _dragged: bool
 
@@ -343,8 +348,16 @@ class BNAME_OT_layer_stack_drag(Operator):
             return {"CANCELLED"}
         self._moved_uid = layer_stack_utils.stack_item_uid(stack[self.index])
         self._initial_order = tuple(layer_stack_utils.stack_item_uid(item) for item in stack)
+        self._initial_parents = {
+            layer_stack_utils.stack_item_uid(item): str(getattr(item, "parent_key", "") or "")
+            for item in stack
+        }
         self._start_y = float(getattr(event, "mouse_region_y", 0.0))
+        self._start_x = float(getattr(event, "mouse_region_x", 0.0))
         self._row_height = self._estimate_row_height(context)
+        self._indent_width = max(18.0, self._row_height * 0.9)
+        self._last_nesting_delta = 0
+        self._last_nesting_anchor = ""
         self._current_index = self.index
         self._dragged = False
         context.scene.bname_active_layer_stack_index = self.index
@@ -386,12 +399,14 @@ class BNAME_OT_layer_stack_drag(Operator):
         offset = int(round((self._start_y - float(getattr(event, "mouse_region_y", self._start_y))) / self._row_height))
         target_index = max(0, min(len(stack) - 1, self.index + offset))
         if target_index == current_index:
+            self._apply_nesting_hint(context, event)
             return
         stack.move(current_index, target_index)
         self._dragged = True
         self._current_index = target_index
         context.scene.bname_active_layer_stack_index = target_index
         layer_stack_utils.apply_stack_order_if_ui_changed(context, moved_uid=self._moved_uid)
+        self._apply_nesting_hint(context, event)
         layer_stack_utils.sync_layer_stack(context, preserve_active_index=True)
         self._current_index = self._find_moved_index(context.scene.bname_layer_stack)
         if self._current_index >= 0:
@@ -405,10 +420,47 @@ class BNAME_OT_layer_stack_drag(Operator):
                 return i
         return -1
 
+    def _nesting_delta(self, event) -> int:
+        dx = float(getattr(event, "mouse_region_x", self._start_x)) - self._start_x
+        if dx >= self._indent_width:
+            return 1
+        if dx <= -self._indent_width:
+            return -1
+        return 0
+
+    def _nesting_anchor(self, context) -> str:
+        stack = getattr(context.scene, "bname_layer_stack", None)
+        index = self._find_moved_index(stack)
+        if stack is None or index <= 0:
+            return ""
+        return layer_stack_utils.stack_item_uid(stack[index - 1])
+
+    def _apply_nesting_hint(self, context, event) -> None:
+        delta = self._nesting_delta(event)
+        if delta == 0:
+            self._last_nesting_delta = 0
+            self._last_nesting_anchor = ""
+            return
+        anchor = self._nesting_anchor(context)
+        if delta == self._last_nesting_delta and anchor == self._last_nesting_anchor:
+            return
+        if layer_stack_utils.apply_stack_drop_hint(
+            context,
+            self._moved_uid,
+            nesting_delta=delta,
+        ):
+            self._dragged = True
+            self._last_nesting_delta = delta
+            self._last_nesting_anchor = anchor
+
     def _restore_initial_order(self, context) -> None:
         stack = getattr(context.scene, "bname_layer_stack", None)
         if stack is None or not self._initial_order:
             return
+        for item in stack:
+            uid = layer_stack_utils.stack_item_uid(item)
+            if uid in self._initial_parents:
+                item.parent_key = self._initial_parents[uid]
         for target_index, uid in enumerate(self._initial_order):
             current_index = next(
                 (
@@ -423,6 +475,7 @@ class BNAME_OT_layer_stack_drag(Operator):
         moved_index = self._find_moved_index(stack)
         if moved_index >= 0:
             context.scene.bname_active_layer_stack_index = moved_index
+        layer_stack_utils.apply_stack_order(context)
 
     def _finish(self, context, *, apply_order: bool) -> None:
         if apply_order:
