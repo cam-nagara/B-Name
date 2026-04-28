@@ -32,6 +32,7 @@ _LINKED_SHAPE_FIELDS = {
     "end_cloud_offset_percent",
     "end_cloud_sub_width_ratio",
     "end_cloud_sub_height_ratio",
+    "speed_angle_deg",
 }
 
 

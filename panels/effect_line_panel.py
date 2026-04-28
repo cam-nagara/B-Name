@@ -82,7 +82,7 @@ class BNAME_PT_effect_line(Panel):
         box = layout.box()
         box.label(text="種類")
         box.prop(params, "effect_type")
-        if params.effect_type != "white_outline":
+        if params.effect_type not in {"white_outline", "speed"}:
             box.prop(params, "rotation_deg")
 
         if params.effect_type == "white_outline":
@@ -90,8 +90,9 @@ class BNAME_PT_effect_line(Panel):
             layout.operator("bname.effect_line_generate", icon="STROKE")
             return
 
-        _draw_shape_settings(layout, params, "start", "始点形状", frame_toggle=True)
-        _draw_shape_settings(layout, params, "end", "終点形状")
+        if params.effect_type != "speed":
+            _draw_shape_settings(layout, params, "start", "始点形状", frame_toggle=True)
+            _draw_shape_settings(layout, params, "end", "終点形状")
 
         box = layout.box()
         box.label(text="線")

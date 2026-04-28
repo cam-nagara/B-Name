@@ -401,6 +401,63 @@ def generate_speed_strokes(
     return out
 
 
+def _speed_guide_curve_points(
+    center_xy_mm: tuple[float, float],
+    radius_x_mm: float,
+    radius_y_mm: float,
+    angle_deg: float,
+    side: float,
+) -> list[tuple[float, float]]:
+    cx, cy = center_xy_mm
+    angle = math.radians(float(angle_deg))
+    dx = math.cos(angle)
+    dy = math.sin(angle)
+    nx = -dy
+    ny = dx
+    half_span = max(0.1, float(radius_x_mm))
+    half_height = max(0.1, float(radius_y_mm))
+    bend = min(half_span, half_height) * 0.28 * float(side)
+    base_x = cx + dx * half_span * float(side)
+    base_y = cy + dy * half_span * float(side)
+    return [
+        (base_x - nx * half_height, base_y - ny * half_height),
+        (base_x - nx * half_height * 0.35 + dx * bend, base_y - ny * half_height * 0.35 + dy * bend),
+        (base_x + nx * half_height * 0.35 - dx * bend, base_y + ny * half_height * 0.35 - dy * bend),
+        (base_x + nx * half_height, base_y + ny * half_height),
+    ]
+
+
+def generate_speed_guide_strokes(
+    params,
+    center_xy_mm=(110.0, 160.0),
+    radius_xy_mm=(40.0, 50.0),
+) -> list[EffectLineStroke]:
+    """流線の始点線/終点線を、閉じていないベジェ曲線として返す。"""
+    rx, ry = radius_xy_mm
+    radius = mm_to_m(max(0.05, min(0.25, float(getattr(params, "brush_size_mm", 0.4)) * 0.4)) / 2.0)
+    angle_deg = float(getattr(params, "speed_angle_deg", 0.0))
+    start_points = _speed_guide_curve_points(center_xy_mm, rx, ry, angle_deg, -1.0)
+    end_points = _speed_guide_curve_points(center_xy_mm, rx, ry, angle_deg, 1.0)
+    return [
+        EffectLineStroke(
+            points_xyz=[(mm_to_m(x), mm_to_m(y), 0.0) for x, y in start_points],
+            radius=radius,
+            cyclic=False,
+            role="start_guide",
+            curve_type="BEZIER",
+            bezier_smooth=True,
+        ),
+        EffectLineStroke(
+            points_xyz=[(mm_to_m(x), mm_to_m(y), 0.0) for x, y in end_points],
+            radius=radius,
+            cyclic=False,
+            role="end_guide",
+            curve_type="BEZIER",
+            bezier_smooth=True,
+        ),
+    ]
+
+
 def generate_beta_flash_strokes(
     params,
     center_xy_mm: tuple[float, float],
@@ -687,8 +744,11 @@ def generate_shape_guide_strokes(
     start_extend_mm: float = 0.0,
 ) -> list[EffectLineStroke]:
     """始点/終点の形状ラインをガイドストロークとして返す。"""
-    if getattr(params, "effect_type", "") == "white_outline":
+    etype = getattr(params, "effect_type", "")
+    if etype == "white_outline":
         return []
+    if etype == "speed":
+        return generate_speed_guide_strokes(params, center_xy_mm, radius_xy_mm)
     rx, ry = radius_xy_mm
     cx, cy = center_xy_mm
     end_rect = _scaled_rect(cx, cy, rx, ry, 1.0)

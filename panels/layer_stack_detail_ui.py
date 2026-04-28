@@ -258,7 +258,7 @@ def _draw_effect_type_settings(box, params) -> None:
     param_box = box.box()
     param_box.label(text="種類", icon="STROKE")
     param_box.prop(params, "effect_type")
-    if params.effect_type != "white_outline":
+    if params.effect_type not in {"white_outline", "speed"}:
         param_box.prop(params, "rotation_deg")
 
 
@@ -390,8 +390,9 @@ def _draw_effect_selected_settings(box, context, obj, active_layer) -> None:
         _draw_effect_white_outline_settings(box, params)
         box.operator("bname.effect_line_generate", text="効果線を追加", icon="STROKE")
         return
-    _draw_effect_shape_settings(box, params, "start", "始点形状", frame_toggle=True)
-    _draw_effect_shape_settings(box, params, "end", "終点形状")
+    if params.effect_type != "speed":
+        _draw_effect_shape_settings(box, params, "start", "始点形状", frame_toggle=True)
+        _draw_effect_shape_settings(box, params, "end", "終点形状")
     _draw_effect_line_settings(box, params)
     _draw_effect_interval_settings(box, params)
     _draw_effect_tail_settings(box, params)
