@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 from typing import Any, Sequence
 
-from . import export_psd
+from . import export_psd, export_raster
 from ..ui import overlay_shared
 from ..utils import border_geom, log, panel_preview
 from ..utils.geom import Rect, m_to_mm, mm_to_px, q_to_mm
@@ -1247,6 +1247,21 @@ def build_page_layers(work, page, options: ExportOptions) -> list[ExportLayer]:
             layer = _render_image_layer(entry, canvas_size, dpi)
             if layer is not None:
                 layers.append(layer)
+
+    try:
+        raster_layers = export_raster.page_raster_layers(
+            bpy.context.scene,
+            work,
+            page,
+            canvas_size,
+            dpi,
+            ExportLayer,
+            Image,
+        )
+    except Exception:  # noqa: BLE001
+        _logger.exception("raster layer export failed")
+        raster_layers = []
+    layers.extend(raster_layers)
 
     for panel in sorted(page.panels, key=lambda candidate: int(getattr(candidate, "z_order", 0))):
         panel_group = _panel_root_group_path(panel)

@@ -25,6 +25,8 @@ ASSETS_EFFECTS_DIR = "effects"
 SCENARIO_DIR_NAME = "scenario"
 SCENARIO_FILE_NAME = "imported.json"
 EXPORTS_DIR_NAME = "exports"
+RASTER_DIR_NAME = "raster"
+RASTER_TRASH_DIR_NAME = ".trash"
 
 BNAME_DIR_SUFFIX = ".bname"
 
@@ -129,6 +131,21 @@ def scenario_file(work_dir: Path) -> Path:
 
 def exports_dir(work_dir: Path) -> Path:
     return Path(work_dir) / EXPORTS_DIR_NAME
+
+
+def raster_dir(work_dir: Path) -> Path:
+    return Path(work_dir) / RASTER_DIR_NAME
+
+
+def raster_trash_dir(work_dir: Path) -> Path:
+    return raster_dir(work_dir) / RASTER_TRASH_DIR_NAME
+
+
+def raster_png_path(work_dir: Path, raster_id: str) -> Path:
+    safe_id = re.sub(r"[^0-9a-fA-F]", "", str(raster_id or ""))[:12]
+    if not safe_id:
+        raise ValueError(f"invalid raster id: {raster_id!r}")
+    return raster_dir(work_dir) / f"{safe_id}.png"
 
 
 def ensure_bname_suffix(path: Path) -> Path:

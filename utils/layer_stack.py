@@ -177,6 +177,44 @@ def _iter_gp_node_targets(nodes, *, kind: str, depth: int, parent_key: str, used
                 yield LayerTarget(kind, key, node.name, parent_key, depth)
 
 
+def _panel_parent_key_matches(entry, page, panel_key: str, panel) -> bool:
+    parent = str(getattr(entry, "parent_key", "") or "")
+    if parent == panel_key:
+        return True
+    if parent == getattr(panel, "id", ""):
+        return True
+    if parent == getattr(panel, "panel_stem", ""):
+        return True
+    return parent == f"{getattr(page, 'id', '')}:{getattr(panel, 'panel_stem', '')}"
+
+
+def _collect_raster_targets_for_page(page, panels_by_key: dict[str, object]):
+    scene = getattr(bpy.context, "scene", None)
+    coll = getattr(scene, "bname_raster_layers", None) if scene is not None else None
+    if coll is None:
+        return [], {}
+    page_key = page_stack_key(page)
+    page_children: list[LayerTarget] = []
+    panel_children: dict[str, list[LayerTarget]] = {}
+    for entry in reversed(list(coll)):
+        if str(getattr(entry, "scope", "") or "page") != "page":
+            continue
+        parent_kind = str(getattr(entry, "parent_kind", "") or "page")
+        parent_key = str(getattr(entry, "parent_key", "") or "")
+        label = getattr(entry, "title", "") or getattr(entry, "id", "") or "ラスター"
+        if parent_kind == "page" and parent_key in {getattr(page, "id", ""), page_key}:
+            page_children.append(LayerTarget("raster", entry.id, label, page_key, 1))
+            continue
+        if parent_kind == "panel":
+            for panel_key, panel in panels_by_key.items():
+                if _panel_parent_key_matches(entry, page, panel_key, panel):
+                    panel_children.setdefault(panel_key, []).append(
+                        LayerTarget("raster", entry.id, label, panel_key, 2)
+                    )
+                    break
+    return page_children, panel_children
+
+
 def _collect_page_layer_targets(
     page,
     panels_by_key: dict[str, object],
@@ -192,6 +230,13 @@ def _collect_page_layer_targets(
     balloon_groups: dict[str, LayerTarget] = {}
     balloon_group_children: dict[str, list[LayerTarget]] = {}
     balloon_group_parents: dict[str, set[str]] = {}
+    raster_page_children, raster_panel_children = _collect_raster_targets_for_page(
+        page,
+        panels_by_key,
+    )
+    page_children.extend(raster_page_children)
+    for panel_key, children in raster_panel_children.items():
+        panel_children.setdefault(panel_key, []).extend(children)
 
     for entry in reversed(list(getattr(page, "balloons", []))):
         bid = _ensure_unique_id(entry, used_balloon, "balloon")
@@ -876,6 +921,11 @@ def _active_key_from_scene(context) -> tuple[str, str] | None:
         idx = int(getattr(scene, "bname_active_image_layer_index", -1))
         if coll is not None and 0 <= idx < len(coll):
             return "image", getattr(coll[idx], "id", "")
+    if kind == "raster":
+        coll = getattr(scene, "bname_raster_layers", None)
+        idx = int(getattr(scene, "bname_active_raster_layer_index", -1))
+        if coll is not None and 0 <= idx < len(coll):
+            return "raster", getattr(coll[idx], "id", "")
     if kind == "balloon" and page is not None:
         idx = int(getattr(page, "active_balloon_index", -1))
         if 0 <= idx < len(page.balloons):
@@ -1064,6 +1114,31 @@ def resolve_stack_item(context, item):
             return None
         idx, entry = _find_by_id(coll, key)
         return {"kind": kind, "target": entry, "object": None, "index": idx}
+    if kind == "raster":
+        coll = getattr(scene, "bname_raster_layers", None)
+        if coll is None:
+            return None
+        idx, entry = _find_by_id(coll, key)
+        target_page = None
+        page_idx = -1
+        if work is not None and entry is not None:
+            parent_key = str(getattr(entry, "parent_key", "") or "")
+            for i, candidate in enumerate(getattr(work, "pages", [])):
+                if parent_key in {
+                    getattr(candidate, "id", ""),
+                    page_stack_key(candidate),
+                }:
+                    target_page = candidate
+                    page_idx = i
+                    break
+        return {
+            "kind": kind,
+            "target": entry,
+            "object": None,
+            "index": idx,
+            "page": target_page,
+            "page_index": page_idx,
+        }
     if kind == "balloon":
         page_id, child_id = split_child_key(key)
         target_page = page
@@ -1241,6 +1316,15 @@ def select_stack_index(context, index: int) -> bool:
         scene.bname_active_image_layer_index = int(resolved.get("index", -1))
         scene.bname_active_gp_folder_key = ""
         scene.bname_active_layer_kind = "image"
+        edge_selection.clear_selection(context)
+    elif kind == "raster":
+        page_idx = int(resolved.get("page_index", -1))
+        work = get_work(context)
+        if work is not None and 0 <= page_idx < len(work.pages):
+            work.active_page_index = page_idx
+        scene.bname_active_raster_layer_index = int(resolved.get("index", -1))
+        scene.bname_active_gp_folder_key = ""
+        scene.bname_active_layer_kind = "raster"
         edge_selection.clear_selection(context)
     elif kind == "balloon_group":
         target_page = resolved.get("page") or page
@@ -1460,6 +1544,19 @@ def _apply_simple_collection_orders(context, stack) -> None:
         if active_key:
             _restore_active_collection_index(
                 scene, "bname_active_image_layer_index", image_layers, active_key
+            )
+
+    raster_layers = getattr(scene, "bname_raster_layers", None)
+    if raster_layers is not None:
+        active_key = ""
+        idx = int(getattr(scene, "bname_active_raster_layer_index", -1))
+        if 0 <= idx < len(raster_layers):
+            active_key = getattr(raster_layers[idx], "id", "")
+        front = [item.key for item in stack if item.kind == "raster"]
+        _reorder_collection(raster_layers, list(reversed(front)), lambda entry: entry.id)
+        if active_key:
+            _restore_active_collection_index(
+                scene, "bname_active_raster_layer_index", raster_layers, active_key
             )
 
     work = get_work(context)
@@ -1689,6 +1786,16 @@ def delete_stack_index(context, index: int) -> bool:
             return False
         coll.remove(idx)
         scene.bname_active_image_layer_index = min(idx, len(coll) - 1) if len(coll) else -1
+    elif kind == "raster":
+        idx = int(resolved.get("index", -1))
+        try:
+            from ..operators import raster_layer_op
+
+            if not raster_layer_op.remove_raster_by_index(context, idx):
+                return False
+        except Exception:  # noqa: BLE001
+            _logger.exception("delete raster from layer stack failed")
+            return False
     elif kind == "balloon" and page is not None:
         idx = int(resolved.get("index", -1))
         if not (0 <= idx < len(page.balloons)):

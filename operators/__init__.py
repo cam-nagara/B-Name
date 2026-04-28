@@ -24,6 +24,7 @@ from . import (
     panel_picker,  # noqa: F401 — ヘルパのみ (register 対象外)
     panel_vertex_edit_op,
     preset_op,
+    raster_layer_op,
     shortcut_op,
     snap_op,
     spread_op,
@@ -52,6 +53,7 @@ _MODULES = (
     effect_line_op,
     brush_size_op,
     image_layer_op,
+    raster_layer_op,
     layer_stack_op,
     layer_move_op,
     object_tool_op,

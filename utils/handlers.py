@@ -164,6 +164,12 @@ def save_scene_work_to_disk(context, *, reason: str = "") -> bool:
     _saving_work_metadata = True
     try:
         page_range.update_page_range_visibility(work)
+        try:
+            from ..operators import raster_layer_op
+
+            raster_layer_op.save_dirty_raster_layers(context)
+        except Exception:  # noqa: BLE001
+            _logger.exception("raster dirty save failed")
         work_io.save_work_json(work_dir, work)
         page_io.save_pages_json(work_dir, work)
         for page in getattr(work, "pages", []):
@@ -213,6 +219,12 @@ def _reconcile_gpencil_collections(context, work) -> None:
         page_grid.apply_page_collection_transforms(context, work)
     except Exception:  # noqa: BLE001
         _logger.exception("load_post: apply_page_collection_transforms failed")
+    try:
+        from ..operators import raster_layer_op
+
+        raster_layer_op.ensure_all_raster_runtime(context)
+    except Exception:  # noqa: BLE001
+        _logger.exception("load_post: raster runtime sync failed")
 
 
 @persistent
@@ -308,6 +320,12 @@ def _bname_on_load_post(filepath_arg) -> None:  # signature: (str,) in Blender h
 def _bname_on_save_pre(filepath_arg) -> None:  # signature: (str,) in Blender handlers
     """通常の .blend 保存前に B-Name の JSON メタデータも同期する."""
     try:
+        try:
+            from ..operators import raster_layer_op
+
+            raster_layer_op.save_dirty_raster_layers(bpy.context)
+        except Exception:  # noqa: BLE001
+            _logger.exception("B-Name raster save_pre failed")
         save_scene_work_to_disk(bpy.context, reason="save_pre")
     except Exception:  # noqa: BLE001
         _logger.exception("B-Name save_pre handler failed")

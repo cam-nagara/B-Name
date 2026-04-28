@@ -39,6 +39,8 @@ def create_bname_skeleton(work_dir: Path) -> None:
     (assets / paths.ASSETS_EFFECTS_DIR).mkdir(exist_ok=True)
     paths.scenario_dir(work_dir).mkdir(exist_ok=True)
     paths.exports_dir(work_dir).mkdir(exist_ok=True)
+    paths.raster_dir(work_dir).mkdir(exist_ok=True)
+    paths.raster_trash_dir(work_dir).mkdir(exist_ok=True)
     _logger.info("bname skeleton created: %s", work_dir)
 
 

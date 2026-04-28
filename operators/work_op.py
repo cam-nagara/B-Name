@@ -147,6 +147,17 @@ class BNAME_OT_work_new(Operator, ExportHelper):
 
         # 既存の作品データをリセットしてから新規作成
         work.pages.clear()
+        raster_layers = getattr(context.scene, "bname_raster_layers", None)
+        if raster_layers is not None:
+            try:
+                from . import raster_layer_op
+
+                raster_layer_op.purge_all_raster_runtime(context.scene)
+            except Exception:  # noqa: BLE001
+                _logger.exception("work_new: old raster runtime purge failed")
+            raster_layers.clear()
+        if hasattr(context.scene, "bname_active_raster_layer_index"):
+            context.scene.bname_active_raster_layer_index = -1
         work.active_page_index = -1
         work.loaded = False
 
@@ -200,6 +211,12 @@ class BNAME_OT_work_new(Operator, ExportHelper):
                 _logger.exception("work_new: preset selector sync failed")
 
             _schedule_layer_stack_sync(context, schedule=False)
+            try:
+                from . import raster_layer_op
+
+                raster_layer_op.ensure_all_raster_runtime(context)
+            except Exception:  # noqa: BLE001
+                _logger.exception("work_new: raster runtime setup failed")
             _disable_work_viewport_overlays(context)
             blend_io.save_work_blend(work_dir)
         except Exception as exc:  # noqa: BLE001
@@ -274,6 +291,12 @@ class BNAME_OT_work_open(Operator, ImportHelper):
             return {"CANCELLED"}
 
         try:
+            try:
+                from . import raster_layer_op
+
+                raster_layer_op.purge_all_raster_runtime(context.scene)
+            except Exception:  # noqa: BLE001
+                _logger.exception("work_open: old raster runtime purge failed")
             work_io.load_work_json(work_dir, work)
             page_io.load_pages_json(work_dir, work)
             work.work_dir = str(work_dir.resolve())
@@ -296,6 +319,12 @@ class BNAME_OT_work_open(Operator, ImportHelper):
                 preset_op.sync_paper_preset_selector(context)
             except Exception:  # noqa: BLE001
                 _logger.exception("work_open: preset selector sync failed")
+            try:
+                from . import raster_layer_op
+
+                raster_layer_op.ensure_all_raster_runtime(context)
+            except Exception:  # noqa: BLE001
+                _logger.exception("work_open: raster runtime setup failed")
             _schedule_layer_stack_sync(context)
         except FileNotFoundError as exc:
             _logger.exception("work_open: missing file")
@@ -425,6 +454,17 @@ class BNAME_OT_work_close(Operator):
 
     def execute(self, context):
         work = get_work(context)
+        try:
+            from . import raster_layer_op
+
+            raster_layer_op.purge_all_raster_runtime(context.scene)
+        except Exception:  # noqa: BLE001
+            _logger.exception("work_close: raster runtime purge failed")
+        raster_layers = getattr(context.scene, "bname_raster_layers", None)
+        if raster_layers is not None:
+            raster_layers.clear()
+        if hasattr(context.scene, "bname_active_raster_layer_index"):
+            context.scene.bname_active_raster_layer_index = -1
         work.pages.clear()
         work.active_page_index = -1
         work.loaded = False

@@ -15,7 +15,7 @@ from typing import Any
 from ..utils import balloon_shapes, color_space
 
 # ファイルフォーマットのバージョン (破壊的変更があったら繰り上げる)
-WORK_SCHEMA_VERSION = 1
+WORK_SCHEMA_VERSION = 2
 PAGES_SCHEMA_VERSION = 1
 PAGE_SCHEMA_VERSION = 1
 PANEL_SCHEMA_VERSION = 1
@@ -296,11 +296,61 @@ def panel_gap_from_dict(pg, data: dict[str, Any]) -> None:
     pg.horizontal_mm = float(data.get("horizontalMm", 2.1))
 
 
+# ---------- RasterLayer ----------
+
+
+def _scene_from_work(work):
+    scene = getattr(work, "id_data", None)
+    return scene if scene is not None and hasattr(scene, "bname_raster_layers") else None
+
+
+def raster_layer_to_dict(entry) -> dict[str, Any]:
+    rgb = color_space.linear_to_srgb_rgb(tuple(float(c) for c in entry.line_color[:3]))
+    return {
+        "id": entry.id,
+        "title": entry.title,
+        "image_name": entry.image_name,
+        "filepath_rel": entry.filepath_rel,
+        "dpi": int(entry.dpi),
+        "bit_depth": entry.bit_depth,
+        "line_color": color_to_hex((*rgb, 1.0)),
+        "line_color_alpha": round(float(entry.line_color[3]), 3),
+        "opacity": round(float(entry.opacity), 4),
+        "visible": bool(entry.visible),
+        "locked": bool(entry.locked),
+        "scope": entry.scope,
+        "parent_kind": entry.parent_kind,
+        "parent_key": entry.parent_key,
+    }
+
+
+def raster_layer_from_dict(entry, data: dict[str, Any]) -> None:
+    data = data or {}
+    raster_id = str(data.get("id", "") or "")
+    entry.id = raster_id
+    entry.title = str(data.get("title", "") or "")
+    entry.image_name = str(data.get("image_name", "") or f"raster_{raster_id}")
+    entry.filepath_rel = str(data.get("filepath_rel", "") or f"raster/{raster_id}.png")
+    entry.dpi = int(data.get("dpi", 300))
+    entry.bit_depth = data.get("bit_depth", "gray8")
+    alpha = float(data.get("line_color_alpha", 1.0))
+    rgba = hex_to_rgba(str(data.get("line_color", "#000000")), alpha)
+    entry.line_color = (*color_space.srgb_to_linear_rgb(rgba[:3]), rgba[3])
+    entry.opacity = float(data.get("opacity", 1.0))
+    entry.visible = bool(data.get("visible", True))
+    entry.locked = bool(data.get("locked", False))
+    entry.scope = data.get("scope", "page")
+    entry.parent_kind = data.get("parent_kind", "page")
+    entry.parent_key = str(data.get("parent_key", "") or "")
+
+
 # ---------- WorkData (root) ----------
 
 
 def work_to_dict(work) -> dict[str, Any]:
     """BNameWorkData → work.json dict."""
+    scene = _scene_from_work(work)
+    raster_layers = getattr(scene, "bname_raster_layers", None) if scene is not None else None
     return {
         "schemaVersion": WORK_SCHEMA_VERSION,
         "workInfo": work_info_to_dict(work.work_info),
@@ -308,6 +358,10 @@ def work_to_dict(work) -> dict[str, Any]:
         "paper": paper_to_dict(work.paper),
         "panelGap": panel_gap_to_dict(work.panel_gap),
         "safeAreaOverlay": safe_area_to_dict(work.safe_area_overlay),
+        "raster_layers": [
+            raster_layer_to_dict(entry)
+            for entry in (raster_layers or [])
+        ],
     }
 
 
@@ -323,6 +377,15 @@ def work_from_dict(work, data: dict[str, Any]) -> None:
     paper_from_dict(work.paper, data.get("paper", {}))
     panel_gap_from_dict(work.panel_gap, data.get("panelGap", {}))
     safe_area_from_dict(work.safe_area_overlay, data.get("safeAreaOverlay", {}))
+    scene = _scene_from_work(work)
+    raster_layers = getattr(scene, "bname_raster_layers", None) if scene is not None else None
+    if raster_layers is not None:
+        raster_layers.clear()
+        for item in data.get("raster_layers", []) or []:
+            entry = raster_layers.add()
+            raster_layer_from_dict(entry, item)
+        if hasattr(scene, "bname_active_raster_layer_index"):
+            scene.bname_active_raster_layer_index = 0 if len(raster_layers) else -1
 
 
 # ---------- PageEntry / pages.json ----------

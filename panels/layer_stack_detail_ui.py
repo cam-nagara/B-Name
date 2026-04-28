@@ -102,6 +102,35 @@ def _draw_image_selected_settings(box, entry) -> None:
     sub.prop(entry, "binarize_threshold")
 
 
+def _draw_raster_selected_settings(box, entry) -> None:
+    settings = box.column(align=True)
+    settings.label(text=f"選択中: {entry.title or entry.id} (ラスター)", icon="BRUSH_DATA")
+    settings.prop(entry, "title", text="名前")
+    settings.prop(entry, "visible", text="表示")
+    settings.prop(entry, "locked", text="ロック")
+    settings.prop(entry, "opacity", text="不透明度", slider=True)
+    settings.label(text=f"DPI: {int(getattr(entry, 'dpi', 0))}")
+    settings.operator("bname.raster_layer_resample", text="リサンプル...", icon="IMAGE_DATA")
+
+    bit_box = box.box()
+    bit_box.label(text=f"階調: {getattr(entry, 'bit_depth', 'gray8')}")
+    row = bit_box.row(align=True)
+    op = row.operator("bname.raster_layer_set_bit_depth", text="グレー 8bit")
+    op.bit_depth = "gray8"
+    op = row.operator("bname.raster_layer_set_bit_depth", text="1bit")
+    op.bit_depth = "gray1"
+
+    settings.prop(entry, "line_color", text="線色")
+    settings.label(text=f"所属: {entry.scope or 'page'}")
+    settings.label(text=f"親: {entry.parent_kind or 'none'} / {entry.parent_key or '-'}")
+    row = settings.row(align=True)
+    op = row.operator("bname.raster_layer_paint_enter", text="Texture Paint へ入る", icon="TPAINT_HLT")
+    op.raster_id = entry.id
+    op = row.operator("bname.raster_layer_save_png", text="", icon="FILE_TICK")
+    op.raster_id = entry.id
+    op.force = True
+
+
 def _draw_balloon_selected_settings(box, context, entry) -> None:
     settings = box.column(align=True)
     settings.label(text=f"選択中: {entry.id} (フキダシ)")
@@ -347,6 +376,8 @@ def draw_stack_item_detail(layout, context, item, resolved) -> bool:
         _draw_gp_selected_settings(box, obj, target)
     elif kind == "image":
         _draw_image_selected_settings(box, target)
+    elif kind == "raster":
+        _draw_raster_selected_settings(box, target)
     elif kind == "balloon":
         _draw_balloon_selected_settings(box, context, target)
     elif kind == "text":

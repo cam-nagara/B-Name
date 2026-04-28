@@ -63,32 +63,48 @@ class BNAME_PT_tools(Panel):
             active_stack_kind == "gp"
             and getattr(context.scene, "bname_active_layer_kind", "") == "gp"
         )
+        raster_layer_active = (
+            active_stack_kind == "raster"
+            and getattr(context.scene, "bname_active_layer_kind", "") == "raster"
+        )
         modal_tool_active = _any_bname_modal_tool_active()
+        active_obj = getattr(getattr(context, "view_layer", None), "objects", None)
+        active_obj = getattr(active_obj, "active", None) if active_obj is not None else None
+        active_mode = getattr(active_obj, "mode", "")
 
         row = layout.row(align=True)
         op = row.operator(
-            "bname.gpencil_master_mode_set",
+            "bname.raster_layer_mode_set" if raster_layer_active else "bname.gpencil_master_mode_set",
             text="",
             icon="OBJECT_DATAMODE",
             depress=(
                 panel_modal_state.is_active("object_tool")
-                or (not modal_tool_active and mode == "OBJECT")
+                or (not modal_tool_active and active_mode == "OBJECT")
             ),
         )
         op.mode = "OBJECT"
         draw_slot = row.row(align=True)
-        draw_slot.enabled = gp_layer_active
-        op = draw_slot.operator(
-            "bname.gpencil_master_mode_set",
-            text="",
-            icon="OUTLINER_OB_GREASEPENCIL",
-            depress=(
-                not modal_tool_active
-                and gp_layer_active
-                and mode == "PAINT_GREASE_PENCIL"
-            ),
-        )
-        op.mode = "PAINT_GREASE_PENCIL"
+        draw_slot.enabled = gp_layer_active or raster_layer_active
+        if raster_layer_active:
+            op = draw_slot.operator(
+                "bname.raster_layer_mode_set",
+                text="",
+                icon="BRUSH_DATA",
+                depress=(not modal_tool_active and active_mode == "TEXTURE_PAINT"),
+            )
+            op.mode = "TEXTURE_PAINT"
+        else:
+            op = draw_slot.operator(
+                "bname.gpencil_master_mode_set",
+                text="",
+                icon="OUTLINER_OB_GREASEPENCIL",
+                depress=(
+                    not modal_tool_active
+                    and gp_layer_active
+                    and mode == "PAINT_GREASE_PENCIL"
+                ),
+            )
+            op.mode = "PAINT_GREASE_PENCIL"
         edit_slot = row.row(align=True)
         edit_slot.enabled = gp_layer_active
         op = edit_slot.operator(

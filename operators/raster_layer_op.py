@@ -1,0 +1,695 @@
+"""ラスター描画レイヤーの作成・Texture Paint 連携."""
+
+from __future__ import annotations
+
+import shutil
+import uuid
+from pathlib import Path
+
+import bpy
+from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty
+from bpy.types import Operator
+
+from ..core.work import get_active_page, get_work
+from ..utils import layer_stack as layer_stack_utils
+from ..utils import log, paths
+from ..utils.geom import mm_to_m, mm_to_px
+
+_logger = log.get_logger(__name__)
+
+RASTER_Z_LIFT_M = 0.0005
+
+
+def raster_image_name(raster_id: str) -> str:
+    return f"raster_{raster_id}"
+
+
+def raster_plane_name(raster_id: str) -> str:
+    return f"raster_plane_{raster_id}"
+
+
+def raster_mesh_name(raster_id: str) -> str:
+    return f"raster_mesh_{raster_id}"
+
+
+def raster_material_name(raster_id: str) -> str:
+    return f"raster_mat_{raster_id}"
+
+
+def raster_filepath_rel(raster_id: str) -> str:
+    return f"{paths.RASTER_DIR_NAME}/{raster_id}.png"
+
+
+def _raster_collection(scene):
+    return getattr(scene, "bname_raster_layers", None)
+
+
+def find_raster_entry(scene, raster_id: str):
+    coll = _raster_collection(scene)
+    if coll is None:
+        return None, -1
+    for i, entry in enumerate(coll):
+        if getattr(entry, "id", "") == raster_id:
+            return entry, i
+    return None, -1
+
+
+def active_raster_entry(context):
+    scene = getattr(context, "scene", None)
+    if scene is None:
+        return None, -1
+    coll = _raster_collection(scene)
+    idx = int(getattr(scene, "bname_active_raster_layer_index", -1))
+    if coll is None or not (0 <= idx < len(coll)):
+        return None, -1
+    return coll[idx], idx
+
+
+def _allocate_raster_id(scene, work_dir: Path) -> str:
+    coll = _raster_collection(scene)
+    used = {getattr(entry, "id", "") for entry in (coll or [])}
+    for _ in range(128):
+        candidate = uuid.uuid4().hex[:12]
+        if candidate not in used and not paths.raster_png_path(work_dir, candidate).exists():
+            return candidate
+    raise RuntimeError("ラスターIDを採番できません")
+
+
+def _raster_size_px(work, dpi: int) -> tuple[int, int]:
+    paper = work.paper
+    return (
+        max(1, int(round(mm_to_px(float(paper.canvas_width_mm), dpi)))),
+        max(1, int(round(mm_to_px(float(paper.canvas_height_mm), dpi)))),
+    )
+
+
+def _abs_png_path(work_dir: Path, entry) -> Path:
+    raster_id = str(getattr(entry, "id", "") or "")
+    rel = str(getattr(entry, "filepath_rel", "") or raster_filepath_rel(raster_id))
+    return Path(work_dir) / rel
+
+
+def _set_image_relative_path(image, raster_id: str, abs_path: Path) -> None:
+    try:
+        image.file_format = "PNG"
+        image.filepath_raw = str(abs_path)
+        blend_path = Path(str(getattr(bpy.data, "filepath", "") or ""))
+        work_dir = abs_path.parent.parent
+        if blend_path.name == paths.WORK_BLEND_NAME and blend_path.parent.resolve() == work_dir.resolve():
+            image.filepath = f"//{paths.RASTER_DIR_NAME}/{raster_id}.png"
+        else:
+            image.filepath = str(abs_path)
+    except Exception:  # noqa: BLE001
+        _logger.exception("raster image filepath setup failed: %s", raster_id)
+
+
+def ensure_raster_image(context, entry, *, create_missing: bool = True, mark_missing: bool = False):
+    work = get_work(context)
+    if work is None or not getattr(work, "work_dir", ""):
+        return None
+    work_dir = Path(work.work_dir)
+    raster_id = str(getattr(entry, "id", "") or "")
+    if not raster_id:
+        return None
+    name = str(getattr(entry, "image_name", "") or raster_image_name(raster_id))
+    abs_path = _abs_png_path(work_dir, entry)
+    image = bpy.data.images.get(name)
+    if image is not None:
+        _set_image_relative_path(image, raster_id, abs_path)
+        return image
+    if abs_path.is_file():
+        try:
+            image = bpy.data.images.load(str(abs_path), check_existing=True)
+            image.name = name
+            _set_image_relative_path(image, raster_id, abs_path)
+            return image
+        except Exception:  # noqa: BLE001
+            _logger.exception("raster image load failed: %s", abs_path)
+    if not create_missing:
+        return None
+    width, height = _raster_size_px(work, int(getattr(entry, "dpi", 300)))
+    image = bpy.data.images.new(name, width=width, height=height, alpha=True, float_buffer=False)
+    try:
+        image.colorspace_settings.name = "Non-Color"
+    except Exception:  # noqa: BLE001
+        pass
+    if (
+        mark_missing
+        and abs_path.exists() is False
+        and getattr(entry, "title", "")
+        and abs_path.parent.exists()
+    ):
+        if "(欠落)" not in entry.title and getattr(entry, "filepath_rel", ""):
+            entry.title = f"(欠落) {entry.title}"
+    _set_image_relative_path(image, raster_id, abs_path)
+    return image
+
+
+def _clear_material_nodes(mat) -> None:
+    nodes = mat.node_tree.nodes
+    for node in list(nodes):
+        nodes.remove(node)
+
+
+def ensure_raster_material(entry, image):
+    raster_id = str(getattr(entry, "id", "") or "")
+    mat = bpy.data.materials.get(raster_material_name(raster_id))
+    if mat is None:
+        mat = bpy.data.materials.new(raster_material_name(raster_id))
+    mat.use_nodes = True
+    mat.diffuse_color = (1.0, 1.0, 1.0, float(getattr(entry, "opacity", 1.0)))
+    try:
+        mat.blend_method = "BLEND"
+        mat.use_screen_refraction = False
+        mat.show_transparent_back = True
+    except Exception:  # noqa: BLE001
+        pass
+    tree = mat.node_tree
+    _clear_material_nodes(mat)
+    nodes = tree.nodes
+    links = tree.links
+    tex = nodes.new("ShaderNodeTexImage")
+    tex.name = "BName Raster Image"
+    tex.image = image
+    emission = nodes.new("ShaderNodeEmission")
+    transparent = nodes.new("ShaderNodeBsdfTransparent")
+    mix = nodes.new("ShaderNodeMixShader")
+    out = nodes.new("ShaderNodeOutputMaterial")
+    links.new(tex.outputs.get("Color"), emission.inputs.get("Color"))
+    if tex.outputs.get("Alpha") is not None:
+        links.new(tex.outputs.get("Alpha"), mix.inputs[0])
+    links.new(transparent.outputs.get("BSDF"), mix.inputs[1])
+    links.new(emission.outputs.get("Emission"), mix.inputs[2])
+    links.new(mix.outputs.get("Shader"), out.inputs.get("Surface"))
+    nodes.active = tex
+    return mat
+
+
+def _ensure_raster_mesh(work, raster_id: str):
+    mesh = bpy.data.meshes.get(raster_mesh_name(raster_id))
+    if mesh is None:
+        mesh = bpy.data.meshes.new(raster_mesh_name(raster_id))
+    w = mm_to_m(float(work.paper.canvas_width_mm))
+    h = mm_to_m(float(work.paper.canvas_height_mm))
+    verts = (
+        (0.0, 0.0, RASTER_Z_LIFT_M),
+        (w, 0.0, RASTER_Z_LIFT_M),
+        (w, h, RASTER_Z_LIFT_M),
+        (0.0, h, RASTER_Z_LIFT_M),
+    )
+    mesh.clear_geometry()
+    mesh.from_pydata(verts, [], [(0, 1, 2, 3)])
+    mesh.update()
+    uv_layer = mesh.uv_layers.new(name="UVMap") if not mesh.uv_layers else mesh.uv_layers[0]
+    for loop, uv in zip(uv_layer.data, ((0, 0), (1, 0), (1, 1), (0, 1))):
+        loop.uv = uv
+    return mesh
+
+
+def _link_object_to_collection_only(obj, collection) -> None:
+    for coll in tuple(obj.users_collection):
+        if coll != collection:
+            try:
+                coll.objects.unlink(obj)
+            except Exception:  # noqa: BLE001
+                pass
+    if obj.name not in collection.objects:
+        collection.objects.link(obj)
+
+
+def ensure_raster_plane(context, entry, *, mark_missing: bool = False):
+    work = get_work(context)
+    if work is None:
+        return None
+    page = None
+    parent_key = str(getattr(entry, "parent_key", "") or "")
+    for candidate in getattr(work, "pages", []):
+        if getattr(candidate, "id", "") == parent_key:
+            page = candidate
+            break
+    if page is None:
+        page = get_active_page(context)
+    if page is None:
+        return None
+    from ..utils import gpencil as gp_utils
+
+    raster_id = str(getattr(entry, "id", "") or "")
+    image = ensure_raster_image(context, entry, mark_missing=mark_missing)
+    if image is None:
+        return None
+    mesh = _ensure_raster_mesh(work, raster_id)
+    obj = bpy.data.objects.get(raster_plane_name(raster_id))
+    if obj is None:
+        obj = bpy.data.objects.new(raster_plane_name(raster_id), mesh)
+    else:
+        obj.data = mesh
+    mat = ensure_raster_material(entry, image)
+    obj.data.materials.clear()
+    obj.data.materials.append(mat)
+    obj["bname_raster_id"] = raster_id
+    obj["bname_raster_parent_page"] = getattr(page, "id", "")
+    obj.hide_viewport = not bool(getattr(entry, "visible", True))
+    obj.hide_render = not bool(getattr(entry, "visible", True))
+    coll = gp_utils.ensure_page_collection(context.scene, page.id)
+    _link_object_to_collection_only(obj, coll)
+    return obj
+
+
+def save_raster_png(context, entry, *, force: bool = False) -> bool:
+    work = get_work(context)
+    if work is None or not getattr(work, "work_dir", ""):
+        return False
+    image = ensure_raster_image(context, entry, create_missing=False)
+    if image is None:
+        return False
+    custom_dirty = False
+    try:
+        custom_dirty = bool(entry.get("bname_raster_dirty", False))
+    except Exception:  # noqa: BLE001
+        custom_dirty = False
+    if not force and not bool(getattr(image, "is_dirty", False)) and not custom_dirty:
+        return False
+    work_dir = Path(work.work_dir)
+    abs_path = _abs_png_path(work_dir, entry)
+    abs_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        image.file_format = "PNG"
+        image.filepath_raw = str(abs_path)
+        image.save()
+    except Exception:
+        image.save_render(str(abs_path))
+    _set_image_relative_path(image, entry.id, abs_path)
+    try:
+        entry["bname_raster_dirty"] = False
+    except Exception:  # noqa: BLE001
+        pass
+    return True
+
+
+def mark_raster_dirty(entry) -> None:
+    try:
+        entry["bname_raster_dirty"] = True
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def save_dirty_raster_layers(context) -> int:
+    scene = getattr(context, "scene", None)
+    coll = _raster_collection(scene) if scene is not None else None
+    if coll is None:
+        return 0
+    saved = 0
+    for entry in coll:
+        try:
+            if save_raster_png(context, entry, force=False):
+                saved += 1
+        except Exception:  # noqa: BLE001
+            _logger.exception("dirty raster save failed: %s", getattr(entry, "id", ""))
+    return saved
+
+
+def ensure_all_raster_runtime(context) -> int:
+    scene = getattr(context, "scene", None)
+    coll = _raster_collection(scene) if scene is not None else None
+    if coll is None:
+        return 0
+    count = 0
+    for entry in coll:
+        if ensure_raster_plane(context, entry, mark_missing=True) is not None:
+            count += 1
+    return count
+
+
+def purge_raster_runtime(entry) -> None:
+    raster_id = str(getattr(entry, "id", "") or "")
+    obj = bpy.data.objects.get(raster_plane_name(raster_id))
+    if obj is not None:
+        mesh = obj.data
+        bpy.data.objects.remove(obj, do_unlink=True)
+        if mesh is not None and getattr(mesh, "users", 0) == 0:
+            bpy.data.meshes.remove(mesh)
+    mat = bpy.data.materials.get(raster_material_name(raster_id))
+    if mat is not None:
+        bpy.data.materials.remove(mat, do_unlink=True)
+    image = bpy.data.images.get(str(getattr(entry, "image_name", "") or raster_image_name(raster_id)))
+    if image is not None:
+        bpy.data.images.remove(image, do_unlink=True)
+
+
+def purge_all_raster_runtime(scene) -> int:
+    coll = _raster_collection(scene)
+    if coll is None:
+        return 0
+    count = 0
+    for entry in list(coll):
+        purge_raster_runtime(entry)
+        count += 1
+    return count
+
+
+def remove_raster_by_index(context, index: int) -> bool:
+    scene = context.scene
+    coll = _raster_collection(scene)
+    if coll is None or not (0 <= index < len(coll)):
+        return False
+    entry = coll[index]
+    raster_id = str(getattr(entry, "id", "") or "")
+    work = get_work(context)
+    if work is not None and getattr(work, "work_dir", ""):
+        src = _abs_png_path(Path(work.work_dir), entry)
+        if src.exists():
+            trash = paths.raster_trash_dir(Path(work.work_dir))
+            trash.mkdir(parents=True, exist_ok=True)
+            dst = trash / src.name
+            suffix = 1
+            while dst.exists():
+                dst = trash / f"{src.stem}_{suffix}{src.suffix}"
+                suffix += 1
+            try:
+                shutil.move(str(src), str(dst))
+            except Exception:  # noqa: BLE001
+                _logger.exception("raster png trash move failed: %s", src)
+    purge_raster_runtime(entry)
+    coll.remove(index)
+    scene.bname_active_raster_layer_index = min(index, len(coll) - 1) if len(coll) else -1
+    return True
+
+
+def _active_image_paint_brush(context):
+    paint = getattr(getattr(context, "tool_settings", None), "image_paint", None)
+    brush = getattr(paint, "brush", None) if paint is not None else None
+    if brush is None:
+        try:
+            brush = bpy.data.brushes.new("B-Name Raster Brush", mode="TEXTURE_PAINT")
+            paint.brush = brush
+        except Exception:  # noqa: BLE001
+            brush = None
+    return brush
+
+
+def force_active_brush_grayscale(context) -> bool:
+    brush = _active_image_paint_brush(context)
+    if brush is None or not hasattr(brush, "color"):
+        return False
+    try:
+        color = tuple(float(c) for c in brush.color[:3])
+        gray = max(0.0, min(1.0, sum(color) / 3.0))
+        if any(abs(c - gray) > 1.0e-5 for c in color):
+            brush.color = (gray, gray, gray)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+_brush_timer_running = False
+
+
+def _brush_grayscale_timer():
+    global _brush_timer_running
+    try:
+        context = bpy.context
+        scene = getattr(context, "scene", None)
+        active_kind = getattr(scene, "bname_active_layer_kind", "") if scene is not None else ""
+        obj = getattr(getattr(context, "view_layer", None), "objects", None)
+        active = getattr(obj, "active", None) if obj is not None else None
+        if active_kind != "raster" or getattr(active, "mode", "") != "TEXTURE_PAINT":
+            _brush_timer_running = False
+            return None
+        force_active_brush_grayscale(context)
+        entry, _idx = active_raster_entry(context)
+        image = ensure_raster_image(context, entry, create_missing=False) if entry is not None else None
+        if image is not None and bool(getattr(image, "is_dirty", False)):
+            mark_raster_dirty(entry)
+        return 0.2
+    except Exception:  # noqa: BLE001
+        _brush_timer_running = False
+        return None
+
+
+def _start_brush_grayscale_timer() -> None:
+    global _brush_timer_running
+    if _brush_timer_running:
+        return
+    _brush_timer_running = True
+    bpy.app.timers.register(_brush_grayscale_timer, first_interval=0.05)
+
+
+class BNAME_OT_raster_layer_add(Operator):
+    bl_idname = "bname.raster_layer_add"
+    bl_label = "ラスター描画レイヤーを追加"
+    bl_options = {"REGISTER", "UNDO"}
+
+    dpi: IntProperty(name="DPI", default=300, min=30, soft_max=1200)  # type: ignore[valid-type]
+    bit_depth: EnumProperty(  # type: ignore[valid-type]
+        name="階調",
+        items=(("gray8", "グレー 8bit", ""), ("gray1", "1bit", "")),
+        default="gray8",
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return _raster_collection(context.scene) is not None
+
+    def execute(self, context):
+        work = get_work(context)
+        page = get_active_page(context)
+        coll = _raster_collection(context.scene)
+        if work is None or not getattr(work, "loaded", False) or not getattr(work, "work_dir", ""):
+            self.report({"ERROR"}, "作品が開かれていません")
+            return {"CANCELLED"}
+        if page is None:
+            self.report({"ERROR"}, "ページが選択されていません")
+            return {"CANCELLED"}
+        raster_id = _allocate_raster_id(context.scene, Path(work.work_dir))
+        entry = coll.add()
+        entry.id = raster_id
+        entry.title = f"ラスター {len(coll)}"
+        entry.image_name = raster_image_name(raster_id)
+        entry.filepath_rel = raster_filepath_rel(raster_id)
+        entry.dpi = int(self.dpi)
+        entry.bit_depth = self.bit_depth
+        entry.scope = "page"
+        entry.parent_kind = "page"
+        entry.parent_key = page.id
+        context.scene.bname_active_raster_layer_index = len(coll) - 1
+        context.scene.bname_active_layer_kind = "raster"
+        if ensure_raster_plane(context, entry) is None:
+            coll.remove(len(coll) - 1)
+            self.report({"ERROR"}, "ラスター実体の作成に失敗しました")
+            return {"CANCELLED"}
+        save_raster_png(context, entry, force=True)
+        layer_stack_utils.sync_layer_stack_after_data_change(context)
+        stack = getattr(context.scene, "bname_layer_stack", None)
+        uid = layer_stack_utils.target_uid("raster", raster_id)
+        if stack is not None:
+            for i, item in enumerate(stack):
+                if layer_stack_utils.stack_item_uid(item) == uid:
+                    layer_stack_utils.select_stack_index(context, i)
+                    break
+        return {"FINISHED"}
+
+
+class BNAME_OT_raster_layer_remove(Operator):
+    bl_idname = "bname.raster_layer_remove"
+    bl_label = "ラスター描画レイヤーを削除"
+    bl_options = {"REGISTER", "UNDO"}
+
+    raster_id: StringProperty(default="", options={"HIDDEN"})  # type: ignore[valid-type]
+
+    def execute(self, context):
+        if self.raster_id:
+            _entry, idx = find_raster_entry(context.scene, self.raster_id)
+        else:
+            _entry, idx = active_raster_entry(context)
+        if idx < 0 or not remove_raster_by_index(context, idx):
+            return {"CANCELLED"}
+        layer_stack_utils.sync_layer_stack_after_data_change(context)
+        return {"FINISHED"}
+
+
+class BNAME_OT_raster_layer_select(Operator):
+    bl_idname = "bname.raster_layer_select"
+    bl_label = "ラスター描画レイヤーを選択"
+    bl_options = {"REGISTER"}
+
+    raster_id: StringProperty(default="", options={"HIDDEN"})  # type: ignore[valid-type]
+    index: IntProperty(default=-1)  # type: ignore[valid-type]
+
+    def execute(self, context):
+        idx = self.index
+        if self.raster_id:
+            _entry, idx = find_raster_entry(context.scene, self.raster_id)
+        coll = _raster_collection(context.scene)
+        if coll is None or not (0 <= idx < len(coll)):
+            return {"CANCELLED"}
+        context.scene.bname_active_raster_layer_index = idx
+        context.scene.bname_active_layer_kind = "raster"
+        return {"FINISHED"}
+
+
+class BNAME_OT_raster_layer_paint_enter(Operator):
+    bl_idname = "bname.raster_layer_paint_enter"
+    bl_label = "Texture Paint へ入る"
+    bl_options = {"REGISTER"}
+
+    raster_id: StringProperty(default="", options={"HIDDEN"})  # type: ignore[valid-type]
+
+    def execute(self, context):
+        entry, idx = (
+            find_raster_entry(context.scene, self.raster_id)
+            if self.raster_id else active_raster_entry(context)
+        )
+        if entry is None or idx < 0:
+            self.report({"WARNING"}, "ラスター描画レイヤーを選択してください")
+            return {"CANCELLED"}
+        if bool(getattr(entry, "locked", False)):
+            self.report({"WARNING"}, "ロックされたラスターには描画できません")
+            return {"CANCELLED"}
+        if not bool(getattr(entry, "visible", True)):
+            self.report({"WARNING"}, "非表示のラスターには描画できません")
+            return {"CANCELLED"}
+        try:
+            from . import panel_modal_state
+
+            panel_modal_state.finish_all(context)
+        except Exception:  # noqa: BLE001
+            pass
+        obj = ensure_raster_plane(context, entry)
+        image = ensure_raster_image(context, entry)
+        if obj is None or image is None:
+            return {"CANCELLED"}
+        try:
+            if getattr(context.object, "mode", "OBJECT") != "OBJECT":
+                bpy.ops.object.mode_set(mode="OBJECT")
+        except Exception:  # noqa: BLE001
+            pass
+        for selected in tuple(getattr(context, "selected_objects", []) or []):
+            if selected is not obj:
+                selected.select_set(False)
+        context.view_layer.objects.active = obj
+        obj.select_set(True)
+        context.scene.bname_active_raster_layer_index = idx
+        context.scene.bname_active_layer_kind = "raster"
+        paint = getattr(context.tool_settings, "image_paint", None)
+        if paint is not None:
+            try:
+                paint.canvas = image
+            except Exception:  # noqa: BLE001
+                pass
+        force_active_brush_grayscale(context)
+        try:
+            bpy.ops.object.mode_set(mode="TEXTURE_PAINT")
+        except Exception as exc:  # noqa: BLE001
+            self.report({"WARNING"}, f"Texture Paintへ切替できません: {exc}")
+            return {"CANCELLED"}
+        force_active_brush_grayscale(context)
+        _start_brush_grayscale_timer()
+        return {"FINISHED"}
+
+
+class BNAME_OT_raster_layer_paint_exit(Operator):
+    bl_idname = "bname.raster_layer_paint_exit"
+    bl_label = "Texture Paint を終了"
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        entry, _idx = active_raster_entry(context)
+        if entry is not None:
+            save_raster_png(context, entry, force=True)
+        try:
+            if getattr(context.object, "mode", "") != "OBJECT":
+                bpy.ops.object.mode_set(mode="OBJECT")
+        except Exception as exc:  # noqa: BLE001
+            self.report({"WARNING"}, f"Objectモードへ戻せません: {exc}")
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
+class BNAME_OT_raster_layer_mode_set(Operator):
+    bl_idname = "bname.raster_layer_mode_set"
+    bl_label = "ラスター描画モード切替"
+    bl_options = {"REGISTER", "INTERNAL"}
+
+    mode: StringProperty(default="TEXTURE_PAINT")  # type: ignore[valid-type]
+
+    def execute(self, context):
+        if self.mode == "TEXTURE_PAINT":
+            return bpy.ops.bname.raster_layer_paint_enter("EXEC_DEFAULT")
+        if self.mode == "OBJECT":
+            return bpy.ops.bname.raster_layer_paint_exit("EXEC_DEFAULT")
+        return {"CANCELLED"}
+
+
+class BNAME_OT_raster_layer_save_png(Operator):
+    bl_idname = "bname.raster_layer_save_png"
+    bl_label = "ラスターPNGを書き出し"
+    bl_options = {"REGISTER"}
+
+    raster_id: StringProperty(default="", options={"HIDDEN"})  # type: ignore[valid-type]
+    force: BoolProperty(default=False, options={"HIDDEN"})  # type: ignore[valid-type]
+
+    def execute(self, context):
+        entry = None
+        if self.raster_id:
+            entry, _idx = find_raster_entry(context.scene, self.raster_id)
+        else:
+            entry, _idx = active_raster_entry(context)
+        if entry is None:
+            return {"CANCELLED"}
+        if save_raster_png(context, entry, force=bool(self.force)):
+            return {"FINISHED"}
+        return {"CANCELLED"}
+
+
+class BNAME_OT_raster_layer_resample(Operator):
+    bl_idname = "bname.raster_layer_resample"
+    bl_label = "ラスターをリサンプル"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        self.report({"INFO"}, "DPIリサンプルは Phase 3 で実装します")
+        return {"CANCELLED"}
+
+
+class BNAME_OT_raster_layer_set_bit_depth(Operator):
+    bl_idname = "bname.raster_layer_set_bit_depth"
+    bl_label = "ラスター階調を変更"
+    bl_options = {"REGISTER", "UNDO"}
+
+    bit_depth: EnumProperty(  # type: ignore[valid-type]
+        items=(("gray8", "グレー 8bit", ""), ("gray1", "1bit", "")),
+        default="gray8",
+    )
+
+    def execute(self, context):
+        entry, _idx = active_raster_entry(context)
+        if entry is None:
+            return {"CANCELLED"}
+        entry.bit_depth = self.bit_depth
+        return {"FINISHED"}
+
+
+_CLASSES = (
+    BNAME_OT_raster_layer_add,
+    BNAME_OT_raster_layer_remove,
+    BNAME_OT_raster_layer_select,
+    BNAME_OT_raster_layer_paint_enter,
+    BNAME_OT_raster_layer_paint_exit,
+    BNAME_OT_raster_layer_mode_set,
+    BNAME_OT_raster_layer_save_png,
+    BNAME_OT_raster_layer_resample,
+    BNAME_OT_raster_layer_set_bit_depth,
+)
+
+
+def register() -> None:
+    for cls in _CLASSES:
+        bpy.utils.register_class(cls)
+
+
+def unregister() -> None:
+    for cls in reversed(_CLASSES):
+        try:
+            bpy.utils.unregister_class(cls)
+        except RuntimeError:
+            pass

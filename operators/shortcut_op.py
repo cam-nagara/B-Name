@@ -107,6 +107,11 @@ class BNAME_OT_set_mode_object(Operator):
 
     def execute(self, context):
         _finish_modal_tools_for_mode_switch(context)
+        if getattr(context.scene, "bname_active_layer_kind", "") == "raster":
+            try:
+                return bpy.ops.bname.raster_layer_paint_exit("EXEC_DEFAULT")
+            except Exception:  # noqa: BLE001
+                pass
         obj = context.view_layer.objects.active
         if obj is None:
             return {"CANCELLED"}
@@ -137,6 +142,12 @@ class BNAME_OT_set_mode_draw(Operator):
 
     def execute(self, context):
         _finish_modal_tools_for_mode_switch(context)
+        if getattr(context.scene, "bname_active_layer_kind", "") == "raster":
+            try:
+                return bpy.ops.bname.raster_layer_paint_enter("EXEC_DEFAULT")
+            except Exception as exc:  # noqa: BLE001
+                self.report({"WARNING"}, f"切替不可: {exc}")
+                return {"CANCELLED"}
         obj = _activate_gp_layer_for_drawing(context)
         if obj is None:
             self.report({"WARNING"}, "描画するグリースペンシルレイヤーを選択してください")

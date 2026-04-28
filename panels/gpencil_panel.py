@@ -89,6 +89,7 @@ def _kind_icon(kind: str) -> str:
         "gp": "OUTLINER_OB_GREASEPENCIL",
         "gp_folder": "FILE_FOLDER",
         "image": "IMAGE_DATA",
+        "raster": "BRUSH_DATA",
         "balloon_group": "FILE_FOLDER",
         "balloon": "MOD_FLUID",
         "text": "FONT_DATA",
@@ -150,7 +151,7 @@ def _draw_visibility_slot(row, item, target, index: int) -> None:
         _draw_square_label(row)
     elif item.kind in {"page", "panel"} and hasattr(target, "visible"):
         _visibility_button(row, index, not bool(target.visible))
-    elif item.kind == "image" and hasattr(target, "visible"):
+    elif item.kind in {"image", "raster"} and hasattr(target, "visible"):
         _visibility_button(row, index, not bool(target.visible))
     elif item.kind in {"gp", "gp_folder", "effect"} and hasattr(target, "hide"):
         _visibility_button(row, index, _gp_hidden(target))
@@ -335,6 +336,12 @@ def _draw_stack_data_row(row, controls, item, resolved, index: int) -> None:
         return
     if item.kind == "image":
         _draw_type_icon(row, index, "IMAGE_DATA")
+        _select_name(row, index, getattr(target, "title", "") or item.label)
+        controls["aux"] = "lock"
+        controls["lock_target"] = target
+        controls["lock_prop"] = "locked"
+    elif item.kind == "raster":
+        _draw_type_icon(row, index, "BRUSH_DATA")
         _select_name(row, index, getattr(target, "title", "") or item.label)
         controls["aux"] = "lock"
         controls["lock_target"] = target

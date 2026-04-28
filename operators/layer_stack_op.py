@@ -23,7 +23,8 @@ _ADD_KIND_ITEMS = (
     ("page", "ページ", ""),
     ("panel", "コマ", ""),
     ("gp", "グリースペンシル", ""),
-    ("image", "画像", ""),
+    ("image", "画像 (配置)", ""),
+    ("raster", "ラスター (描画)", ""),
     ("balloon", "フキダシ", ""),
     ("text", "テキスト", ""),
     ("effect", "効果線", ""),
@@ -35,6 +36,7 @@ _ADD_KIND_ICONS = {
     "panel": "MOD_WIREFRAME",
     "gp": "OUTLINER_OB_GREASEPENCIL",
     "image": "IMAGE_DATA",
+    "raster": "BRUSH_DATA",
     "balloon_group": "FILE_FOLDER",
     "balloon": "MOD_FLUID",
     "text": "FONT_DATA",
@@ -449,12 +451,41 @@ class BNAME_MT_layer_stack_add(Menu):
     def draw(self, _context):
         layout = self.layout
         for kind, label, _desc in _ADD_KIND_ITEMS:
+            if kind == "raster":
+                layout.menu(
+                    "BNAME_MT_layer_stack_add_raster",
+                    text=label,
+                    icon=_ADD_KIND_ICONS.get(kind, "ADD"),
+                )
+                continue
             op = layout.operator(
                 "bname.layer_stack_add",
                 text=label,
                 icon=_ADD_KIND_ICONS.get(kind, "ADD"),
             )
             op.kind = kind
+
+
+class BNAME_MT_layer_stack_add_raster(Menu):
+    bl_idname = "BNAME_MT_layer_stack_add_raster"
+    bl_label = "ラスターを追加"
+
+    def draw(self, _context):
+        layout = self.layout
+        op = layout.operator(
+            "bname.raster_layer_add",
+            text="300dpi / グレー 8bit",
+            icon="BRUSH_DATA",
+        )
+        op.dpi = 300
+        op.bit_depth = "gray8"
+        op = layout.operator(
+            "bname.raster_layer_add",
+            text="150dpi / グレー 8bit",
+            icon="BRUSH_DATA",
+        )
+        op.dpi = 150
+        op.bit_depth = "gray8"
 
 
 class BNAME_OT_layer_stack_add(Operator, ImportHelper):
@@ -502,6 +533,8 @@ class BNAME_OT_layer_stack_add(Operator, ImportHelper):
             return self._add_gp_layer(context, anchor_uid)
         if self.kind == "image":
             return self._add_image(context)
+        if self.kind == "raster":
+            return self._add_raster(context)
         if self.kind == "balloon":
             return self._add_balloon(context, anchor_uid)
         if self.kind == "text":
@@ -624,6 +657,25 @@ class BNAME_OT_layer_stack_add(Operator, ImportHelper):
         context.scene.bname_active_layer_kind = "image"
         layer_stack_utils.sync_layer_stack_after_data_change(context)
         return layer_stack_utils.target_uid("image", entry.id)
+
+    def _add_raster(self, context) -> str:
+        before = {
+            getattr(entry, "id", "")
+            for entry in (getattr(context.scene, "bname_raster_layers", None) or [])
+        }
+        result = bpy.ops.bname.raster_layer_add("EXEC_DEFAULT", dpi=300, bit_depth="gray8")
+        if "FINISHED" not in result:
+            return ""
+        coll = getattr(context.scene, "bname_raster_layers", None)
+        if coll is None:
+            return ""
+        for entry in coll:
+            if getattr(entry, "id", "") not in before:
+                return layer_stack_utils.target_uid("raster", entry.id)
+        idx = int(getattr(context.scene, "bname_active_raster_layer_index", -1))
+        if 0 <= idx < len(coll):
+            return layer_stack_utils.target_uid("raster", coll[idx].id)
+        return ""
 
     def _add_balloon(self, context, anchor_uid: str) -> str:
         from .balloon_op import _allocate_balloon_id, _creation_violates_layer_scope
@@ -861,7 +913,7 @@ class BNAME_OT_layer_stack_toggle_visibility(Operator):
             return {"CANCELLED"}
         if item.kind in {PAGE_KIND, PANEL_KIND} and hasattr(target, "visible"):
             target.visible = not bool(target.visible)
-        elif item.kind == "image" and hasattr(target, "visible"):
+        elif item.kind in {"image", "raster"} and hasattr(target, "visible"):
             target.visible = not bool(target.visible)
         elif item.kind in {"gp", "gp_folder", "effect"} and hasattr(target, "hide"):
             target.hide = not bool(target.hide)
@@ -1104,6 +1156,7 @@ _CLASSES = (
     BNAME_OT_layer_stack_move,
     BNAME_OT_layer_stack_drag,
     BNAME_MT_layer_stack_add,
+    BNAME_MT_layer_stack_add_raster,
     BNAME_OT_layer_stack_add,
     BNAME_OT_layer_stack_duplicate,
     BNAME_OT_layer_stack_toggle_visibility,
