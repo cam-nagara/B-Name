@@ -783,6 +783,8 @@ class BNAME_OT_effect_line_tool(Operator):
             return {"FINISHED", "PASS_THROUGH"}
         if getattr(self, "_dragging", False):
             return self._modal_dragging(context, event)
+        if view_event_region.modal_navigation_ui_passthrough(self, context, event):
+            return {"PASS_THROUGH"}
         if not _event_in_view3d_window(context, event):
             return {"PASS_THROUGH"}
         if event.type == "RIGHTMOUSE" and event.value == "PRESS":

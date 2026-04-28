@@ -161,6 +161,8 @@ class BNAME_OT_object_tool(Operator):
             return {"FINISHED", "PASS_THROUGH"}
         if getattr(self, "_dragging", False):
             return self._modal_dragging(context, event)
+        if view_event_region.modal_navigation_ui_passthrough(self, context, event):
+            return {"PASS_THROUGH"}
         if event.type == "RIGHTMOUSE" and event.value == "PRESS":
             if selection_context_menu.open_for_object_tool(self, context, event):
                 return {"RUNNING_MODAL"}

@@ -26,7 +26,7 @@ from gpu_extras.batch import batch_for_shader
 
 from ..core.work import get_work
 from ..io import page_io, coma_io
-from . import coma_modal_state
+from . import coma_modal_state, view_event_region
 from ..utils import (
     edge_selection,
     geom,
@@ -44,9 +44,6 @@ COLOR_CUT_LINE = (1.0, 0.1, 0.1, 0.95)
 COLOR_CUT_PREVIEW_FILL_A = (0.1, 0.65, 1.0, 0.18)
 COLOR_CUT_PREVIEW_FILL_B = (1.0, 0.75, 0.1, 0.18)
 COLOR_CUT_PREVIEW_OUTLINE = (0.05, 0.9, 0.95, 0.95)
-NAV_GIZMO_HITBOX_WIDTH_PX = 112.0
-NAV_GIZMO_HITBOX_HEIGHT_PX = 232.0
-NAV_GIZMO_HITBOX_MARGIN_PX = 8.0
 
 
 def _find_view3d(context):
@@ -550,22 +547,7 @@ class BNAME_OT_coma_knife_cut(Operator):
         )
 
     def _is_over_navigation_gizmo(self, ev) -> bool:
-        if not self._is_inside_region(ev):
-            return False
-        prefs_view = getattr(getattr(bpy.context, "preferences", None), "view", None)
-        if prefs_view is not None and not bool(getattr(prefs_view, "show_navigate_ui", True)):
-            return False
-        space = getattr(self._area.spaces, "active", None)
-        if space is not None:
-            if not bool(getattr(space, "show_gizmo", True)):
-                return False
-            if not bool(getattr(space, "show_gizmo_navigate", True)):
-                return False
-        mx, my = self._to_window(ev)
-        return (
-            mx >= self._region.width - NAV_GIZMO_HITBOX_WIDTH_PX - NAV_GIZMO_HITBOX_MARGIN_PX
-            and my >= self._region.height - NAV_GIZMO_HITBOX_HEIGHT_PX - NAV_GIZMO_HITBOX_MARGIN_PX
-        )
+        return view_event_region.is_view3d_navigation_ui_event(bpy.context, ev)
 
     def _tag_redraw(self) -> None:
         if self._region is not None:

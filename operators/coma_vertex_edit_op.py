@@ -31,7 +31,7 @@ from gpu_extras.batch import batch_for_shader
 from ..core.work import get_active_page, get_work
 from ..io import page_io, coma_io
 from ..utils import geom, log, viewport_colors
-from . import coma_modal_state
+from . import coma_modal_state, view_event_region
 
 _logger = log.get_logger(__name__)
 
@@ -302,6 +302,9 @@ class BNAME_OT_coma_edit_vertices(Operator):
         # 原点を引いて正規化する。
         def _to_window(ev):
             return ev.mouse_x - self._region.x, ev.mouse_y - self._region.y
+
+        if self._drag is None and view_event_region.modal_navigation_ui_passthrough(self, context, event):
+            return {"PASS_THROUGH"}
 
         if self._drag is None and event.type in {"MOUSEMOVE", "LEFTMOUSE", "RIGHTMOUSE"}:
             if not self._is_inside_region(event):

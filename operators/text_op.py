@@ -675,6 +675,8 @@ class BNAME_OT_text_tool(Operator):
             return self._modal_editing(context, event)
         if getattr(self, "_dragging", False):
             return self._modal_dragging(context, event)
+        if view_event_region.modal_navigation_ui_passthrough(self, context, event):
+            return {"PASS_THROUGH"}
         if not _event_in_view3d_window(context, event):
             if event.type == "LEFTMOUSE" and event.value == "PRESS":
                 self._clear_click_state()
@@ -775,6 +777,8 @@ class BNAME_OT_text_tool(Operator):
             return {"RUNNING_MODAL"}
         if text_edit_runtime.event_is_ime_control(event) or _event_should_pass_to_ime(event):
             layer_stack_utils.tag_view3d_redraw(context)
+            return {"PASS_THROUGH"}
+        if view_event_region.modal_navigation_ui_passthrough(self, context, event):
             return {"PASS_THROUGH"}
         if not _event_in_view3d_window(context, event):
             return {"PASS_THROUGH"}
