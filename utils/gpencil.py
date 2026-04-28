@@ -772,6 +772,7 @@ def add_stroke_to_drawing(
     drawing,
     points_xyz: Iterable[tuple[float, float, float]],
     radius: float = 0.01,
+    radii: Iterable[float] | None = None,
     cyclic: bool = False,
 ) -> bool:
     """GreasePencilDrawing に 1 ストロークを追加.
@@ -783,6 +784,7 @@ def add_stroke_to_drawing(
     pts = list(points_xyz)
     if not pts:
         return False
+    point_radii = list(radii or [])
     try:
         start_index = len(getattr(drawing, "strokes", []))
         strokes = drawing.add_strokes([len(pts)])
@@ -796,7 +798,7 @@ def add_stroke_to_drawing(
                 point = stroke.points[i]
                 point.position = (x, y, z)
                 if hasattr(point, "radius"):
-                    point.radius = radius
+                    point.radius = point_radii[i] if i < len(point_radii) else radius
             return True
         pos_attr = drawing.attributes.get("position")
         if pos_attr is None:
@@ -807,7 +809,7 @@ def add_stroke_to_drawing(
         rad_attr = drawing.attributes.get("radius")
         if rad_attr is not None:
             for i in range(len(pts)):
-                rad_attr.data[offset + i].value = radius
+                rad_attr.data[offset + i].value = point_radii[i] if i < len(point_radii) else radius
         return True
     except Exception as exc:  # noqa: BLE001
         _logger.warning("add_stroke_to_drawing failed: %s", exc)

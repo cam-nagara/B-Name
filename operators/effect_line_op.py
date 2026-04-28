@@ -21,6 +21,7 @@ from . import coma_modal_state, view_event_region
 _logger = log.get_logger(__name__)
 
 _EFFECT_META_PROP = "bname_effect_line_meta"
+_PARAM_SYNCING = False
 _EFFECT_MIN_SIZE_MM = 2.0
 _EFFECT_HANDLE_HIT_MM = 2.5
 _EFFECT_DRAG_EPS_MM = 0.05
@@ -67,7 +68,14 @@ def _layer_meta_key(layer) -> str:
     return str(getattr(layer, "name", "") or "")
 
 
-def _set_layer_bounds(obj, layer, bounds: tuple[float, float, float, float], *, seed: int | None = None) -> None:
+def _set_layer_bounds(
+    obj,
+    layer,
+    bounds: tuple[float, float, float, float],
+    *,
+    seed: int | None = None,
+    params_data: dict | None = None,
+) -> None:
     x, y, w, h = bounds
     meta = _effect_meta(obj)
     key = _layer_meta_key(layer)
@@ -77,13 +85,17 @@ def _set_layer_bounds(obj, layer, bounds: tuple[float, float, float, float], *, 
             seed = int(prev.get("seed", 0))
         except Exception:  # noqa: BLE001
             seed = 0
-    meta[key] = {
+    entry = dict(prev)
+    entry.update({
         "x": float(x),
         "y": float(y),
         "w": max(_EFFECT_MIN_SIZE_MM, float(w)),
         "h": max(_EFFECT_MIN_SIZE_MM, float(h)),
         "seed": int(seed or 0),
-    }
+    })
+    if params_data is not None:
+        entry["params"] = params_data
+    meta[key] = entry
     _write_effect_meta(obj, meta)
 
 
@@ -193,6 +205,7 @@ def _set_active_effect_layer(context, obj, layer) -> None:
             scene.bname_active_layer_kind = "effect"
         if hasattr(scene, "bname_active_effect_layer_name"):
             scene.bname_active_effect_layer_name = layer_stack_utils._node_stack_key(layer)
+        _load_layer_params_to_scene(context, obj, layer)
 
 
 def _select_effect_layer(context, obj, layer) -> None:
@@ -230,11 +243,128 @@ def _seed_for_layer(obj, layer) -> int:
     return 0
 
 
-def _write_effect_strokes(context, obj, layer, bounds: tuple[float, float, float, float], *, seed: int | None = None) -> int:
+def _layer_params_data(obj, layer) -> dict:
+    stored = _effect_meta(obj).get(_layer_meta_key(layer), {})
+    if not isinstance(stored, dict):
+        return {}
+    params = stored.get("params", {})
+    return params if isinstance(params, dict) else {}
+
+
+def _scene_params_syncing(scene) -> bool:
+    _ = scene
+    return bool(_PARAM_SYNCING)
+
+
+def _set_scene_params_syncing(scene, value: bool) -> None:
+    _ = scene
+    global _PARAM_SYNCING
+    _PARAM_SYNCING = bool(value)
+
+
+def _load_layer_params_to_scene(context, obj, layer) -> None:
+    scene = getattr(context, "scene", None)
+    params = getattr(scene, "bname_effect_line_params", None) if scene is not None else None
+    data = _layer_params_data(obj, layer)
+    if params is None or not data:
+        return
+    try:
+        from ..core import effect_line
+
+        _set_scene_params_syncing(scene, True)
+        effect_line.effect_params_from_dict(params, data)
+    finally:
+        _set_scene_params_syncing(scene, False)
+
+
+def _apply_material_settings(obj, layer, params) -> None:
     from ..utils import gpencil
+
+    mat = gpencil.ensure_layer_material(
+        obj,
+        layer,
+        activate=True,
+        assign_existing=False,
+    )
+    gp_style = getattr(mat, "grease_pencil", None) if mat is not None else None
+    if gp_style is None:
+        return
+    try:
+        gp_style.show_stroke = True
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        gp_style.color = tuple(float(c) for c in params.line_color[:4])
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        fill = [float(c) for c in params.fill_color[:4]]
+        fill[3] = max(0.0, min(1.0, fill[3] * float(params.fill_opacity)))
+        gp_style.fill_color = tuple(fill)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        gp_style.show_fill = bool(params.effect_type == "beta_flash" and params.fill_base_shape)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def copy_layer_effect_meta(obj, source_layer, dest_layer) -> None:
+    """効果線レイヤー複製時に描画範囲・詳細設定メタデータを引き継ぐ。"""
+    if obj is None or source_layer is None or dest_layer is None:
+        return
+    source_key = _layer_meta_key(source_layer)
+    dest_key = _layer_meta_key(dest_layer)
+    if not source_key or not dest_key or source_key == dest_key:
+        return
+    meta = _effect_meta(obj)
+    source = meta.get(source_key)
+    if not isinstance(source, dict):
+        return
+    try:
+        meta[dest_key] = json.loads(json.dumps(source, ensure_ascii=False))
+    except Exception:  # noqa: BLE001
+        meta[dest_key] = dict(source)
+    _write_effect_meta(obj, meta)
+
+
+class _EffectParamProxy:
+    def __init__(self, fallback, data: dict):
+        self._fallback = fallback
+        self._data = data or {}
+
+    def __getattr__(self, name: str):
+        if name in self._data:
+            return self._data[name]
+        return getattr(self._fallback, name)
+
+
+def _params_for_write(context, obj, layer, params_override=None):
+    if params_override is not None:
+        return params_override
+    scene_params = getattr(context.scene, "bname_effect_line_params", None)
+    if scene_params is None:
+        return None
+    data = _layer_params_data(obj, layer)
+    if data:
+        return _EffectParamProxy(scene_params, data)
+    return scene_params
+
+
+def _write_effect_strokes(
+    context,
+    obj,
+    layer,
+    bounds: tuple[float, float, float, float],
+    *,
+    seed: int | None = None,
+    params_override=None,
+) -> int:
+    from ..utils import gpencil
+    from ..core import effect_line
     from . import effect_line_gen
 
-    params = getattr(context.scene, "bname_effect_line_params", None)
+    params = _params_for_write(context, obj, layer, params_override=params_override)
     if params is None:
         return 0
     x, y, w, h = bounds
@@ -246,6 +376,7 @@ def _write_effect_strokes(context, obj, layer, bounds: tuple[float, float, float
     drawing = _frame_drawing(layer)
     if drawing is None:
         return 0
+    _apply_material_settings(obj, layer, params)
     _clear_drawing(drawing)
     strokes = effect_line_gen.generate_strokes(
         params,
@@ -259,11 +390,35 @@ def _write_effect_strokes(context, obj, layer, bounds: tuple[float, float, float
             drawing,
             stroke.points_xyz,
             radius=stroke.radius,
+            radii=getattr(stroke, "radii", None),
             cyclic=stroke.cyclic,
         ):
             added += 1
-    _set_layer_bounds(obj, layer, (float(x), float(y), w, h), seed=seed_value)
+    gpencil.ensure_layer_material(obj, layer, activate=True, assign_existing=True)
+    _set_layer_bounds(
+        obj,
+        layer,
+        (float(x), float(y), w, h),
+        seed=seed_value,
+        params_data=effect_line.effect_params_to_dict(params),
+    )
     return added
+
+
+def on_effect_params_changed(context, _params) -> None:
+    scene = getattr(context, "scene", None)
+    if scene is None or _scene_params_syncing(scene):
+        return
+    if getattr(scene, "bname_active_layer_kind", "") != "effect":
+        return
+    obj, layer, bounds = active_effect_layer_bounds(context)
+    if obj is None or layer is None or bounds is None:
+        return
+    try:
+        _write_effect_strokes(context, obj, layer, bounds, params_override=_params)
+        layer_stack_utils.tag_view3d_redraw(context)
+    except Exception:  # noqa: BLE001
+        _logger.exception("effect_line: param change rebuild failed")
 
 
 def _create_effect_layer(context, bounds: tuple[float, float, float, float] | None = None):

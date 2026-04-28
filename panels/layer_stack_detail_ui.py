@@ -254,28 +254,20 @@ def _draw_text_selected_settings(box, context, entry) -> None:
         op.balloon_id = ""
 
 
-def _draw_effect_selected_settings(box, context, obj, active_layer) -> None:
-    settings = box.column(align=True)
-    name = getattr(active_layer, "name", "効果線")
-    settings.label(text=f"選択中: {name} (効果線)")
-    if active_layer is not None and hasattr(active_layer, "opacity"):
-        settings.prop(active_layer, "opacity", text="不透明度", slider=True)
-    if active_layer is not None and hasattr(active_layer, "hide"):
-        settings.prop(active_layer, "hide", text="非表示")
-    params = getattr(context.scene, "bname_effect_line_params", None)
-    if params is None:
-        settings.label(text="効果線パラメータが未初期化です", icon="ERROR")
-        return
-
+def _draw_effect_type_settings(box, params) -> None:
     param_box = box.box()
-    param_box.label(text="効果線設定", icon="STROKE")
+    param_box.label(text="種類 / 基準", icon="STROKE")
     param_box.prop(params, "effect_type")
+    if params.effect_type == "speed":
+        return
     param_box.prop(params, "base_shape")
     if params.base_shape == "polygon":
         param_box.prop(params, "base_vertex_count")
     param_box.prop(params, "start_from_center")
     param_box.prop(params, "rotation_deg")
 
+
+def _draw_effect_line_settings(box, params) -> None:
     line_box = box.box()
     line_box.label(text="線")
     line_box.prop(params, "brush_size_mm")
@@ -284,23 +276,63 @@ def _draw_effect_selected_settings(box, context, obj, active_layer) -> None:
     sub = row.row()
     sub.enabled = params.brush_jitter_enabled
     sub.prop(params, "brush_jitter_amount", text="")
-    line_box.prop(params, "spacing_mode")
-    if params.spacing_mode == "angle":
-        line_box.prop(params, "spacing_angle_deg")
-    else:
-        line_box.prop(params, "spacing_distance_mm")
-    line_box.prop(params, "length_mm")
-    line_box.prop(params, "extend_past_coma")
 
-    base_box = box.box()
-    base_box.label(text="基準位置 / ギザ")
-    base_box.prop(params, "base_position")
-    base_box.prop(params, "base_position_offset")
-    base_box.prop(params, "base_jagged_enabled")
-    sub = base_box.column()
+
+def _draw_effect_position_settings(box, params) -> None:
+    position_box = box.box()
+    position_box.label(text="描画位置")
+    position_box.prop(params, "length_mm")
+    row = position_box.row(align=True)
+    row.prop(params, "length_jitter_enabled", text="乱れ")
+    sub = row.row()
+    sub.enabled = params.length_jitter_enabled
+    sub.prop(params, "length_jitter_amount", text="")
+    position_box.prop(params, "extend_past_coma")
+    if params.effect_type == "speed":
+        return
+    position_box.prop(params, "base_position")
+    row = position_box.row(align=True)
+    row.prop(params, "base_position_offset_enabled", text="基準位置のずれ")
+    sub = row.row()
+    sub.enabled = params.base_position_offset_enabled
+    sub.prop(params, "base_position_offset", text="")
+    position_box.prop(params, "base_jagged_enabled")
+    sub = position_box.column(align=True)
     sub.enabled = params.base_jagged_enabled
-    sub.prop(params, "base_jagged_count")
-    sub.prop(params, "base_jagged_height_mm")
+    row = sub.row(align=True)
+    row.prop(params, "base_jagged_count")
+    row.prop(params, "base_jagged_height_mm")
+
+
+def _draw_effect_interval_settings(box, params) -> None:
+    interval_box = box.box()
+    interval_box.label(text="描画間隔")
+    interval_box.prop(params, "spacing_mode")
+    if params.spacing_mode == "angle":
+        interval_box.prop(params, "spacing_angle_deg")
+    else:
+        interval_box.prop(params, "spacing_distance_mm")
+    row = interval_box.row(align=True)
+    row.prop(params, "spacing_jitter_enabled", text="乱れ")
+    sub = row.row()
+    sub.enabled = params.spacing_jitter_enabled
+    sub.prop(params, "spacing_jitter_amount", text="")
+    interval_box.prop(params, "bundle_enabled")
+    sub = interval_box.column(align=True)
+    sub.enabled = params.bundle_enabled
+    row = sub.row(align=True)
+    row.prop(params, "bundle_line_count")
+    row.prop(params, "bundle_gap_mm")
+    sub.prop(params, "bundle_jitter_amount")
+    interval_box.prop(params, "max_line_count")
+
+
+def _draw_effect_tail_settings(box, params) -> None:
+    if params.effect_type == "speed":
+        speed_box = box.box()
+        speed_box.label(text="流線")
+        speed_box.prop(params, "speed_angle_deg")
+        speed_box.prop(params, "speed_line_count")
 
     inout_box = box.box()
     inout_box.label(text="入り抜き")
@@ -316,11 +348,26 @@ def _draw_effect_selected_settings(box, context, obj, active_layer) -> None:
         color_box.prop(params, "fill_color")
         color_box.prop(params, "fill_opacity")
         color_box.prop(params, "fill_base_shape")
-    if params.effect_type == "speed":
-        speed_box = box.box()
-        speed_box.label(text="流線")
-        speed_box.prop(params, "speed_angle_deg")
-        speed_box.prop(params, "speed_line_count")
+
+
+def _draw_effect_selected_settings(box, context, obj, active_layer) -> None:
+    settings = box.column(align=True)
+    name = getattr(active_layer, "name", "効果線")
+    settings.label(text=f"選択中: {name} (効果線)")
+    if active_layer is not None and hasattr(active_layer, "opacity"):
+        settings.prop(active_layer, "opacity", text="不透明度", slider=True)
+    if active_layer is not None and hasattr(active_layer, "hide"):
+        settings.prop(active_layer, "hide", text="非表示")
+    params = getattr(context.scene, "bname_effect_line_params", None)
+    if params is None:
+        settings.label(text="効果線パラメータが未初期化です", icon="ERROR")
+        return
+
+    _draw_effect_type_settings(box, params)
+    _draw_effect_line_settings(box, params)
+    _draw_effect_position_settings(box, params)
+    _draw_effect_interval_settings(box, params)
+    _draw_effect_tail_settings(box, params)
     box.operator("bname.effect_line_generate", text="効果線を追加", icon="STROKE")
 
 

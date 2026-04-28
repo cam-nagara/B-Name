@@ -1389,6 +1389,12 @@ def select_stack_index(context, index: int) -> bool:
         scene.bname_active_effect_layer_name = item.key
         scene.bname_active_gp_folder_key = ""
         scene.bname_active_layer_kind = "effect"
+        try:
+            from ..operators import effect_line_op
+
+            effect_line_op._load_layer_params_to_scene(context, obj, layer)
+        except Exception:  # noqa: BLE001
+            _logger.exception("effect layer params restore failed")
         edge_selection.clear_selection(context)
     tag_view3d_redraw(context)
     return True
@@ -1814,8 +1820,15 @@ def delete_stack_index(context, index: int) -> bool:
         page.active_text_index = min(idx, len(page.texts) - 1) if len(page.texts) else -1
     elif kind == "effect":
         obj = resolved.get("object")
+        target = resolved["target"]
         try:
-            obj.data.layers.remove(resolved["target"])
+            from ..operators import effect_line_op
+
+            effect_line_op._remove_layer_bounds(obj, target)
+        except Exception:  # noqa: BLE001
+            _logger.exception("delete effect metadata from layer stack failed")
+        try:
+            obj.data.layers.remove(target)
         except Exception:  # noqa: BLE001
             return False
         scene.bname_active_effect_layer_name = ""
