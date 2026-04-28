@@ -20,8 +20,8 @@ class BNAME_MT_object_context(Menu):
         layout.operator("bname.open_link_source", icon="FILE_BLEND")
         layout.operator("bname.record_asset_link", icon="LINKED")
         layout.separator()
-        layout.operator("bname.panel_update_thumb", icon="IMAGE")
-        layout.operator("bname.panel_generate_preview", icon="RESTRICT_RENDER_OFF")
+        layout.operator("bname.coma_update_thumb", icon="IMAGE")
+        layout.operator("bname.coma_generate_preview", icon="RESTRICT_RENDER_OFF")
 
 
 def _draw_in_object_context(self, context):

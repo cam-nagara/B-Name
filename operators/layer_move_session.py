@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from ..core.work import get_work
 from ..utils import layer_stack as layer_stack_utils, page_grid
-from . import layer_move_op, panel_picker
+from . import layer_move_op, coma_picker
 
 
 class LayerMoveDragSession:
@@ -42,7 +42,7 @@ class LayerMoveDragSession:
         layer_move_op.BNAME_OT_layer_move_tool._push_undo_step(self)
 
     def apply(self, context, event) -> bool:
-        coords = panel_picker._event_world_mm(context, event)
+        coords = coma_picker._event_world_mm(context, event)
         if coords is None or self._last_world is None or not self._dragging:
             return False
         dx = coords[0] - self._last_world[0]

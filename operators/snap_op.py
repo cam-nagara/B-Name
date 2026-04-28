@@ -10,10 +10,10 @@ from ..utils import snap
 from ..utils.geom import Rect
 
 
-class BNAME_OT_snap_active_panel(Operator):
+class BNAME_OT_snap_active_coma(Operator):
     """選択中コマを用紙/他コマへスナップ (4 辺一括)."""
 
-    bl_idname = "bname.snap_active_panel"
+    bl_idname = "bname.snap_active_coma"
     bl_label = "選択コマをスナップ"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -22,15 +22,15 @@ class BNAME_OT_snap_active_panel(Operator):
         page = get_active_page(context)
         if page is None:
             return False
-        idx = page.active_panel_index
-        return 0 <= idx < len(page.panels) and page.panels[idx].shape_type == "rect"
+        idx = page.active_coma_index
+        return 0 <= idx < len(page.comas) and page.comas[idx].shape_type == "rect"
 
     def execute(self, context):
         work = get_work(context)
         page = get_active_page(context)
         if work is None or page is None:
             return {"CANCELLED"}
-        entry = page.panels[page.active_panel_index]
+        entry = page.comas[page.active_coma_index]
         rect = Rect(
             entry.rect_x_mm,
             entry.rect_y_mm,
@@ -40,20 +40,20 @@ class BNAME_OT_snap_active_panel(Operator):
         snapped = snap.snap_rect(
             rect,
             work.paper,
-            page.panels,
-            gap_h_mm=work.panel_gap.horizontal_mm,
-            gap_v_mm=work.panel_gap.vertical_mm,
-            exclude_stem=entry.panel_stem,
+            page.comas,
+            gap_h_mm=work.coma_gap.horizontal_mm,
+            gap_v_mm=work.coma_gap.vertical_mm,
+            exclude_stem=entry.coma_id,
         )
         entry.rect_x_mm = snapped.x
         entry.rect_y_mm = snapped.y
         entry.rect_width_mm = snapped.width
         entry.rect_height_mm = snapped.height
-        self.report({"INFO"}, f"スナップ適用: {entry.panel_stem}")
+        self.report({"INFO"}, f"スナップ適用: {entry.coma_id}")
         return {"FINISHED"}
 
 
-_CLASSES = (BNAME_OT_snap_active_panel,)
+_CLASSES = (BNAME_OT_snap_active_coma,)
 
 
 def register() -> None:

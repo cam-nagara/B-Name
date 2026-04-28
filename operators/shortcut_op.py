@@ -25,7 +25,7 @@ from ..utils.page_grid import (
     _resolve_overview_params,
     page_grid_offset_mm,
 )
-from . import panel_modal_state
+from . import coma_modal_state
 
 _logger = log.get_logger(__name__)
 
@@ -53,7 +53,7 @@ def _active_gp_paint_brush(context):
 
 
 def _finish_modal_tools_for_mode_switch(context) -> None:
-    panel_modal_state.finish_all(context)
+    coma_modal_state.finish_all(context)
 
 
 def _active_gp_layer_target(context):

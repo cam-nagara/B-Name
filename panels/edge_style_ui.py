@@ -5,20 +5,20 @@ from __future__ import annotations
 from ..core.work import get_work
 
 
-def _find_edge_override(panel_entry, edge_index: int):
-    for style in panel_entry.edge_styles:
+def _find_edge_override(coma_entry, edge_index: int):
+    for style in coma_entry.edge_styles:
         if int(style.edge_index) == int(edge_index):
             return style
     return None
 
 
-def _panel_edge_count(panel_entry) -> int:
-    if getattr(panel_entry, "shape_type", "rect") == "rect":
+def _coma_edge_count(coma_entry) -> int:
+    if getattr(coma_entry, "shape_type", "rect") == "rect":
         return 4
-    return len(getattr(panel_entry, "vertices", []))
+    return len(getattr(coma_entry, "vertices", []))
 
 
-def _selected_panel_context(context):
+def _selected_coma_context(context):
     wm = context.window_manager
     kind = getattr(wm, "bname_edge_select_kind", "none")
     if kind == "none":
@@ -27,34 +27,34 @@ def _selected_panel_context(context):
     if work is None or not work.loaded:
         return None
     page_index = int(getattr(wm, "bname_edge_select_page", -1))
-    panel_index = int(getattr(wm, "bname_edge_select_panel", -1))
+    coma_index = int(getattr(wm, "bname_edge_select_coma", -1))
     if not (0 <= page_index < len(work.pages)):
         return None
     page = work.pages[page_index]
-    if not (0 <= panel_index < len(page.panels)):
+    if not (0 <= coma_index < len(page.comas)):
         return None
-    panel_entry = page.panels[panel_index]
-    return (wm, kind, page_index, panel_index, page, panel_entry)
+    coma_entry = page.comas[coma_index]
+    return (wm, kind, page_index, coma_index, page, coma_entry)
 
 
-def get_selected_panel_entry(context):
-    selected = _selected_panel_context(context)
+def get_selected_coma_entry(context):
+    selected = _selected_coma_context(context)
     if selected is None:
         return None
     return selected[5]
 
 
 def draw_selected_edge_style_box(layout, context) -> bool:
-    selected = _selected_panel_context(context)
+    selected = _selected_coma_context(context)
     if selected is None:
         return False
 
-    wm, kind, page_index, _panel_index, _page, panel_entry = selected
+    wm, kind, page_index, _coma_index, _page, coma_entry = selected
     box = layout.box()
 
     if kind == "border":
         box.label(
-            text=f"選択中の枠線全体: P{page_index:04d} {panel_entry.id}",
+            text=f"選択中の枠線全体: P{page_index:04d} {coma_entry.id}",
             icon="MESH_DATA",
         )
         box.prop(wm, "bname_edge_style_color", text="線色")
@@ -64,9 +64,9 @@ def draw_selected_edge_style_box(layout, context) -> bool:
 
     if kind == "edge":
         edge_index = int(getattr(wm, "bname_edge_select_edge", -1))
-        override = _find_edge_override(panel_entry, edge_index)
+        override = _find_edge_override(coma_entry, edge_index)
         box.label(
-            text=f"選択中の辺 [{edge_index}] : P{page_index:04d} {panel_entry.id}",
+            text=f"選択中の辺 [{edge_index}] : P{page_index:04d} {coma_entry.id}",
             icon="EDGESEL",
         )
         if override is None:
@@ -84,15 +84,15 @@ def draw_selected_edge_style_box(layout, context) -> bool:
 
     if kind == "vertex":
         vertex_index = int(getattr(wm, "bname_edge_select_vertex", -1))
-        edge_count = _panel_edge_count(panel_entry)
+        edge_count = _coma_edge_count(coma_entry)
         if edge_count <= 0 or not (0 <= vertex_index < edge_count):
             return False
         prev_edge = (vertex_index - 1 + edge_count) % edge_count
         next_edge = vertex_index
-        prev_override = _find_edge_override(panel_entry, prev_edge)
-        next_override = _find_edge_override(panel_entry, next_edge)
+        prev_override = _find_edge_override(coma_entry, prev_edge)
+        next_override = _find_edge_override(coma_entry, next_edge)
         box.label(
-            text=f"選択中の頂点 [{vertex_index}] : P{page_index:04d} {panel_entry.id}",
+            text=f"選択中の頂点 [{vertex_index}] : P{page_index:04d} {coma_entry.id}",
             icon="VERTEXSEL",
         )
         if prev_override is None and next_override is None:

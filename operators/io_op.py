@@ -328,7 +328,8 @@ class BNAME_OT_export_page(Operator):
             work_dir = Path(work.work_dir)
             out_dir = paths.exports_dir(work_dir) / datetime.now().strftime("%Y-%m-%d_%H%M%S")
             out_dir.mkdir(parents=True, exist_ok=True)
-            idx = int(page.id.split("-", 1)[0]) if page.id else 1
+            idx_text = page.id.split("-", 1)[0].lstrip("p") if page.id else "1"
+            idx = int(idx_text)
             name = _resolve_filename("{workName}_{episode}_{page}", work, page, idx)
             ext = self.format.replace("jpeg", "jpg")
             out = out_dir / f"{name}.{ext}"

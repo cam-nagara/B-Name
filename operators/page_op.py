@@ -3,7 +3,7 @@
 Phase 1 以降: work.blend 一本化に伴い、ページ切替時の mainfile swap は
 廃止された。ページ操作は Scene 上のページメタ (work.pages) と JSON ファイル
 (pages.json / page.json) を対象にするのみで、.blend は触らない。
-コマ編集モード遷移のみ ``operators.mode_op`` で panel_NNN.blend を開閉する。
+コマ編集モード遷移のみ ``operators.mode_op`` で cNN.blend を開閉する。
 """
 
 from __future__ import annotations
@@ -73,9 +73,9 @@ class BNAME_OT_page_add(Operator):
             entry = page_io.register_new_page(work)
             page_io.ensure_page_dir(work_dir, entry.id)
             # 基本枠サイズの矩形コマを 1 個自動生成 (クリスタ準拠の初期状態)
-            from .panel_op import create_basic_frame_panel
+            from .coma_op import create_basic_frame_coma
 
-            create_basic_frame_panel(work, entry, work_dir)
+            create_basic_frame_coma(work, entry, work_dir)
             # ページ Collection + GP オブジェクトを生成
             gp_utils.ensure_page_gpencil(context.scene, entry.id)
             # 全ページの Collection transform を grid 位置に再配置
@@ -192,7 +192,7 @@ class BNAME_OT_page_duplicate(Operator):
             new_entry = work.pages.add()
             new_entry.id = new_id
             new_entry.title = f"{src.title} (複製)"
-            new_entry.dir_rel = f"{paths.PAGES_DIR_NAME}/{new_id}/"
+            new_entry.dir_rel = f"{new_id}/"
             new_entry.spread = src.spread
             new_entry.tombo_aligned = src.tombo_aligned
             new_entry.tombo_gap_mm = src.tombo_gap_mm
@@ -202,13 +202,13 @@ class BNAME_OT_page_duplicate(Operator):
             page_io.load_page_json(work_dir, new_entry)
             new_entry.id = new_id
             new_entry.title = f"{src.title} (複製)"
-            new_entry.dir_rel = f"{paths.PAGES_DIR_NAME}/{new_id}/"
+            new_entry.dir_rel = f"{new_id}/"
             new_entry.spread = src.spread
             new_entry.tombo_aligned = src.tombo_aligned
             new_entry.tombo_gap_mm = src.tombo_gap_mm
             new_entry.offset_x_mm = 0.0
             new_entry.offset_y_mm = 0.0
-            new_entry.panel_count = len(new_entry.panels)
+            new_entry.coma_count = len(new_entry.comas)
             # 直後の位置 (idx+1) に配置
             new_index = len(work.pages) - 1
             if new_index != idx + 1:
@@ -310,8 +310,8 @@ def _switch_to_page(context, work, work_dir: Path, new_index: int) -> bool:
     work.active_page_index = new_index
     context.scene.bname_overview_mode = True
     set_mode(MODE_PAGE, context)
-    context.scene.bname_current_panel_stem = ""
-    context.scene.bname_current_panel_page_id = ""
+    context.scene.bname_current_coma_id = ""
+    context.scene.bname_current_coma_page_id = ""
     return True
 
 
@@ -399,23 +399,23 @@ class BNAME_OT_page_pick_viewport(Operator):
         is_browser = page_browser.is_page_browser_area(context)
         previous_overview = bool(getattr(context.scene, "bname_overview_mode", False))
         try:
-            from . import panel_picker
-            from . import panel_edge_move_op
+            from . import coma_picker
+            from . import coma_edge_move_op
 
             if is_browser:
                 context.scene.bname_overview_mode = True
-            if panel_edge_move_op.extend_selected_handle_at_event(context, event):
+            if coma_edge_move_op.extend_selected_handle_at_event(context, event):
                 return {"FINISHED"}
-            edge_hit = panel_picker.find_panel_edge_at_event(context, event)
-            panel_hit = None if edge_hit is not None else panel_picker.find_panel_at_event(context, event)
+            edge_hit = coma_picker.find_coma_edge_at_event(context, event)
+            panel_hit = None if edge_hit is not None else coma_picker.find_coma_at_event(context, event)
             if edge_hit is not None:
                 page_index = int(edge_hit["page"])
-                panel_index = int(edge_hit["panel"])
+                coma_index = int(edge_hit["coma"])
             elif panel_hit is not None:
-                page_index, panel_index = panel_hit
+                page_index, coma_index = panel_hit
             else:
-                page_index = panel_picker.find_page_at_event(context, event)
-                panel_index = None
+                page_index = coma_picker.find_page_at_event(context, event)
+                coma_index = None
         except Exception:  # noqa: BLE001
             _logger.exception("page_pick_viewport failed")
             return {"PASS_THROUGH"}
@@ -436,20 +436,20 @@ class BNAME_OT_page_pick_viewport(Operator):
             else:
                 _switch_to_page(context, work, Path(work.work_dir), page_index)
             changed = True
-        if panel_index is not None:
+        if coma_index is not None:
             page = work.pages[page_index]
-            if 0 <= panel_index < len(page.panels):
-                if page.active_panel_index != panel_index:
-                    page.active_panel_index = panel_index
+            if 0 <= coma_index < len(page.comas):
+                if page.active_coma_index != coma_index:
+                    page.active_coma_index = coma_index
                     changed = True
                 if hasattr(context.scene, "bname_active_layer_kind"):
-                    context.scene.bname_active_layer_kind = "panel"
+                    context.scene.bname_active_layer_kind = "coma"
                 if edge_hit is not None:
                     edge_selection.set_selection(
                         context,
                         "edge",
                         page_index=page_index,
-                        panel_index=panel_index,
+                        coma_index=coma_index,
                         edge_index=int(edge_hit["edge"]),
                     )
                 else:
@@ -457,7 +457,7 @@ class BNAME_OT_page_pick_viewport(Operator):
                         context,
                         "border",
                         page_index=page_index,
-                        panel_index=panel_index,
+                        coma_index=coma_index,
                     )
         else:
             _set_page_layer_active(context)

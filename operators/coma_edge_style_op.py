@@ -8,7 +8,7 @@ import bpy
 from bpy.types import Operator
 
 from ..core.work import get_work
-from ..io import page_io, panel_io
+from ..io import page_io, coma_io
 from ..utils import log
 
 _logger = log.get_logger(__name__)
@@ -37,14 +37,14 @@ def _remove_edge_style(panel, edge_index: int) -> bool:
     return False
 
 
-def _panel_edge_count(panel) -> int:
+def _coma_edge_count(panel) -> int:
     if panel.shape_type == "rect":
         return 4
     return len(panel.vertices)
 
 
 def _vertex_edge_indices(panel, vertex_index: int) -> tuple[int, int] | None:
-    edge_count = _panel_edge_count(panel)
+    edge_count = _coma_edge_count(panel)
     if edge_count <= 0 or not (0 <= vertex_index < edge_count):
         return None
     return ((vertex_index - 1) % edge_count, vertex_index)
@@ -66,13 +66,13 @@ def _selected_style_target(context):
     if work is None or not work.loaded:
         return None
     page_index = int(getattr(wm, "bname_edge_select_page", -1))
-    panel_index = int(getattr(wm, "bname_edge_select_panel", -1))
+    coma_index = int(getattr(wm, "bname_edge_select_coma", -1))
     if not (0 <= page_index < len(work.pages)):
         return None
     page = work.pages[page_index]
-    if not (0 <= panel_index < len(page.panels)):
+    if not (0 <= coma_index < len(page.comas)):
         return None
-    return kind, work, page, page.panels[panel_index], wm
+    return kind, work, page, page.comas[coma_index], wm
 
 
 def _selected_style_values(context) -> tuple[tuple[float, float, float, float], float] | None:
@@ -148,7 +148,7 @@ def _apply_selected_style_values(context, color: tuple[float, float, float, floa
             style.width_mm = float(width_mm)
     else:
         return
-    _save_panel_change(work, page)
+    _save_coma_change(work, page)
     _tag_view3d_redraw(context)
 
 
@@ -161,13 +161,13 @@ def _on_selected_style_prop_changed(_self, context) -> None:
     _apply_selected_style_values(context, color, width_mm)
 
 
-def _save_panel_change(work, page) -> None:
+def _save_coma_change(work, page) -> None:
     if work is None or work.work_dir == "":
         return
     work_dir = Path(work.work_dir)
     try:
-        for p in page.panels:
-            panel_io.save_panel_meta(work_dir, page.id, p)
+        for p in page.comas:
+            coma_io.save_coma_meta(work_dir, page.id, p)
         page_io.save_page_json(work_dir, page)
     except Exception:  # noqa: BLE001
         _logger.exception("edge_style save failed")
@@ -188,16 +188,16 @@ class BNAME_OT_edge_style_create(Operator):
         if work is None or not work.loaded:
             return {"CANCELLED"}
         pi = wm.bname_edge_select_page
-        pn = wm.bname_edge_select_panel
+        pn = wm.bname_edge_select_coma
         ei = wm.bname_edge_select_edge
         if not (0 <= pi < len(work.pages)):
             return {"CANCELLED"}
         page = work.pages[pi]
-        if not (0 <= pn < len(page.panels)):
+        if not (0 <= pn < len(page.comas)):
             return {"CANCELLED"}
-        panel = page.panels[pn]
+        panel = page.comas[pn]
         _find_or_add_edge_style(panel, ei)
-        _save_panel_change(work, page)
+        _save_coma_change(work, page)
         sync_selected_style_props(context)
         _tag_view3d_redraw(context)
         return {"FINISHED"}
@@ -218,16 +218,16 @@ class BNAME_OT_edge_style_remove(Operator):
         if work is None or not work.loaded:
             return {"CANCELLED"}
         pi = wm.bname_edge_select_page
-        pn = wm.bname_edge_select_panel
+        pn = wm.bname_edge_select_coma
         ei = wm.bname_edge_select_edge
         if not (0 <= pi < len(work.pages)):
             return {"CANCELLED"}
         page = work.pages[pi]
-        if not (0 <= pn < len(page.panels)):
+        if not (0 <= pn < len(page.comas)):
             return {"CANCELLED"}
-        panel = page.panels[pn]
+        panel = page.comas[pn]
         _remove_edge_style(panel, ei)
-        _save_panel_change(work, page)
+        _save_coma_change(work, page)
         sync_selected_style_props(context)
         _tag_view3d_redraw(context)
         return {"FINISHED"}
@@ -248,15 +248,15 @@ class BNAME_OT_edge_style_clear_all(Operator):
         if work is None or not work.loaded:
             return {"CANCELLED"}
         pi = wm.bname_edge_select_page
-        pn = wm.bname_edge_select_panel
+        pn = wm.bname_edge_select_coma
         if not (0 <= pi < len(work.pages)):
             return {"CANCELLED"}
         page = work.pages[pi]
-        if not (0 <= pn < len(page.panels)):
+        if not (0 <= pn < len(page.comas)):
             return {"CANCELLED"}
-        panel = page.panels[pn]
+        panel = page.comas[pn]
         panel.edge_styles.clear()
-        _save_panel_change(work, page)
+        _save_coma_change(work, page)
         sync_selected_style_props(context)
         _tag_view3d_redraw(context)
         return {"FINISHED"}
@@ -277,20 +277,20 @@ class BNAME_OT_vertex_style_remove(Operator):
         if work is None or not work.loaded:
             return {"CANCELLED"}
         pi = wm.bname_edge_select_page
-        pn = wm.bname_edge_select_panel
+        pn = wm.bname_edge_select_coma
         vi = int(getattr(wm, "bname_edge_select_vertex", -1))
         if not (0 <= pi < len(work.pages)):
             return {"CANCELLED"}
         page = work.pages[pi]
-        if not (0 <= pn < len(page.panels)):
+        if not (0 <= pn < len(page.comas)):
             return {"CANCELLED"}
-        panel = page.panels[pn]
+        panel = page.comas[pn]
         edge_pair = _vertex_edge_indices(panel, vi)
         if edge_pair is None:
             return {"CANCELLED"}
         for edge_index in edge_pair:
             _remove_edge_style(panel, edge_index)
-        _save_panel_change(work, page)
+        _save_coma_change(work, page)
         sync_selected_style_props(context)
         _tag_view3d_redraw(context)
         return {"FINISHED"}
@@ -320,7 +320,7 @@ def register() -> None:
         default="none",
     )
     bpy.types.WindowManager.bname_edge_select_page = IntProperty(default=-1)
-    bpy.types.WindowManager.bname_edge_select_panel = IntProperty(default=-1)
+    bpy.types.WindowManager.bname_edge_select_coma = IntProperty(default=-1)
     bpy.types.WindowManager.bname_edge_select_edge = IntProperty(default=-1)
     bpy.types.WindowManager.bname_edge_select_vertex = IntProperty(default=-1)
     bpy.types.WindowManager.bname_edge_style_color = FloatVectorProperty(
@@ -345,7 +345,7 @@ def unregister() -> None:
     for prop in (
         "bname_edge_select_kind",
         "bname_edge_select_page",
-        "bname_edge_select_panel",
+        "bname_edge_select_coma",
         "bname_edge_select_edge",
         "bname_edge_select_vertex",
         "bname_edge_style_color",

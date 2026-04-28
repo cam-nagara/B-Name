@@ -5,14 +5,14 @@ from __future__ import annotations
 import bpy
 from bpy.types import Panel
 
-from ..core.mode import MODE_PANEL, get_mode
-from ..utils import panel_camera
+from ..core.mode import MODE_COMA, get_mode
+from ..utils import coma_camera
 
 B_NAME_CATEGORY = "B-Name"
 
 
 def _settings(context):
-    return getattr(context.scene, "bname_panel_camera_settings", None)
+    return getattr(context.scene, "bname_coma_camera_settings", None)
 
 
 def _camera(context):
@@ -34,7 +34,7 @@ def _draw_camera_settings(layout, context, cam) -> None:
     row = layout.row()
     row.prop(scene, "camera", text="")
 
-    if bool(getattr(scene, "bname_panel_camera_fisheye_layout_mode", False)):
+    if bool(getattr(scene, "bname_coma_camera_fisheye_layout_mode", False)):
         split = layout.split(factor=0.4)
         split.label(text="魚眼FOV")
         split.prop(cam.data, "fisheye_fov", text="")
@@ -56,7 +56,7 @@ def _draw_camera_settings(layout, context, cam) -> None:
     row.prop(cam.data, "shift_y", text="Y")
     row = box.row()
     row.enabled = _is_camera_view(context)
-    row.operator("bname.panel_camera_shift_drag", text="ビューで調整")
+    row.operator("bname.coma_camera_shift_drag", text="ビューで調整")
 
     split = layout.split(factor=0.4)
     split.label(text="カメラの回転")
@@ -69,7 +69,7 @@ def _draw_angle_list(layout, context, settings) -> None:
     row = box.row()
     row.template_list(
         "UI_UL_list",
-        "bname_panel_camera_angles",
+        "bname_coma_camera_angles",
         settings,
         "camera_angles",
         settings,
@@ -77,9 +77,9 @@ def _draw_angle_list(layout, context, settings) -> None:
         rows=3,
     )
     col = row.column(align=True)
-    col.operator("bname.panel_camera_angle_add", icon="ADD", text="")
-    col.operator("bname.panel_camera_angle_remove", icon="REMOVE", text="")
-    box.operator("bname.panel_camera_angle_apply", text="適用")
+    col.operator("bname.coma_camera_angle_add", icon="ADD", text="")
+    col.operator("bname.coma_camera_angle_remove", icon="REMOVE", text="")
+    box.operator("bname.coma_camera_angle_apply", text="適用")
 
 
 def _draw_resolution_settings(layout, context) -> None:
@@ -89,30 +89,36 @@ def _draw_resolution_settings(layout, context) -> None:
     row = box.row()
     row.template_list(
         "UI_UL_list",
-        "bname_panel_camera_resolution",
+        "bname_coma_camera_resolution",
         scene,
-        "bname_panel_camera_resolution_settings",
+        "bname_coma_camera_resolution_settings",
         scene,
-        "bname_panel_camera_resolution_settings_index",
+        "bname_coma_camera_resolution_settings_index",
         rows=2,
     )
     col = row.column(align=True)
-    col.operator("bname.panel_camera_resolution_add", icon="ADD", text="")
-    col.operator("bname.panel_camera_resolution_remove", icon="REMOVE", text="")
-    coll = scene.bname_panel_camera_resolution_settings
-    idx = int(scene.bname_panel_camera_resolution_settings_index)
+    col.operator("bname.coma_camera_resolution_add", icon="ADD", text="")
+    col.operator("bname.coma_camera_resolution_remove", icon="REMOVE", text="")
+    coll = scene.bname_coma_camera_resolution_settings
+    idx = int(scene.bname_coma_camera_resolution_settings_index)
     if 0 <= idx < len(coll):
         item = coll[idx]
         box.prop(item, "name")
         row = box.row(align=True)
         row.prop(item, "resolution_x")
         row.prop(item, "resolution_y")
-    box.prop(scene, "bname_panel_camera_fisheye_layout_mode", text="魚眼モード")
+    box.prop(scene, "bname_coma_camera_fisheye_layout_mode", text="魚眼モード")
     row = box.row(align=True)
-    row.prop(scene, "bname_panel_camera_reduction_mode", text="縮小モード")
+    row.prop(scene, "bname_coma_camera_reduction_mode", text="縮小モード")
     sub = row.row(align=True)
-    sub.enabled = bool(scene.bname_panel_camera_reduction_mode)
-    sub.prop(scene, "bname_panel_camera_preview_scale_percentage", text="縮小率")
+    sub.enabled = bool(scene.bname_coma_camera_reduction_mode)
+    sub.prop(scene, "bname_coma_camera_preview_scale_percentage", text="縮小率")
+    quick = box.row(align=True)
+    quick.enabled = bool(scene.bname_coma_camera_reduction_mode)
+    for percentage in (12.5, 25.0, 50.0, 100.0):
+        op = quick.operator("bname.fisheye_set_reduction_scale", text=f"{percentage:g}%")
+        op.percentage = percentage
+    box.operator("bname.fisheye_save_pencil4_widths", text="Pencil+4 線幅を保存")
     box.label(text=f"現在: {scene.render.resolution_x} x {scene.render.resolution_y}")
 
 
@@ -123,13 +129,13 @@ def _draw_background_section(layout, context, settings, label: str, kind: str, o
     row.prop(settings, opacity_prop, text="")
     visible = bool(getattr(settings, f"{kind}_visible", False))
     icon = "HIDE_OFF" if visible else "HIDE_ON"
-    row.operator(f"bname.panel_camera_toggle_{kind}_backgrounds", text="", icon=icon)
+    row.operator(f"bname.coma_camera_toggle_{kind}_backgrounds", text="", icon=icon)
     if kind == "name":
         box.prop(settings, "name_show_all_pages", text="全ページも表示")
 
 
-class BNAME_PT_panel_camera(Panel):
-    bl_idname = "BNAME_PT_panel_camera"
+class BNAME_PT_coma_camera(Panel):
+    bl_idname = "BNAME_PT_coma_camera"
     bl_label = "コマ編集: カメラ"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
@@ -138,19 +144,19 @@ class BNAME_PT_panel_camera(Panel):
 
     @classmethod
     def poll(cls, context):
-        return get_mode(context) == MODE_PANEL
+        return get_mode(context) == MODE_COMA
 
     def draw(self, context):
         layout = self.layout
         scene = context.scene
         settings = _settings(context)
         if settings is None:
-            layout.operator("bname.panel_camera_ensure", text="コマ編集カメラを用意")
+            layout.operator("bname.coma_camera_ensure", text="コマ編集カメラを用意")
             return
 
         row = layout.row(align=True)
-        row.operator("bname.panel_camera_ensure", text="カメラを整備", icon="CAMERA_DATA")
-        row.operator("bname.panel_camera_sync_references", text="下絵同期", icon="IMAGE_DATA")
+        row.operator("bname.coma_camera_ensure", text="カメラを整備", icon="CAMERA_DATA")
+        row.operator("bname.coma_camera_sync_references", text="下絵同期", icon="IMAGE_DATA")
 
         cam = _camera(context)
         if cam is None:
@@ -174,25 +180,25 @@ class BNAME_PT_panel_camera(Panel):
         row = box.row()
         row.enabled = bool(settings.hatching_visible)
         row.prop(settings, "hatching_rotation", text="ハッチング回転")
-        box.operator("bname.panel_camera_update_view", text="ビューを更新")
+        box.operator("bname.coma_camera_update_view", text="ビューを更新")
 
         _draw_resolution_settings(layout, context)
 
         box = layout.box()
         row = box.row()
-        row.enabled = bool(getattr(scene, "bname_panel_camera_fisheye_layout_mode", False))
+        row.enabled = bool(getattr(scene, "bname_coma_camera_fisheye_layout_mode", False))
         row.prop(settings, "bg_images_scale", text="下絵のスケール")
-        box.operator("bname.panel_camera_toggle_all_backgrounds", text="全下絵を表示/非表示")
+        box.operator("bname.coma_camera_toggle_all_backgrounds", text="全下絵を表示/非表示")
 
         _draw_background_section(layout, context, settings, "下絵_ネーム", "name", "name_bg_images_opacity")
         _draw_background_section(layout, context, settings, "下絵_コマ", "koma", "koma_bg_images_opacity")
-        layout.operator("bname.panel_camera_reload_backgrounds", text="すべての下絵を再読込")
+        layout.operator("bname.coma_camera_reload_backgrounds", text="すべての下絵を再読込")
 
-        count = panel_camera.camera_background_count(context)
+        count = coma_camera.camera_background_count(context)
         layout.label(text=f"背景画像: {count}件")
 
 
-_CLASSES = (BNAME_PT_panel_camera,)
+_CLASSES = (BNAME_PT_coma_camera,)
 
 
 def register() -> None:

@@ -12,16 +12,16 @@ from bpy_extras.io_utils import ImportHelper
 from ..utils import layer_stack as layer_stack_utils
 from ..utils.layer_hierarchy import (
     PAGE_KIND,
-    PANEL_KIND,
+    COMA_KIND,
     page_stack_key,
-    panel_stack_key,
+    coma_stack_key,
     split_child_key,
 )
 
 
 _ADD_KIND_ITEMS = (
     ("page", "ページ", ""),
-    ("panel", "コマ", ""),
+    ("coma", "コマ", ""),
     ("gp", "グリースペンシル", ""),
     ("image", "画像 (配置)", ""),
     ("raster", "ラスター (描画)", ""),
@@ -33,7 +33,7 @@ _ADD_KIND_ITEMS = (
 
 _ADD_KIND_ICONS = {
     "page": "FILE_BLANK",
-    "panel": "MOD_WIREFRAME",
+    "coma": "MOD_WIREFRAME",
     "gp": "OUTLINER_OB_GREASEPENCIL",
     "image": "IMAGE_DATA",
     "raster": "BRUSH_DATA",
@@ -65,7 +65,7 @@ def _page_key_for_item(item) -> str:
         return ""
     if item.kind == PAGE_KIND:
         return item.key
-    if item.kind in {PANEL_KIND, "balloon_group", "balloon", "text"}:
+    if item.kind in {COMA_KIND, "balloon_group", "balloon", "text"}:
         page_key, _child = split_child_key(item.key)
         return page_key
     parent_key = str(getattr(item, "parent_key", "") or "")
@@ -84,12 +84,12 @@ def _placement_anchor_uid(context, kind: str) -> str:
     if kind == PAGE_KIND:
         page_key = _page_key_for_item(item)
         return layer_stack_utils.target_uid(PAGE_KIND, page_key) if page_key else ""
-    if kind == PANEL_KIND:
-        if item.kind == PANEL_KIND:
+    if kind == COMA_KIND:
+        if item.kind == COMA_KIND:
             return layer_stack_utils.stack_item_uid(item)
         parent_key = str(getattr(item, "parent_key", "") or "")
         if parent_key and ":" in parent_key:
-            return layer_stack_utils.target_uid(PANEL_KIND, parent_key)
+            return layer_stack_utils.target_uid(COMA_KIND, parent_key)
         return ""
     return layer_stack_utils.stack_item_uid(item)
 
@@ -106,13 +106,13 @@ def _find_page(context, page_key: str):
     return None, -1
 
 
-def _find_panel(context, panel_key: str):
-    page_key, stem = split_child_key(panel_key)
+def _find_panel(context, coma_key: str):
+    page_key, stem = split_child_key(coma_key)
     page, page_idx = _find_page(context, page_key)
     if page is None:
         return None, None, page_idx, -1
-    for i, panel in enumerate(page.panels):
-        if panel_stack_key(page, panel) == panel_key or getattr(panel, "panel_stem", "") == stem:
+    for i, panel in enumerate(page.comas):
+        if coma_stack_key(page, panel) == coma_key or getattr(panel, "coma_id", "") == stem:
             return page, panel, page_idx, i
     return page, None, page_idx, -1
 
@@ -139,10 +139,10 @@ def _active_or_anchor_page(context, anchor_uid: str):
     return work, get_active_page(context)
 
 
-def _panel_bounds(panel) -> tuple[float, float, float, float] | None:
-    from ..utils.layer_hierarchy import panel_polygon
+def _coma_bounds(panel) -> tuple[float, float, float, float] | None:
+    from ..utils.layer_hierarchy import coma_polygon
 
-    points = panel_polygon(panel)
+    points = coma_polygon(panel)
     if not points:
         return None
     xs = [p[0] for p in points]
@@ -152,8 +152,8 @@ def _panel_bounds(panel) -> tuple[float, float, float, float] | None:
 
 def _default_rect_for_parent(context, work, page, parent_key: str, width: float, height: float):
     if parent_key and ":" in parent_key:
-        _page, panel, _page_idx, _panel_idx = _find_panel(context, parent_key)
-        bounds = _panel_bounds(panel) if panel is not None else None
+        _page, panel, _page_idx, _coma_idx = _find_panel(context, parent_key)
+        bounds = _coma_bounds(panel) if panel is not None else None
         if bounds is not None:
             left, bottom, right, top = bounds
             return (
@@ -177,7 +177,7 @@ def _parent_key_for_new_item(context, anchor_uid: str, kind: str) -> str:
     for item in stack:
         if layer_stack_utils.stack_item_uid(item) != anchor_uid:
             continue
-        if kind == "gp" and item.kind in {PAGE_KIND, PANEL_KIND}:
+        if kind == "gp" and item.kind in {PAGE_KIND, COMA_KIND}:
             return item.key
         if kind == "gp" and gp_parent.parent_key_exists(
             work, str(getattr(item, "parent_key", "") or "")
@@ -187,9 +187,9 @@ def _parent_key_for_new_item(context, anchor_uid: str, kind: str) -> str:
             return str(getattr(item, "parent_key", "") or "")
         if kind in {"balloon", "text"} and item.kind in {"balloon", "text"}:
             return str(getattr(item, "parent_key", "") or "")
-        if kind in {"balloon", "text"} and item.kind == PANEL_KIND:
+        if kind in {"balloon", "text"} and item.kind == COMA_KIND:
             return item.key
-        if kind == PANEL_KIND and item.kind == PANEL_KIND:
+        if kind == COMA_KIND and item.kind == COMA_KIND:
             return str(getattr(item, "parent_key", "") or "")
         return ""
     return ""
@@ -527,7 +527,7 @@ class BNAME_OT_layer_stack_add(Operator, ImportHelper):
     def _add_by_kind(self, context, anchor_uid: str) -> str:
         if self.kind == "page":
             return self._add_page(context)
-        if self.kind == "panel":
+        if self.kind == "coma":
             return self._add_panel(context, anchor_uid)
         if self.kind == "gp":
             return self._add_gp_layer(context, anchor_uid)
@@ -550,7 +550,7 @@ class BNAME_OT_layer_stack_add(Operator, ImportHelper):
         from ..io import page_io, work_io
         from ..utils import gpencil as gp_utils
         from ..utils import page_grid, page_range
-        from .panel_op import create_basic_frame_panel
+        from .coma_op import create_basic_frame_coma
 
         work = get_work(context)
         if work is None or not work.loaded or not work.work_dir:
@@ -559,7 +559,7 @@ class BNAME_OT_layer_stack_add(Operator, ImportHelper):
         work_dir = Path(work.work_dir)
         entry = page_io.register_new_page(work)
         page_io.ensure_page_dir(work_dir, entry.id)
-        create_basic_frame_panel(work, entry, work_dir)
+        create_basic_frame_coma(work, entry, work_dir)
         gp_utils.ensure_page_gpencil(context.scene, entry.id)
         page_grid.apply_page_collection_transforms(context, work)
         page_io.save_pages_json(work_dir, work)
@@ -571,7 +571,7 @@ class BNAME_OT_layer_stack_add(Operator, ImportHelper):
 
     def _add_panel(self, context, anchor_uid: str) -> str:
         from ..io import page_io
-        from .panel_op import create_rect_panel
+        from .coma_op import create_rect_coma
 
         work, page = _active_or_anchor_page(context, anchor_uid)
         if work is None or page is None or not work.work_dir:
@@ -580,11 +580,11 @@ class BNAME_OT_layer_stack_add(Operator, ImportHelper):
         p = work.paper
         x_mm = (p.canvas_width_mm - 60.0) / 2.0
         y_mm = (p.canvas_height_mm - 40.0) / 2.0
-        entry = create_rect_panel(work, page, Path(work.work_dir), x_mm, y_mm, 60.0, 40.0)
+        entry = create_rect_coma(work, page, Path(work.work_dir), x_mm, y_mm, 60.0, 40.0)
         page_io.save_pages_json(Path(work.work_dir), work)
-        context.scene.bname_active_layer_kind = PANEL_KIND
-        layer_stack_utils.sync_layer_stack_after_data_change(context, align_panel_order=True)
-        return layer_stack_utils.target_uid(PANEL_KIND, panel_stack_key(page, entry))
+        context.scene.bname_active_layer_kind = COMA_KIND
+        layer_stack_utils.sync_layer_stack_after_data_change(context, align_coma_order=True)
+        return layer_stack_utils.target_uid(COMA_KIND, coma_stack_key(page, entry))
 
     def _add_gp_layer(self, context, anchor_uid: str) -> str:
         from ..utils import gpencil as gp_utils
@@ -772,13 +772,13 @@ class BNAME_OT_layer_stack_duplicate(Operator):
         return _active_stack_uid(context)
 
     def _duplicate_item(self, context, item) -> bool:
-        if item.kind in {PAGE_KIND, PANEL_KIND}:
+        if item.kind in {PAGE_KIND, COMA_KIND}:
             if not layer_stack_utils.select_stack_index(
                 context,
                 int(getattr(context.scene, "bname_active_layer_stack_index", -1)),
             ):
                 return False
-            op_name = "page_duplicate" if item.kind == PAGE_KIND else "panel_duplicate"
+            op_name = "page_duplicate" if item.kind == PAGE_KIND else "coma_duplicate"
             return "FINISHED" in getattr(bpy.ops.bname, op_name)("EXEC_DEFAULT")
         if item.kind in {"gp", "effect"}:
             return self._duplicate_gp_layer(context, item)
@@ -911,7 +911,7 @@ class BNAME_OT_layer_stack_toggle_visibility(Operator):
         target = resolved.get("target") if resolved is not None else None
         if target is None:
             return {"CANCELLED"}
-        if item.kind in {PAGE_KIND, PANEL_KIND} and hasattr(target, "visible"):
+        if item.kind in {PAGE_KIND, COMA_KIND} and hasattr(target, "visible"):
             target.visible = not bool(target.visible)
         elif item.kind in {"image", "raster"} and hasattr(target, "visible"):
             target.visible = not bool(target.visible)
@@ -989,8 +989,8 @@ class BNAME_OT_layer_stack_delete(Operator):
         return {"FINISHED"}
 
 
-class BNAME_OT_layer_stack_enter_panel(Operator):
-    bl_idname = "bname.layer_stack_enter_panel"
+class BNAME_OT_layer_stack_enter_coma(Operator):
+    bl_idname = "bname.layer_stack_enter_coma"
     bl_label = "コマ編集へ"
     bl_options = {"REGISTER"}
 
@@ -1004,9 +1004,9 @@ class BNAME_OT_layer_stack_enter_panel(Operator):
         if not layer_stack_utils.select_stack_index(context, self.stack_index):
             return {"CANCELLED"}
         item = layer_stack_utils.active_stack_item(context)
-        if item is None or item.kind != "panel":
+        if item is None or item.kind != "coma":
             return {"CANCELLED"}
-        return bpy.ops.bname.enter_panel_mode("EXEC_DEFAULT")
+        return bpy.ops.bname.enter_coma_mode("EXEC_DEFAULT")
 
 
 class BNAME_OT_layer_stack_detail(Operator):
@@ -1118,7 +1118,7 @@ class BNAME_OT_layer_stack_detail(Operator):
         return (
             str(getattr(wm, "bname_edge_select_kind", "none") or "none"),
             int(getattr(wm, "bname_edge_select_page", -1)),
-            int(getattr(wm, "bname_edge_select_panel", -1)),
+            int(getattr(wm, "bname_edge_select_coma", -1)),
             int(getattr(wm, "bname_edge_select_edge", -1)),
             int(getattr(wm, "bname_edge_select_vertex", -1)),
         )
@@ -1126,9 +1126,9 @@ class BNAME_OT_layer_stack_detail(Operator):
     def _restore_edge_selection_if_needed(self, context, item, edge_state) -> None:
         if not bool(getattr(self, "preserve_edge_selection", False)):
             return
-        if item.kind != PANEL_KIND:
+        if item.kind != COMA_KIND:
             return
-        kind, page_index, panel_index, edge_index, vertex_index = edge_state
+        kind, page_index, coma_index, edge_index, vertex_index = edge_state
         if kind not in {"edge", "vertex", "border"}:
             return
         resolved = layer_stack_utils.resolve_stack_item(context, item)
@@ -1136,7 +1136,7 @@ class BNAME_OT_layer_stack_detail(Operator):
             return
         if (
             int(resolved.get("page_index", -2)) != page_index
-            or int(resolved.get("index", -2)) != panel_index
+            or int(resolved.get("index", -2)) != coma_index
         ):
             return
         from ..utils import edge_selection
@@ -1145,7 +1145,7 @@ class BNAME_OT_layer_stack_detail(Operator):
             context,
             kind,
             page_index=page_index,
-            panel_index=panel_index,
+            coma_index=coma_index,
             edge_index=edge_index,
             vertex_index=vertex_index,
         )
@@ -1162,7 +1162,7 @@ _CLASSES = (
     BNAME_OT_layer_stack_toggle_visibility,
     BNAME_OT_layer_stack_toggle_expanded,
     BNAME_OT_layer_stack_delete,
-    BNAME_OT_layer_stack_enter_panel,
+    BNAME_OT_layer_stack_enter_coma,
     BNAME_OT_layer_stack_detail,
 )
 

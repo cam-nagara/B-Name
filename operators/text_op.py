@@ -15,11 +15,11 @@ import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, StringProperty
 from bpy.types import Operator
 
-from ..core.mode import MODE_PANEL, get_mode
+from ..core.mode import MODE_COMA, get_mode
 from ..core.work import get_active_page, get_work
 from ..utils import detail_popup, layer_stack as layer_stack_utils, log, object_selection, page_range, text_style
 from ..utils.layer_hierarchy import page_stack_key
-from . import panel_modal_state, text_edit_runtime, view_event_region
+from . import coma_modal_state, text_edit_runtime, view_event_region
 
 _logger = log.get_logger(__name__)
 
@@ -150,7 +150,7 @@ def _resolve_text_hit_from_event(context, event):
 def _creation_blocked(context, page, x_mm: float, y_mm: float, width_mm: float, height_mm: float) -> bool:
     # ページ一覧ファイルでは、テキストツールはクリック位置にページ上の
     # テキストを作る道具として扱う。コマ編集ファイルでは対象コマ外だけを拒否する。
-    if get_mode(context) != MODE_PANEL:
+    if get_mode(context) != MODE_COMA:
         return False
     try:
         from .balloon_op import _creation_violates_layer_scope
@@ -295,7 +295,7 @@ def _select_text_index(context, work, page, text_index: int) -> bool:
 
 
 def _active_text_selection_bounds(context, page, entry) -> tuple[int, int] | None:
-    op = panel_modal_state.get_active("text_tool")
+    op = coma_modal_state.get_active("text_tool")
     if op is None or not bool(getattr(op, "_editing", False)):
         return None
     if str(getattr(op, "_page_id", "") or "") != str(getattr(page, "id", "") or ""):
@@ -619,16 +619,16 @@ class BNAME_OT_text_tool(Operator):
         return work is not None and work.loaded and get_active_page(context) is not None
 
     def invoke(self, context, _event):
-        if panel_modal_state.get_active("text_tool") is not None:
+        if coma_modal_state.get_active("text_tool") is not None:
             return {"FINISHED"}
-        panel_modal_state.finish_active("panel_vertex_edit", context, keep_selection=True)
-        panel_modal_state.finish_active("knife_cut", context, keep_selection=False)
-        panel_modal_state.finish_active("edge_move", context, keep_selection=True)
-        panel_modal_state.finish_active("layer_move", context, keep_selection=True)
-        panel_modal_state.finish_active("balloon_tool", context, keep_selection=True)
-        panel_modal_state.finish_active("effect_line_tool", context, keep_selection=True)
+        coma_modal_state.finish_active("coma_vertex_edit", context, keep_selection=True)
+        coma_modal_state.finish_active("knife_cut", context, keep_selection=False)
+        coma_modal_state.finish_active("edge_move", context, keep_selection=True)
+        coma_modal_state.finish_active("layer_move", context, keep_selection=True)
+        coma_modal_state.finish_active("balloon_tool", context, keep_selection=True)
+        coma_modal_state.finish_active("effect_line_tool", context, keep_selection=True)
         self._externally_finished = False
-        self._cursor_modal_set = panel_modal_state.set_modal_cursor(context, "TEXT")
+        self._cursor_modal_set = coma_modal_state.set_modal_cursor(context, "TEXT")
         self._editing = False
         self._editing_created_new = False
         self._edit_original_body = ""
@@ -642,13 +642,13 @@ class BNAME_OT_text_tool(Operator):
         self._clear_drag_state()
         self._clear_click_state()
         context.window_manager.modal_handler_add(self)
-        panel_modal_state.set_active("text_tool", self, context)
+        coma_modal_state.set_active("text_tool", self, context)
         self.report({"INFO"}, "テキストツール: クリック位置にテキストを追加")
         return {"RUNNING_MODAL"}
 
     def modal(self, context, event):
         if getattr(self, "_externally_finished", False):
-            panel_modal_state.clear_active("text_tool", self, context)
+            coma_modal_state.clear_active("text_tool", self, context)
             return {"FINISHED", "PASS_THROUGH"}
         if getattr(self, "_editing", False):
             return self._modal_editing(context, event)
@@ -1279,7 +1279,7 @@ class BNAME_OT_text_tool(Operator):
 
     def _cleanup(self, context) -> None:
         if getattr(self, "_cursor_modal_set", False):
-            panel_modal_state.restore_modal_cursor(context)
+            coma_modal_state.restore_modal_cursor(context)
             self._cursor_modal_set = False
         self._end_inline_input(context)
         self._editing = False
@@ -1298,7 +1298,7 @@ class BNAME_OT_text_tool(Operator):
             return
         self._externally_finished = True
         self._cleanup(context)
-        panel_modal_state.clear_active("text_tool", self, context)
+        coma_modal_state.clear_active("text_tool", self, context)
 
 
 _CLASSES = (

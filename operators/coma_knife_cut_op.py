@@ -25,8 +25,8 @@ from bpy_extras.view3d_utils import location_3d_to_region_2d, region_2d_to_locat
 from gpu_extras.batch import batch_for_shader
 
 from ..core.work import get_work
-from ..io import page_io, panel_io
-from . import panel_modal_state
+from ..io import page_io, coma_io
+from . import coma_modal_state
 from ..utils import (
     edge_selection,
     geom,
@@ -213,7 +213,7 @@ def _polygon_area(poly: Sequence[tuple[float, float]]) -> float:
 # ---------- ページ単位の panel cut ----------
 
 
-def _panel_polygon(panel) -> list[tuple[float, float]]:
+def _coma_polygon(panel) -> list[tuple[float, float]]:
     """panel エントリから多角形頂点リストを返す (mm、CCW)."""
     if panel.shape_type == "rect":
         x, y = panel.rect_x_mm, panel.rect_y_mm
@@ -224,7 +224,7 @@ def _panel_polygon(panel) -> list[tuple[float, float]]:
     return []
 
 
-def _set_panel_polygon(panel, poly: Sequence[tuple[float, float]]) -> None:
+def _set_coma_polygon(panel, poly: Sequence[tuple[float, float]]) -> None:
     """panel エントリの形状を多角形 (vertices) に書き換える."""
     panel.shape_type = "polygon"
     panel.vertices.clear()
@@ -232,7 +232,7 @@ def _set_panel_polygon(panel, poly: Sequence[tuple[float, float]]) -> None:
         v = panel.vertices.add()
         v.x_mm = float(x)
         v.y_mm = float(y)
-    # rect_* は無効化 (外接矩形を入れておくと panel_to_rect で復元しやすい)
+    # rect_* は無効化 (外接矩形を入れておくと coma_to_rect で復元しやすい)
     if poly:
         xs = [p[0] for p in poly]
         ys = [p[1] for p in poly]
@@ -271,12 +271,12 @@ def _effective_gap_mm(
       - 左辺/右辺 (垂直辺) のみと交わる → 横カット → 上下スキマ (gap_v)
       - 混在 (上+右、下+左 など) → 左右スキマ (gap_h)
 
-    panel 個別の panel_gap_*_mm (>= 0) が優先、負値なら work.panel_gap を継承。
+    panel 個別の coma_gap_*_mm (>= 0) が優先、負値なら work.coma_gap を継承。
     """
-    pgv = float(getattr(panel, "panel_gap_vertical_mm", -1.0))
-    pgh = float(getattr(panel, "panel_gap_horizontal_mm", -1.0))
-    gap_v = pgv if pgv >= 0.0 else float(work.panel_gap.vertical_mm)
-    gap_h = pgh if pgh >= 0.0 else float(work.panel_gap.horizontal_mm)
+    pgv = float(getattr(panel, "coma_gap_vertical_mm", -1.0))
+    pgh = float(getattr(panel, "coma_gap_horizontal_mm", -1.0))
+    gap_v = pgv if pgv >= 0.0 else float(work.coma_gap.vertical_mm)
+    gap_h = pgh if pgh >= 0.0 else float(work.coma_gap.horizontal_mm)
 
     # panel の外接矩形を取得
     if panel.shape_type == "rect":
@@ -325,22 +325,22 @@ def _effective_gap_mm(
     return gap_h
 
 
-def _apply_cut_to_panel(
-    work, page, panel_idx: int, work_dir: Path,
+def _apply_cut_to_coma(
+    work, page, coma_idx: int, work_dir: Path,
     A_local: tuple[float, float], B_local: tuple[float, float],
 ) -> bool:
     """1 つのコマだけを cut line A-B で分割.
 
-    コマ間隔は work.panel_gap (もしくは panel 個別オーバーライド) を
+    コマ間隔は work.coma_gap (もしくは panel 個別オーバーライド) を
     カット線の角度に応じて補間して適用する。
     戻り値: 分割が発生したか。
     """
-    from .panel_op import _copy_panel_entry
+    from .coma_op import _copy_coma_entry
 
-    if not (0 <= panel_idx < len(page.panels)):
+    if not (0 <= coma_idx < len(page.comas)):
         return False
-    panel = page.panels[panel_idx]
-    poly = _panel_polygon(panel)
+    panel = page.comas[coma_idx]
+    poly = _coma_polygon(panel)
     if not poly:
         return False
     gap_mm = _effective_gap_mm(work, A_local, B_local, panel)
@@ -350,33 +350,33 @@ def _apply_cut_to_panel(
     left_poly, right_poly = result
 
     # 元コマを左側に書き換え
-    _set_panel_polygon(panel, left_poly)
+    _set_coma_polygon(panel, left_poly)
     # カットで edge_index が変わるため edge_styles 個別オーバーライドはクリア
     panel.edge_styles.clear()
     # 新規コマ (右側) を追加
-    new_stem = panel_io.allocate_new_panel_stem(work_dir, page.id)
+    new_stem = coma_io.allocate_new_coma_id(work_dir, page.id)
     try:
-        panel_io.copy_panel_files(
-            work_dir, page.id, page.id, panel.panel_stem, new_stem
+        coma_io.copy_coma_files(
+            work_dir, page.id, page.id, panel.coma_id, new_stem
         )
     except Exception:  # noqa: BLE001
-        _logger.warning("knife_cut: copy_panel_files failed for %s", panel.panel_stem)
-    new_entry = page.panels.add()
-    _copy_panel_entry(panel, new_entry)
-    new_entry.panel_stem = new_stem
-    new_entry.id = new_stem.split("_", 1)[1]
+        _logger.warning("knife_cut: copy_coma_files failed for %s", panel.coma_id)
+    new_entry = page.comas.add()
+    _copy_coma_entry(panel, new_entry)
+    new_entry.coma_id = new_stem
+    new_entry.id = new_stem
     new_entry.title = f"{panel.title} (分割)"
-    _set_panel_polygon(new_entry, right_poly)
+    _set_coma_polygon(new_entry, right_poly)
     new_entry.edge_styles.clear()  # 元コマから複製された個別設定もクリア
-    z_max = max((p.z_order for p in page.panels), default=0)
+    z_max = max((p.z_order for p in page.comas), default=0)
     new_entry.z_order = z_max + 1
     try:
-        panel_io.save_panel_meta(work_dir, page.id, panel)
-        panel_io.save_panel_meta(work_dir, page.id, new_entry)
+        coma_io.save_coma_meta(work_dir, page.id, panel)
+        coma_io.save_coma_meta(work_dir, page.id, new_entry)
     except Exception:  # noqa: BLE001
-        _logger.exception("knife_cut: save_panel_meta failed")
+        _logger.exception("knife_cut: save_coma_meta failed")
 
-    page.panel_count = len(page.panels)
+    page.coma_count = len(page.comas)
     try:
         page_io.save_page_json(work_dir, page)
     except Exception:  # noqa: BLE001
@@ -388,7 +388,7 @@ def _sync_layer_stack_after_cut(context) -> None:
     try:
         layer_stack_utils.sync_layer_stack_after_data_change(
             context,
-            align_panel_order=True,
+            align_coma_order=True,
         )
     except Exception:  # noqa: BLE001
         _logger.exception("knife_cut: layer stack sync failed")
@@ -410,10 +410,10 @@ def _page_world_offset_mm(work, page_index: int, scene=None) -> tuple[float, flo
     return ox + add_x, oy + add_y
 
 
-def _find_panel_at_world(
+def _find_coma_at_world(
     work, x_mm: float, y_mm: float,
 ) -> tuple[int, int] | None:
-    """world (mm) 座標下のコマを (page_index, panel_index) で返す.
+    """world (mm) 座標下のコマを (page_index, coma_index) で返す.
 
     全ページの grid offset を考慮して走査。同位置に複数コマあれば Z 順最大。
     """
@@ -431,26 +431,26 @@ def _find_panel_at_world(
         if not (0.0 <= local_x <= cw and 0.0 <= local_y <= ch):
             continue
         # Z 順最大を優先
-        sorted_panels = sorted(
-            range(len(page.panels)),
-            key=lambda j: -page.panels[j].z_order,
+        sorted_comas = sorted(
+            range(len(page.comas)),
+            key=lambda j: -page.comas[j].z_order,
         )
-        for panel_idx in sorted_panels:
-            poly = _panel_polygon(page.panels[panel_idx])
+        for coma_idx in sorted_comas:
+            poly = _coma_polygon(page.comas[coma_idx])
             if not poly:
                 continue
             if _point_in_polygon((local_x, local_y), poly):
-                return (i, panel_idx)
+                return (i, coma_idx)
     return None
 
 
 # ---------- modal operator ----------
 
 
-class BNAME_OT_panel_knife_cut(Operator):
+class BNAME_OT_coma_knife_cut(Operator):
     """枠線カットツール (CSP 互換): 任意角度の切断線で複数コマを連続分割する."""
 
-    bl_idname = "bname.panel_knife_cut"
+    bl_idname = "bname.coma_knife_cut"
     bl_label = "枠線カットツール"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -463,14 +463,14 @@ class BNAME_OT_panel_knife_cut(Operator):
         target = _find_view3d(context)
         if target is None:
             return {"PASS_THROUGH"}
-        if panel_modal_state.get_active("knife_cut") is not None:
+        if coma_modal_state.get_active("knife_cut") is not None:
             return {"FINISHED"}
-        panel_modal_state.finish_active("panel_vertex_edit", context, keep_selection=True)
-        panel_modal_state.finish_active("edge_move", context, keep_selection=False)
-        panel_modal_state.finish_active("layer_move", context, keep_selection=False)
-        panel_modal_state.finish_active("balloon_tool", context, keep_selection=True)
-        panel_modal_state.finish_active("text_tool", context, keep_selection=True)
-        panel_modal_state.finish_active("effect_line_tool", context, keep_selection=True)
+        coma_modal_state.finish_active("coma_vertex_edit", context, keep_selection=True)
+        coma_modal_state.finish_active("edge_move", context, keep_selection=False)
+        coma_modal_state.finish_active("layer_move", context, keep_selection=False)
+        coma_modal_state.finish_active("balloon_tool", context, keep_selection=True)
+        coma_modal_state.finish_active("text_tool", context, keep_selection=True)
+        coma_modal_state.finish_active("effect_line_tool", context, keep_selection=True)
         self._area, self._region, self._rv3d = target
         self._work = get_work(context)
         if self._work is None or not self._work.loaded:
@@ -493,8 +493,8 @@ class BNAME_OT_panel_knife_cut(Operator):
             _draw_callback, (self,), "WINDOW", "POST_PIXEL"
         )
         context.window_manager.modal_handler_add(self)
-        self._cursor_modal_set = panel_modal_state.set_modal_cursor(context, "CROSSHAIR")
-        panel_modal_state.set_active("knife_cut", self, context)
+        self._cursor_modal_set = coma_modal_state.set_modal_cursor(context, "CROSSHAIR")
+        coma_modal_state.set_active("knife_cut", self, context)
         self._tag_redraw()
         self.report(
             {"INFO"},
@@ -573,7 +573,7 @@ class BNAME_OT_panel_knife_cut(Operator):
 
     def _cleanup(self, context=None) -> None:
         if getattr(self, "_cursor_modal_set", False):
-            panel_modal_state.restore_modal_cursor(context)
+            coma_modal_state.restore_modal_cursor(context)
             self._cursor_modal_set = False
         h = getattr(self, "_draw_handler", None)
         if h is not None:
@@ -595,11 +595,11 @@ class BNAME_OT_panel_knife_cut(Operator):
             return
         self._externally_finished = True
         self._cleanup(context)
-        panel_modal_state.clear_active("knife_cut", self, context)
+        coma_modal_state.clear_active("knife_cut", self, context)
 
     def modal(self, context, event):
         if getattr(self, "_externally_finished", False):
-            panel_modal_state.clear_active("knife_cut", self, context)
+            coma_modal_state.clear_active("knife_cut", self, context)
             return {"FINISHED", "PASS_THROUGH"}
         if getattr(self, "_edge_drag", None) is not None:
             return self._modal_edge_drag(context, event)
@@ -625,7 +625,7 @@ class BNAME_OT_panel_knife_cut(Operator):
             self.finish_from_external(context, keep_selection=False)
             try:
                 with context.temp_override(area=self._area, region=self._region):
-                    bpy.ops.bname.panel_edge_move("INVOKE_DEFAULT")
+                    bpy.ops.bname.coma_edge_move("INVOKE_DEFAULT")
             except Exception:  # noqa: BLE001
                 _logger.exception("knife_cut: failed to switch to edge_move")
             return {"FINISHED"}
@@ -764,12 +764,12 @@ class BNAME_OT_panel_knife_cut(Operator):
         return {"RUNNING_MODAL"}
 
     def _try_start_edge_drag(self, context, event) -> bool:
-        from . import panel_edge_drag_session, panel_edge_move_op
+        from . import coma_edge_drag_session, coma_edge_move_op
 
         mx, my = self._to_window(event)
-        if panel_edge_move_op.extend_selected_handle_at_event(context, event):
+        if coma_edge_move_op.extend_selected_handle_at_event(context, event):
             return True
-        hit = panel_edge_move_op._pick_edge_or_vertex(
+        hit = coma_edge_move_op._pick_edge_or_vertex(
             self._work,
             self._region,
             self._rv3d,
@@ -779,23 +779,23 @@ class BNAME_OT_panel_knife_cut(Operator):
         if hit is None:
             return False
         page_index = int(hit["page"])
-        panel_index = int(hit["panel"])
+        coma_index = int(hit["coma"])
         if not (0 <= page_index < len(self._work.pages)):
             return False
         page = self._work.pages[page_index]
-        if not (0 <= panel_index < len(page.panels)):
+        if not (0 <= coma_index < len(page.comas)):
             return False
         self._work.active_page_index = page_index
-        page.active_panel_index = panel_index
-        panel = page.panels[panel_index]
+        page.active_coma_index = coma_index
+        panel = page.comas[coma_index]
         mode = "toggle" if event.ctrl else "add" if event.shift else "single"
-        object_selection.select_key(context, object_selection.panel_key(page, panel), mode=mode)
+        object_selection.select_key(context, object_selection.coma_key(page, panel), mode=mode)
         if hit.get("type") == "vertex":
             edge_selection.set_selection(
                 context,
                 "vertex",
                 page_index=page_index,
-                panel_index=panel_index,
+                coma_index=coma_index,
                 vertex_index=int(hit.get("vertex", -1)),
             )
         else:
@@ -803,7 +803,7 @@ class BNAME_OT_panel_knife_cut(Operator):
                 context,
                 "edge",
                 page_index=page_index,
-                panel_index=panel_index,
+                coma_index=coma_index,
                 edge_index=int(hit.get("edge", -1)),
             )
         if event.ctrl or event.shift:
@@ -812,13 +812,13 @@ class BNAME_OT_panel_knife_cut(Operator):
         selection = {
             "type": "vertex" if hit.get("type") == "vertex" else "edge",
             "page": page_index,
-            "panel": panel_index,
+            "coma": coma_index,
         }
         if selection["type"] == "vertex":
             selection["vertex"] = int(hit.get("vertex", -1))
         else:
             selection["edge"] = int(hit.get("edge", -1))
-        self._edge_drag = panel_edge_drag_session.PanelEdgeDragSession(
+        self._edge_drag = coma_edge_drag_session.ComaEdgeDragSession(
             context,
             self._work,
             self._area,
@@ -848,11 +848,11 @@ class BNAME_OT_panel_knife_cut(Operator):
         work_dir = Path(work.work_dir)
 
         # ドラッグ開始位置 (P1) のコマを 1 つだけ対象にする
-        hit = _find_panel_at_world(work, xa, ya)
+        hit = _find_coma_at_world(work, xa, ya)
         if hit is None:
             self.report({"INFO"}, "開始位置にコマがありません")
             return
-        page_idx, panel_idx = hit
+        page_idx, coma_idx = hit
         page = work.pages[page_idx]
 
         # 対象ページの grid offset を引いてページローカル座標に
@@ -860,7 +860,7 @@ class BNAME_OT_panel_knife_cut(Operator):
         A_local = (xa - ox, ya - oy)
         B_local = (xb - ox, yb - oy)
 
-        ok = _apply_cut_to_panel(work, page, panel_idx, work_dir, A_local, B_local)
+        ok = _apply_cut_to_coma(work, page, coma_idx, work_dir, A_local, B_local)
         if ok:
             try:
                 page_io.save_pages_json(work_dir, work)
@@ -883,7 +883,7 @@ class BNAME_OT_panel_knife_cut(Operator):
 
 
 def _preview_cut_polygons(
-    op: "BNAME_OT_panel_knife_cut",
+    op: "BNAME_OT_coma_knife_cut",
 ) -> tuple[list[tuple[float, float]], list[tuple[float, float]]] | None:
     work = getattr(op, "_work", None)
     if work is None or op._p1_px is None or op._p2_px is None:
@@ -895,20 +895,20 @@ def _preview_cut_polygons(
     (xa, ya), (xb, yb) = p1, p2
     if (xa - xb) ** 2 + (ya - yb) ** 2 < 0.25:
         return None
-    hit = _find_panel_at_world(work, xa, ya)
+    hit = _find_coma_at_world(work, xa, ya)
     if hit is None:
         return None
-    page_idx, panel_idx = hit
+    page_idx, coma_idx = hit
     if not (0 <= page_idx < len(work.pages)):
         return None
     page = work.pages[page_idx]
-    if not (0 <= panel_idx < len(page.panels)):
+    if not (0 <= coma_idx < len(page.comas)):
         return None
     ox, oy = _page_world_offset_mm(work, page_idx)
     a_local = (xa - ox, ya - oy)
     b_local = (xb - ox, yb - oy)
-    panel = page.panels[panel_idx]
-    poly = _panel_polygon(panel)
+    panel = page.comas[coma_idx]
+    poly = _coma_polygon(panel)
     if not poly:
         return None
     result = _split_convex_polygon_by_line(
@@ -957,7 +957,7 @@ def _draw_preview_outline(shader, points: list[tuple[float, float]]) -> None:
     batch_for_shader(shader, "LINES", {"pos": verts}).draw(shader)
 
 
-def _draw_callback(op: "BNAME_OT_panel_knife_cut") -> None:
+def _draw_callback(op: "BNAME_OT_coma_knife_cut") -> None:
     if not op._dragging or op._p1_px is None or op._p2_px is None:
         return
     shader = gpu.shader.from_builtin("UNIFORM_COLOR")
@@ -1002,7 +1002,7 @@ def _draw_callback(op: "BNAME_OT_panel_knife_cut") -> None:
         pass
 
 
-_CLASSES = (BNAME_OT_panel_knife_cut,)
+_CLASSES = (BNAME_OT_coma_knife_cut,)
 
 
 def register() -> None:

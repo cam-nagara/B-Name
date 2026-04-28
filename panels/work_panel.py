@@ -5,7 +5,7 @@ from __future__ import annotations
 import bpy
 from bpy.types import Panel
 
-from ..core.mode import MODE_PAGE, MODE_PANEL, get_mode
+from ..core.mode import MODE_PAGE, MODE_COMA, get_mode
 from ..core.work import get_work
 
 B_NAME_CATEGORY = "B-Name"
@@ -21,7 +21,7 @@ class BNAME_PT_work(Panel):
 
     @classmethod
     def poll(cls, context):
-        return get_mode(context) != MODE_PANEL
+        return get_mode(context) != MODE_COMA
 
     def draw(self, context):
         layout = self.layout
@@ -51,9 +51,14 @@ class BNAME_PT_work(Panel):
         row.prop(info, "page_number_start", text="開始")
         row.prop(info, "page_number_end", text="終了")
 
+        box = layout.box()
+        box.label(text="コマ3Dテンプレート", icon="FILE_BLEND")
+        box.enabled = mode == MODE_PAGE
+        box.prop(work, "coma_blend_template_path", text="")
 
-class BNAME_PT_panel_return(Panel):
-    bl_idname = "BNAME_PT_panel_return"
+
+class BNAME_PT_coma_return(Panel):
+    bl_idname = "BNAME_PT_coma_return"
     bl_label = "ページ一覧に戻る"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
@@ -63,11 +68,11 @@ class BNAME_PT_panel_return(Panel):
     @classmethod
     def poll(cls, context):
         work = get_work(context)
-        return bool(work and work.loaded and get_mode(context) == MODE_PANEL)
+        return bool(work and work.loaded and get_mode(context) == MODE_COMA)
 
     def draw(self, context):
         layout = self.layout
-        layout.operator("bname.exit_panel_mode", text="ページ一覧に戻る", icon="BACK")
+        layout.operator("bname.exit_coma_mode", text="ページ一覧に戻る", icon="BACK")
         layout.separator()
         layout.prop(context.scene, "bname_page_browser_position", text="ページ一覧位置")
         layout.prop(context.scene, "bname_page_browser_size", text="サイズ")
@@ -77,7 +82,7 @@ class BNAME_PT_panel_return(Panel):
 
 _CLASSES = (
     BNAME_PT_work,
-    BNAME_PT_panel_return,
+    BNAME_PT_coma_return,
 )
 
 

@@ -48,25 +48,25 @@ def collect_paper_snap_candidates(paper) -> list[SnapCandidate]:
     return out
 
 
-def collect_panel_snap_candidates(panels, exclude_stem: str = "") -> list[SnapCandidate]:
+def collect_coma_snap_candidates(panels, exclude_stem: str = "") -> list[SnapCandidate]:
     """他のコマ枠のエッジをスナップ候補として追加.
 
     exclude_stem: 編集中のコマ自身を除外する stem 名。
     """
     out: list[SnapCandidate] = []
     for entry in panels:
-        if entry.panel_stem == exclude_stem:
+        if entry.coma_id == exclude_stem:
             continue
         if entry.shape_type != "rect":
             continue
-        out.append(SnapCandidate("x", entry.rect_x_mm, f"{entry.panel_stem}.left"))
-        out.append(SnapCandidate("x", entry.rect_x_mm + entry.rect_width_mm, f"{entry.panel_stem}.right"))
-        out.append(SnapCandidate("y", entry.rect_y_mm, f"{entry.panel_stem}.bottom"))
-        out.append(SnapCandidate("y", entry.rect_y_mm + entry.rect_height_mm, f"{entry.panel_stem}.top"))
+        out.append(SnapCandidate("x", entry.rect_x_mm, f"{entry.coma_id}.left"))
+        out.append(SnapCandidate("x", entry.rect_x_mm + entry.rect_width_mm, f"{entry.coma_id}.right"))
+        out.append(SnapCandidate("y", entry.rect_y_mm, f"{entry.coma_id}.bottom"))
+        out.append(SnapCandidate("y", entry.rect_y_mm + entry.rect_height_mm, f"{entry.coma_id}.top"))
     return out
 
 
-def collect_panel_snap_with_gap(
+def collect_coma_snap_with_gap(
     panels,
     gap_h_mm: float,
     gap_v_mm: float,
@@ -75,7 +75,7 @@ def collect_panel_snap_with_gap(
     """コマ間隔を保ったスナップ候補 (作品共通のスキマ)."""
     out: list[SnapCandidate] = []
     for entry in panels:
-        if entry.panel_stem == exclude_stem:
+        if entry.coma_id == exclude_stem:
             continue
         if entry.shape_type != "rect":
             continue
@@ -83,10 +83,10 @@ def collect_panel_snap_with_gap(
         right = entry.rect_x_mm + entry.rect_width_mm
         bottom = entry.rect_y_mm
         top = entry.rect_y_mm + entry.rect_height_mm
-        out.append(SnapCandidate("x", left - gap_h_mm, f"{entry.panel_stem}.gap.left"))
-        out.append(SnapCandidate("x", right + gap_h_mm, f"{entry.panel_stem}.gap.right"))
-        out.append(SnapCandidate("y", bottom - gap_v_mm, f"{entry.panel_stem}.gap.bottom"))
-        out.append(SnapCandidate("y", top + gap_v_mm, f"{entry.panel_stem}.gap.top"))
+        out.append(SnapCandidate("x", left - gap_h_mm, f"{entry.coma_id}.gap.left"))
+        out.append(SnapCandidate("x", right + gap_h_mm, f"{entry.coma_id}.gap.right"))
+        out.append(SnapCandidate("y", bottom - gap_v_mm, f"{entry.coma_id}.gap.bottom"))
+        out.append(SnapCandidate("y", top + gap_v_mm, f"{entry.coma_id}.gap.top"))
     return out
 
 
@@ -117,7 +117,7 @@ def snap_value(
 def snap_rect(
     rect: Rect,
     paper,
-    other_panels,
+    other_comas,
     gap_h_mm: float,
     gap_v_mm: float,
     exclude_stem: str = "",
@@ -126,8 +126,8 @@ def snap_rect(
     """矩形の 4 辺をスナップして返す."""
     candidates = (
         collect_paper_snap_candidates(paper)
-        + collect_panel_snap_candidates(other_panels, exclude_stem)
-        + collect_panel_snap_with_gap(other_panels, gap_h_mm, gap_v_mm, exclude_stem)
+        + collect_coma_snap_candidates(other_comas, exclude_stem)
+        + collect_coma_snap_with_gap(other_comas, gap_h_mm, gap_v_mm, exclude_stem)
     )
     left, _ = snap_value(rect.x, "x", candidates, radius_mm)
     right, _ = snap_value(rect.x2, "x", candidates, radius_mm)

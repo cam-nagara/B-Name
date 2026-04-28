@@ -1,7 +1,7 @@
 """ページの見開き変更・解除 Operator (計画書 3.3.4 / Phase 3 データ保持版).
 
 **データ保持**:
-- 見開き統合時: 左右両ページの panels / balloons / texts / GP ストローク / panel_NNN.blend を
+- 見開き統合時: 左右両ページの panels / balloons / texts / GP ストローク / cNN.blend を
   すべて見開きページに引き継ぐ
 - 見開き解除時: 見開きページの panels / balloons / texts / GP を中心 x で左右
   ページに振り分けて保持
@@ -32,7 +32,7 @@ from bpy.props import BoolProperty, FloatProperty, IntProperty
 from bpy.types import Operator
 
 from ..core.work import get_work
-from ..io import page_io, panel_io, schema
+from ..io import page_io, coma_io, schema
 from ..utils import gpencil as gp_utils
 from ..utils import log, page_grid, paths
 
@@ -42,8 +42,8 @@ _logger = log.get_logger(__name__)
 # ---------- 共通ヘルパ ----------
 
 
-def _shift_panel_entry_x(entry, dx_mm: float) -> None:
-    """panel_entry の rect / 多角形頂点 x を dx_mm ずらす."""
+def _shift_coma_entry_x(entry, dx_mm: float) -> None:
+    """coma_entry の rect / 多角形頂点 x を dx_mm ずらす."""
     entry.rect_x_mm = entry.rect_x_mm + dx_mm
     for v in entry.vertices:
         v.x_mm = v.x_mm + dx_mm
@@ -57,10 +57,10 @@ def _shift_text_entry_x(entry, dx_mm: float) -> None:
     entry.x_mm = entry.x_mm + dx_mm
 
 
-def _copy_panel_entry(src, dst) -> None:
-    """PanelEntry の内容を schema 経由で複製. panel_stem は呼出側で上書き."""
-    data = schema.panel_entry_to_dict(src)
-    schema.panel_entry_from_dict(dst, data)
+def _copy_coma_entry(src, dst) -> None:
+    """ComaEntry の内容を schema 経由で複製. coma_id は呼出側で上書き."""
+    data = schema.coma_entry_to_dict(src)
+    schema.coma_entry_from_dict(dst, data)
 
 
 def _copy_balloon_entry(src, dst) -> None:
@@ -115,14 +115,14 @@ def _merge_pages_pp_groups(
 ) -> None:
     """merged_entry (元 a) の panels/balloons/texts を +W シフト、b の内容を追加.
 
-    - merged.panels: 既存 a の panels を x += W。続いて b の panels を x + 0 で append
-      (panel_stem 衝突は後段でリネーム処理)
+    - merged.comas: 既存 a の panels を x += W。続いて b の panels を x + 0 で append
+      (coma_id 衝突は後段でリネーム処理)
     - balloons / texts も同様。b の balloon id / text id は merged 内で衝突する可能性が
       あるため採番し直し。text の parent_balloon_id は新 id に追随させる。
     """
     # a の既存 panels/balloons/texts を +W シフト (右半分へ)
-    for panel in merged_entry.panels:
-        _shift_panel_entry_x(panel, canvas_width_mm)
+    for panel in merged_entry.comas:
+        _shift_coma_entry_x(panel, canvas_width_mm)
     for balloon in merged_entry.balloons:
         _shift_balloon_entry_x(balloon, canvas_width_mm)
     for text in merged_entry.texts:
@@ -158,7 +158,7 @@ def _merge_pages_pp_groups(
             new_entry.parent_balloon_id = balloon_id_map[b_text.parent_balloon_id]
 
 
-def _merge_panel_files(
+def _merge_coma_files(
     work_dir: Path,
     merged_entry,
     b_entry,
@@ -172,7 +172,7 @@ def _merge_panel_files(
     1. ``pages/{a_old_id}/`` を ``pages/{spread_id}/`` へ rename (a の panel_* もそのまま)
     2. b の各 panel について空き stem を採番し、``pages/{b_old_id}/panels/`` から
        ``pages/{spread_id}/panels/`` に move
-    3. b の panel PropertyGroup を merged.panels に copy し、panel_stem を新 stem に差替
+    3. b の panel PropertyGroup を merged.comas に copy し、coma_id を新 stem に差替
     4. ``pages/{b_old_id}/`` ディレクトリ (panels 空のはず) を remove
 
     merged_entry の panels は既に +W シフト済 (呼出側で実施)。
@@ -192,13 +192,13 @@ def _merge_panel_files(
 
     # 2) b の panel ファイルを spread にコピー (stem 衝突回避で新採番)
     stem_remap: dict[str, str] = {}
-    for b_panel in b_entry.panels:
-        old_stem = b_panel.panel_stem
-        if not old_stem or not paths.is_valid_panel_stem(old_stem):
+    for b_panel in b_entry.comas:
+        old_stem = b_panel.coma_id
+        if not old_stem or not paths.is_valid_coma_id(old_stem):
             continue
-        new_stem = panel_io.allocate_new_panel_stem(work_dir, spread_id)
+        new_stem = coma_io.allocate_new_coma_id(work_dir, spread_id)
         try:
-            panel_io.move_panel_files(work_dir, b_old_id, spread_id, old_stem, new_stem)
+            coma_io.move_coma_files(work_dir, b_old_id, spread_id, old_stem, new_stem)
         except FileNotFoundError:
             # panel ファイルが存在しない PropertyGroup だけのケース (新規追加直後など)
             pass
@@ -210,24 +210,23 @@ def _merge_panel_files(
             continue
         stem_remap[old_stem] = new_stem
 
-    # 3) b の panels を merged.panels に append. panel_stem / id を新 stem に差替
-    for b_panel in b_entry.panels:
-        new_entry = merged_entry.panels.add()
-        _copy_panel_entry(b_panel, new_entry)
-        old_stem = b_panel.panel_stem
+    # 3) b の panels を merged.comas に append. coma_id / id を新 stem に差替
+    for b_panel in b_entry.comas:
+        new_entry = merged_entry.comas.add()
+        _copy_coma_entry(b_panel, new_entry)
+        old_stem = b_panel.coma_id
         new_stem = stem_remap.get(old_stem, old_stem)
-        # 衝突チェック: merged 内で同名 panel_stem が既にあるなら更に新採番
-        existing = {p.panel_stem for p in merged_entry.panels if p is not new_entry}
+        # 衝突チェック: merged 内で同名 coma_id が既にあるなら更に新採番
+        existing = {p.coma_id for p in merged_entry.comas if p is not new_entry}
         if new_stem in existing:
-            new_stem = panel_io.allocate_new_panel_stem(work_dir, spread_id)
-        new_entry.panel_stem = new_stem
-        if new_stem.startswith("panel_"):
-            new_entry.id = new_stem.split("_", 1)[1]
-        # panel_stem を書き換えた場合、.json メタも上書き再保存
+            new_stem = coma_io.allocate_new_coma_id(work_dir, spread_id)
+        new_entry.coma_id = new_stem
+        new_entry.id = new_stem
+        # coma_id を書き換えた場合、.json メタも上書き再保存
         try:
-            panel_io.save_panel_meta(work_dir, spread_id, new_entry)
+            coma_io.save_coma_meta(work_dir, spread_id, new_entry)
         except Exception:  # noqa: BLE001
-            _logger.exception("merge: save_panel_meta failed for %s", new_entry.panel_stem)
+            _logger.exception("merge: save_coma_meta failed for %s", new_entry.coma_id)
 
     # 4) 空になった b ディレクトリを削除
     b_dir = paths.page_dir(work_dir, b_old_id)
@@ -240,18 +239,18 @@ def _merge_panel_files(
     # 5) a の panel_*.json も +W シフト後の座標で上書き保存
     #    (page.json が load 時のソース・オブ・トゥルースだが、panel_*.json
     #    も揃えておく方がデータ不整合を起こしにくい)
-    for panel in merged_entry.panels:
-        if not panel.panel_stem or not paths.is_valid_panel_stem(panel.panel_stem):
+    for panel in merged_entry.comas:
+        if not panel.coma_id or not paths.is_valid_coma_id(panel.coma_id):
             continue
         # b 由来の panels は step 3 で既に save 済なので、a 由来のみ書き直す
         # 判定: stem_remap の値は b 由来のみ → a 由来を見分けるため
-        #       stem_remap.values() に含まれない panel_stem を対象とする
-        if panel.panel_stem in stem_remap.values():
+        #       stem_remap.values() に含まれない coma_id を対象とする
+        if panel.coma_id in stem_remap.values():
             continue
         try:
-            panel_io.save_panel_meta(work_dir, spread_id, panel)
+            coma_io.save_coma_meta(work_dir, spread_id, panel)
         except Exception:  # noqa: BLE001
-            _logger.exception("merge: resave panel meta failed for %s", panel.panel_stem)
+            _logger.exception("merge: resave panel meta failed for %s", panel.coma_id)
 
 
 def _merge_page_gpencil(
@@ -330,16 +329,16 @@ def _split_page_assign_entries(
 ) -> dict:
     """spread の panels/balloons/texts を中心 x で左右ページに振り分け.
 
-    戻り値: ``{"right_panel_stems": [...], "balloon_id_map_right": {...}}``
+    戻り値: ``{"right_coma_ids": [...], "balloon_id_map_right": {...}}``
     右ページ用のコマ stem リスト (ファイル操作の入力に使う) 等。
     """
     W = float(canvas_width_mm)
 
     # 振り分け: panel
-    left_panels: list[dict] = []
-    right_panels: list[dict] = []
-    right_panel_stems: list[str] = []
-    for p in spread_entry.panels:
+    left_comas: list[dict] = []
+    right_comas: list[dict] = []
+    right_coma_ids: list[str] = []
+    for p in spread_entry.comas:
         if p.shape_type == "rect":
             center_x = p.rect_x_mm + p.rect_width_mm / 2.0
         elif p.shape_type == "polygon" and len(p.vertices) > 0:
@@ -347,29 +346,29 @@ def _split_page_assign_entries(
             center_x = (min(xs) + max(xs)) / 2.0
         else:
             center_x = p.rect_x_mm
-        data = schema.panel_entry_to_dict(p)
+        data = schema.coma_entry_to_dict(p)
         if center_x < W:
-            left_panels.append(data)
+            left_comas.append(data)
         else:
-            right_panels.append(data)
-            right_panel_stems.append(p.panel_stem)
+            right_comas.append(data)
+            right_coma_ids.append(p.coma_id)
 
     # 左右ページの panels に再構築
-    left_entry.panels.clear()
-    right_entry.panels.clear()
-    for d in left_panels:
-        e = left_entry.panels.add()
-        schema.panel_entry_from_dict(e, d)
+    left_entry.comas.clear()
+    right_entry.comas.clear()
+    for d in left_comas:
+        e = left_entry.comas.add()
+        schema.coma_entry_from_dict(e, d)
         # 左ページはそのまま
-    for d in right_panels:
-        e = right_entry.panels.add()
-        schema.panel_entry_from_dict(e, d)
+    for d in right_comas:
+        e = right_entry.comas.add()
+        schema.coma_entry_from_dict(e, d)
         # 右ページは x を -W シフト
-        _shift_panel_entry_x(e, -W)
-    left_entry.active_panel_index = 0 if len(left_entry.panels) > 0 else -1
-    right_entry.active_panel_index = 0 if len(right_entry.panels) > 0 else -1
-    left_entry.panel_count = len(left_entry.panels)
-    right_entry.panel_count = len(right_entry.panels)
+        _shift_coma_entry_x(e, -W)
+    left_entry.active_coma_index = 0 if len(left_entry.comas) > 0 else -1
+    right_entry.active_coma_index = 0 if len(right_entry.comas) > 0 else -1
+    left_entry.coma_count = len(left_entry.comas)
+    right_entry.coma_count = len(right_entry.comas)
 
     # balloon 振り分け
     left_balloon_ids: set[str] = set()
@@ -434,16 +433,16 @@ def _split_page_assign_entries(
     right_entry.active_text_index = 0 if len(right_entry.texts) > 0 else -1
 
     return {
-        "right_panel_stems": right_panel_stems,
+        "right_coma_ids": right_coma_ids,
     }
 
 
-def _split_panel_files(
+def _split_coma_files(
     work_dir: Path,
     spread_id: str,
     left_id: str,
     right_id: str,
-    right_panel_stems: list[str],
+    right_coma_ids: list[str],
 ) -> None:
     """spread/ ディレクトリを 2 ページに分割してファイルを配分.
 
@@ -470,18 +469,18 @@ def _split_panel_files(
 
     page_io.ensure_page_dir(work_dir, right_id)
 
-    for stem in right_panel_stems:
-        if not stem or not paths.is_valid_panel_stem(stem):
+    for stem in right_coma_ids:
+        if not stem or not paths.is_valid_coma_id(stem):
             continue
         try:
-            panel_io.move_panel_files(work_dir, left_id, right_id, stem, stem)
+            coma_io.move_coma_files(work_dir, left_id, right_id, stem, stem)
         except FileNotFoundError:
             pass  # panel ファイル未作成のエントリ
         except FileExistsError:
             # 右ディレクトリ側で衝突したら採番し直し
-            new_stem = panel_io.allocate_new_panel_stem(work_dir, right_id)
-            panel_io.move_panel_files(work_dir, left_id, right_id, stem, new_stem)
-            # PropertyGroup 側の panel_stem は呼出側で再計算するのが本来だが、
+            new_stem = coma_io.allocate_new_coma_id(work_dir, right_id)
+            coma_io.move_coma_files(work_dir, left_id, right_id, stem, new_stem)
+            # PropertyGroup 側の coma_id は呼出側で再計算するのが本来だが、
             # ここで検出した場合は警告のみ (頻度は低いケース)
             _logger.warning(
                 "split: panel stem collision %s -> renamed to %s (PropertyGroup unchanged)",
@@ -599,7 +598,7 @@ class BNAME_OT_pages_merge_spread(Operator):
         col = layout.column()
         col.label(text=f"{a.title} と {b.title} を見開きに統合します")
         summary = (
-            f"コマ: {len(a.panels) + len(b.panels)} / "
+            f"コマ: {len(a.comas) + len(b.comas)} / "
             f"フキダシ: {len(a.balloons) + len(b.balloons)} / "
             f"テキスト: {len(a.texts) + len(b.texts)} を保持"
         )
@@ -632,8 +631,8 @@ class BNAME_OT_pages_merge_spread(Operator):
 
         # 結合 ID (左=a, 右=b を連結した文字列; 読み順準拠)
         try:
-            head_a = int(a.id.split("-", 1)[0])
-            head_b = int(b.id.split("-", 1)[0])
+            head_a = int(a.id.split("-", 1)[0].lstrip("p"))
+            head_b = int(b.id.split("-", 1)[0].lstrip("p"))
         except ValueError:
             self.report({"ERROR"}, "ページ ID が不正です")
             return {"CANCELLED"}
@@ -648,7 +647,7 @@ class BNAME_OT_pages_merge_spread(Operator):
             _merge_pages_pp_groups(a, b, W)
 
             # 2) ファイル操作: a dir を spread_id にリネームし、b の panels をコピー統合
-            _merge_panel_files(work_dir, a, b, a_old_id, b_old_id, spread_id)
+            _merge_coma_files(work_dir, a, b, a_old_id, b_old_id, spread_id)
 
             # 3) GP: 左/右 GP を spread Collection に再配置、subpage_offset を設定
             _merge_page_gpencil(context.scene, a_old_id, b_old_id, spread_id, W)
@@ -658,7 +657,7 @@ class BNAME_OT_pages_merge_spread(Operator):
             merged = work.pages[left]
             merged.id = spread_id
             merged.title = f"{head_a}-{head_b}"
-            merged.dir_rel = f"{paths.PAGES_DIR_NAME}/{spread_id}/"
+            merged.dir_rel = f"{spread_id}/"
             merged.spread = True
             merged.tombo_aligned = self.tombo_aligned
             merged.tombo_gap_mm = self.tombo_gap_mm
@@ -667,7 +666,8 @@ class BNAME_OT_pages_merge_spread(Operator):
             r1.page_id = paths.format_page_id(head_a)
             r2 = merged.original_pages.add()
             r2.page_id = paths.format_page_id(head_b)
-            merged.panel_count = len(merged.panels)
+            merged.coma_count = len(merged.comas)
+            work.active_page_index = left
 
             # 5) grid transform を再配置
             page_grid.apply_page_collection_transforms(context, work)
@@ -683,7 +683,7 @@ class BNAME_OT_pages_merge_spread(Operator):
         self.report(
             {"INFO"},
             f"見開き統合: {spread_id} "
-            f"(panels {len(merged.panels)} / balloons {len(merged.balloons)} / texts {len(merged.texts)})",
+            f"(panels {len(merged.comas)} / balloons {len(merged.balloons)} / texts {len(merged.texts)})",
         )
         return {"FINISHED"}
 
@@ -747,14 +747,14 @@ class BNAME_OT_pages_split_spread(Operator):
             right_half = work.pages.add()
             right_half.id = reading_first_id
             right_half.title = reading_first_id
-            right_half.dir_rel = f"{paths.PAGES_DIR_NAME}/{reading_first_id}/"
+            right_half.dir_rel = f"{reading_first_id}/"
             right_half.spread = False
             work.pages.move(len(work.pages) - 1, idx)
 
             left_half = work.pages.add()
             left_half.id = reading_second_id
             left_half.title = reading_second_id
-            left_half.dir_rel = f"{paths.PAGES_DIR_NAME}/{reading_second_id}/"
+            left_half.dir_rel = f"{reading_second_id}/"
             left_half.spread = False
             work.pages.move(len(work.pages) - 1, idx + 1)
 
@@ -764,15 +764,15 @@ class BNAME_OT_pages_split_spread(Operator):
 
             # 振り分け: 中心 x < W → 物理左半分 = left_half, それ以上 → 物理右半分 = right_half
             assignment = _split_page_assign_entries(tmp_spread, left_half, right_half, W)
-            right_panel_stems = assignment["right_panel_stems"]
+            right_coma_ids = assignment["right_coma_ids"]
 
             # 一時 spread entry を削除
             work.pages.remove(len(work.pages) - 1)
 
             # 3) ファイル操作: spread/ → 物理左ページ (reading_second_id) dir に rename、
             #    物理右ページ (reading_first_id) 用に panel files を move
-            _split_panel_files(
-                work_dir, spread_id_prev, reading_second_id, reading_first_id, right_panel_stems
+            _split_coma_files(
+                work_dir, spread_id_prev, reading_second_id, reading_first_id, right_coma_ids
             )
 
             # 4) GP 分割 (primary → 左半分 = reading_second_id, sub_R → 右半分 = reading_first_id)
@@ -783,9 +783,9 @@ class BNAME_OT_pages_split_spread(Operator):
             # 5) pages コレクションの active を読み順 先 (物理右) へ
             work.active_page_index = idx
 
-            # 6) panel_count 再計算
-            left_half.panel_count = len(left_half.panels)
-            right_half.panel_count = len(right_half.panels)
+            # 6) coma_count 再計算
+            left_half.coma_count = len(left_half.comas)
+            right_half.coma_count = len(right_half.comas)
 
             # 7) grid transform を再配置
             page_grid.apply_page_collection_transforms(context, work)
@@ -793,18 +793,18 @@ class BNAME_OT_pages_split_spread(Operator):
             # 8) JSON 保存
             #    page.json がロード時のソース・オブ・トゥルース。panel_*.json
             #    も座標不整合を避けるため左右ページ分を個別に書き直す。
-            for e in left_half.panels:
-                if e.panel_stem and paths.is_valid_panel_stem(e.panel_stem):
+            for e in left_half.comas:
+                if e.coma_id and paths.is_valid_coma_id(e.coma_id):
                     try:
-                        panel_io.save_panel_meta(work_dir, left_half.id, e)
+                        coma_io.save_coma_meta(work_dir, left_half.id, e)
                     except Exception:  # noqa: BLE001
-                        _logger.exception("split: resave panel %s/%s failed", left_half.id, e.panel_stem)
-            for e in right_half.panels:
-                if e.panel_stem and paths.is_valid_panel_stem(e.panel_stem):
+                        _logger.exception("split: resave panel %s/%s failed", left_half.id, e.coma_id)
+            for e in right_half.comas:
+                if e.coma_id and paths.is_valid_coma_id(e.coma_id):
                     try:
-                        panel_io.save_panel_meta(work_dir, right_half.id, e)
+                        coma_io.save_coma_meta(work_dir, right_half.id, e)
                     except Exception:  # noqa: BLE001
-                        _logger.exception("split: resave panel %s/%s failed", right_half.id, e.panel_stem)
+                        _logger.exception("split: resave panel %s/%s failed", right_half.id, e.coma_id)
             page_io.save_page_json(work_dir, left_half)
             page_io.save_page_json(work_dir, right_half)
             page_io.save_pages_json(work_dir, work)
@@ -816,7 +816,7 @@ class BNAME_OT_pages_split_spread(Operator):
         self.report(
             {"INFO"},
             f"見開き解除: {reading_first_id} / {reading_second_id} "
-            f"(右: panels {len(right_half.panels)} / 左: panels {len(left_half.panels)})",
+            f"(右: panels {len(right_half.comas)} / 左: panels {len(left_half.comas)})",
         )
         return {"FINISHED"}
 

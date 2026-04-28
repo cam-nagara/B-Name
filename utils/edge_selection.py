@@ -21,14 +21,14 @@ def _sync_active_panel_stack_item(context, work, page, panel) -> None:
         return
     try:
         from . import layer_stack as layer_stack_utils
-        from .layer_hierarchy import PANEL_KIND, panel_stack_key
+        from .layer_hierarchy import COMA_KIND, coma_stack_key
 
         if hasattr(scene, "bname_active_layer_kind"):
-            scene.bname_active_layer_kind = PANEL_KIND
+            scene.bname_active_layer_kind = COMA_KIND
         if hasattr(scene, "bname_active_gp_folder_key"):
             scene.bname_active_gp_folder_key = ""
         stack = layer_stack_utils.sync_layer_stack(context, preserve_active_index=True)
-        uid = layer_stack_utils.target_uid(PANEL_KIND, panel_stack_key(page, panel))
+        uid = layer_stack_utils.target_uid(COMA_KIND, coma_stack_key(page, panel))
         if stack is not None:
             for i, item in enumerate(stack):
                 if layer_stack_utils.stack_item_uid(item) == uid:
@@ -44,7 +44,7 @@ def set_selection(
     kind: str,
     *,
     page_index: int = -1,
-    panel_index: int = -1,
+    coma_index: int = -1,
     edge_index: int = -1,
     vertex_index: int = -1,
     sync_style: bool = True,
@@ -56,11 +56,11 @@ def set_selection(
     if kind not in {"none", "edge", "border", "vertex"}:
         kind = "none"
     if kind == "none":
-        page_index = panel_index = edge_index = vertex_index = -1
+        page_index = coma_index = edge_index = vertex_index = -1
     try:
         wm.bname_edge_select_kind = kind
         wm.bname_edge_select_page = int(page_index)
-        wm.bname_edge_select_panel = int(panel_index)
+        wm.bname_edge_select_coma = int(coma_index)
         wm.bname_edge_select_edge = int(edge_index) if kind == "edge" else -1
         wm.bname_edge_select_vertex = int(vertex_index) if kind == "vertex" else -1
     except Exception:  # noqa: BLE001
@@ -73,16 +73,16 @@ def set_selection(
             if work is not None and 0 <= int(page_index) < len(work.pages):
                 work.active_page_index = int(page_index)
                 page = work.pages[int(page_index)]
-                if 0 <= int(panel_index) < len(page.panels):
-                    page.active_panel_index = int(panel_index)
-                    _sync_active_panel_stack_item(context, work, page, page.panels[int(panel_index)])
+                if 0 <= int(coma_index) < len(page.comas):
+                    page.active_coma_index = int(coma_index)
+                    _sync_active_panel_stack_item(context, work, page, page.comas[int(coma_index)])
         except Exception:  # noqa: BLE001
             pass
     if sync_style and kind != "none":
         try:
-            from ..operators import panel_edge_style_op
+            from ..operators import coma_edge_style_op
 
-            panel_edge_style_op.sync_selected_style_props(context)
+            coma_edge_style_op.sync_selected_style_props(context)
         except Exception:  # noqa: BLE001
             pass
     tag_view3d_redraw(context)

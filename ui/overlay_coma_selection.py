@@ -24,14 +24,14 @@ def draw(context, work, region, rv3d) -> None:
     scene = getattr(context, "scene", None)
     if scene is None:
         return
-    selected_refs = object_selection.selected_panel_refs(context)
-    active_panel_selection = getattr(scene, "bname_active_layer_kind", "") == "panel"
-    if not active_panel_selection and not selected_refs:
+    selected_refs = object_selection.selected_coma_refs(context)
+    active_coma_selection = getattr(scene, "bname_active_layer_kind", "") == "coma"
+    if not active_coma_selection and not selected_refs:
         return
     try:
-        from ..operators import panel_modal_state
+        from ..operators import coma_modal_state
 
-        if panel_modal_state.is_active("edge_move"):
+        if coma_modal_state.is_active("edge_move"):
             return
     except Exception:  # noqa: BLE001
         pass
@@ -40,34 +40,34 @@ def draw(context, work, region, rv3d) -> None:
     if wm is None:
         return
     shader = gpu.shader.from_builtin("UNIFORM_COLOR")
-    for page_index, page, _panel_index, panel in selected_refs:
-        if not overlay_visibility.page_visible(page) or not overlay_visibility.panel_visible(panel):
+    for page_index, page, _coma_index, panel in selected_refs:
+        if not overlay_visibility.page_visible(page) or not overlay_visibility.coma_visible(panel):
             continue
-        poly = _panel_polygon(panel)
+        poly = _coma_polygon(panel)
         if len(poly) < 2:
             continue
         ox, oy = _page_offset(context, work, page_index)
         world_poly = [(x + ox, y + oy) for x, y in poly]
         for edge_index in range(len(world_poly)):
             _draw_edge(shader, region, rv3d, world_poly, edge_index)
-    if not active_panel_selection:
+    if not active_coma_selection:
         return
     kind = getattr(wm, "bname_edge_select_kind", "none")
     if kind not in {"edge", "border", "vertex"}:
         return
     page_index = int(getattr(wm, "bname_edge_select_page", -1))
-    panel_index = int(getattr(wm, "bname_edge_select_panel", -1))
+    coma_index = int(getattr(wm, "bname_edge_select_coma", -1))
     if not (0 <= page_index < len(work.pages)):
         return
     page = work.pages[page_index]
     if not overlay_visibility.page_visible(page):
         return
-    if not (0 <= panel_index < len(page.panels)):
+    if not (0 <= coma_index < len(page.comas)):
         return
-    panel = page.panels[panel_index]
-    if not overlay_visibility.panel_visible(panel):
+    panel = page.comas[coma_index]
+    if not overlay_visibility.coma_visible(panel):
         return
-    poly = _panel_polygon(panel)
+    poly = _coma_polygon(panel)
     if len(poly) < 2:
         return
     ox, oy = _page_offset(context, work, page_index)
@@ -105,7 +105,7 @@ def _page_offset(context, work, page_index: int) -> tuple[float, float]:
     return ox + add_x, oy + add_y
 
 
-def _panel_polygon(panel) -> list[tuple[float, float]]:
+def _coma_polygon(panel) -> list[tuple[float, float]]:
     if getattr(panel, "shape_type", "") == "rect":
         x = float(panel.rect_x_mm)
         y = float(panel.rect_y_mm)

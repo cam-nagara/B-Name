@@ -66,12 +66,12 @@ def line_from_projection_params(
 def capture_vertex_adjacent_edge_states(
     work,
     page_idx: int,
-    panel_idx: int,
+    coma_idx: int,
     vertex_idx: int,
     poly: list[Point],
     *,
     page_offset_fn: PageOffsetFn,
-    panel_polygon_fn: PanelPolygonFn,
+    coma_polygon_fn: PanelPolygonFn,
     find_adjacent_edges_fn: FindAdjacentFn,
     find_overlapping_edges_fn: FindOverlapsFn,
     adjacency_gap_tolerance_mm: float,
@@ -90,10 +90,10 @@ def capture_vertex_adjacent_edge_states(
             poly[(selected_edge + 1) % n][0] + pox,
             poly[(selected_edge + 1) % n][1] + poy,
         )
-        candidates = list(find_adjacent_edges_fn(work, page_idx, panel_idx, selected_edge))
+        candidates = list(find_adjacent_edges_fn(work, page_idx, coma_idx, selected_edge))
         for panel_i2, ei2 in find_overlapping_edges_fn(
             work.pages[page_idx],
-            panel_idx,
+            coma_idx,
             selected_edge,
             max_distance_mm=adjacency_gap_tolerance_mm,
             min_overlap_ratio=adjacency_overlap_ratio,
@@ -108,7 +108,7 @@ def capture_vertex_adjacent_edge_states(
             out,
             seen,
             page_offset_fn,
-            panel_polygon_fn,
+            coma_polygon_fn,
         )
     return out
 
@@ -122,14 +122,14 @@ def _append_adjacent_edge_states(
     out: list[dict],
     seen: set[tuple[int, int, int, int]],
     page_offset_fn: PageOffsetFn,
-    panel_polygon_fn: PanelPolygonFn,
+    coma_polygon_fn: PanelPolygonFn,
 ) -> None:
     for pi2, panel_i2, ei2 in candidates:
         key = (selected_edge, pi2, panel_i2, ei2)
         if key in seen:
             continue
         seen.add(key)
-        poly2 = panel_polygon_fn(work.pages[pi2].panels[panel_i2])
+        poly2 = coma_polygon_fn(work.pages[pi2].comas[panel_i2])
         if len(poly2) < 3:
             continue
         ox2, oy2 = page_offset_fn(work, pi2)
@@ -145,7 +145,7 @@ def _append_adjacent_edge_states(
             {
                 "selected_edge": selected_edge,
                 "page": pi2,
-                "panel": panel_i2,
+                "coma": panel_i2,
                 "edge": ei2,
                 "poly": poly2,
                 "params": params,

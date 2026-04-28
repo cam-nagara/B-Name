@@ -8,11 +8,11 @@ from typing import Iterable
 
 import bpy
 
-from ..core.mode import MODE_PANEL, get_mode
+from ..core.mode import MODE_COMA, get_mode
 from ..core.work import get_work
 from ..io import export_pipeline
 from . import log, page_browser
-from .panel_camera_constants import (
+from .coma_camera_constants import (
     DEFAULT_CAMERA_DISTANCE,
     DEFAULT_REF_DPI,
     KOMA_REF_PREFIX,
@@ -21,7 +21,7 @@ from .panel_camera_constants import (
     PANEL_CAMERA_NAME,
     REFERENCE_DIR_NAME,
 )
-from .panel_camera_refs import (
+from .coma_camera_refs import (
     ReferenceImage,
     ensure_reference_images,
     reference_dir,
@@ -33,43 +33,43 @@ from .panel_camera_refs import (
     _is_page_left_half,
     _koma_ref_path,
     _page_ref_path,
-    _panel_bbox,
-    _panel_bbox_size,
-    _panel_mask_is_stale,
-    _panel_points_mm,
-    _panel_points_px,
+    _coma_bbox,
+    _coma_bbox_size,
+    _coma_mask_is_stale,
+    _coma_points_mm,
+    _coma_points_px,
     _reference_frame_info,
     _reference_is_stale,
-    _render_current_panel_page_mask,
+    _render_current_coma_page_mask,
     _render_page_reference,
-    _resolve_panel,
-    _spread_panel_side,
+    _resolve_coma,
+    _spread_coma_side,
     _path_mtime,
 )
 
 _logger = log.get_logger(__name__)
 
 
-def ensure_panel_camera_scene(
+def ensure_coma_camera_scene(
     context,
     work=None,
     page_id: str = "",
-    panel_stem: str = "",
+    coma_id: str = "",
     *,
     generate_references: bool = True,
 ) -> None:
-    """panel_NNN.blend 内にカメラと下絵背景を整備する."""
+    """cNN.blend 内にカメラと下絵背景を整備する."""
     scene = getattr(context, "scene", None) if context is not None else bpy.context.scene
     if scene is None:
         return
     if work is None:
         work = get_work(context)
     if not page_id:
-        page_id = str(getattr(scene, "bname_current_panel_page_id", "") or "")
-    if not panel_stem:
-        panel_stem = str(getattr(scene, "bname_current_panel_stem", "") or "")
+        page_id = str(getattr(scene, "bname_current_coma_page_id", "") or "")
+    if not coma_id:
+        coma_id = str(getattr(scene, "bname_current_coma_id", "") or "")
 
-    camera = ensure_panel_camera(scene)
+    camera = ensure_coma_camera(scene)
     scene.camera = camera
     try:
         from . import display_settings
@@ -77,21 +77,21 @@ def ensure_panel_camera_scene(
         display_settings.apply_standard_color_management(scene)
     except Exception:  # noqa: BLE001
         pass
-    configure_render_for_current_panel(scene, work, page_id, panel_stem)
+    configure_render_for_current_coma(scene, work, page_id, coma_id)
     ensure_default_resolution_settings(scene)
-    sync_world_background_color(context, work=work, page_id=page_id, panel_stem=panel_stem)
+    sync_world_background_color(context, work=work, page_id=page_id, coma_id=coma_id)
 
     refs: list[ReferenceImage] = []
     if generate_references and work is not None and getattr(work, "work_dir", ""):
-        refs = ensure_reference_images(work, page_id, panel_stem)
-    configure_camera_backgrounds(scene, camera, refs, page_id, panel_stem)
-    update_render_border_from_current_panel(context)
+        refs = ensure_reference_images(work, page_id, coma_id)
+    configure_camera_backgrounds(scene, camera, refs, page_id, coma_id)
+    update_render_border_from_current_coma(context)
     view_camera_in_viewports(context)
-    schedule_panel_view_camera()
+    schedule_coma_view_camera()
 
 
-def ensure_panel_camera(scene):
-    """panel blend 用 Camera オブジェクトを取得または作成する."""
+def ensure_coma_camera(scene):
+    """コマ用 Camera オブジェクトを取得または作成する."""
     cam_obj = scene.camera
     created = False
     if cam_obj is None or getattr(cam_obj, "type", "") != "CAMERA":
@@ -102,7 +102,7 @@ def ensure_panel_camera(scene):
         scene.collection.objects.link(cam_obj)
         created = True
     cam_obj.name = PANEL_CAMERA_NAME
-    cam_obj["bname_panel_camera"] = True
+    cam_obj["bname_coma_camera"] = True
     if created:
         try:
             cam_obj.location = (0.0, -DEFAULT_CAMERA_DISTANCE, 0.0)
@@ -118,9 +118,9 @@ def ensure_panel_camera(scene):
     return cam_obj
 
 
-def configure_render_for_current_panel(scene, work, page_id: str, panel_stem: str) -> None:
+def configure_render_for_current_coma(scene, work, page_id: str, coma_id: str) -> None:
     """ページ/見開き下絵の比率に合わせてカメラ出力解像度を設定する."""
-    _page_count, _render_side, width_mm, height_mm = _reference_frame_info(work, page_id, panel_stem)
+    _page_count, _render_side, width_mm, height_mm = _reference_frame_info(work, page_id, coma_id)
     if width_mm <= 0.0 or height_mm <= 0.0:
         width_mm, height_mm = 16.0, 9.0
     long_edge = 1920
@@ -130,20 +130,20 @@ def configure_render_for_current_panel(scene, work, page_id: str, panel_stem: st
     else:
         res_y = long_edge
         res_x = max(1, round(long_edge * width_mm / height_mm))
-    if hasattr(scene, "bname_panel_camera_original_resolution_x"):
-        scene.bname_panel_camera_original_resolution_x = int(res_x)
-    if hasattr(scene, "bname_panel_camera_original_resolution_y"):
-        scene.bname_panel_camera_original_resolution_y = int(res_y)
+    if hasattr(scene, "bname_coma_camera_original_resolution_x"):
+        scene.bname_coma_camera_original_resolution_x = int(res_x)
+    if hasattr(scene, "bname_coma_camera_original_resolution_y"):
+        scene.bname_coma_camera_original_resolution_y = int(res_y)
     if not (
-        bool(getattr(scene, "bname_panel_camera_fisheye_layout_mode", False))
-        or bool(getattr(scene, "bname_panel_camera_reduction_mode", False))
+        bool(getattr(scene, "bname_coma_camera_fisheye_layout_mode", False))
+        or bool(getattr(scene, "bname_coma_camera_reduction_mode", False))
     ):
         scene.render.resolution_x = int(res_x)
         scene.render.resolution_y = int(res_y)
 
 
 def ensure_default_resolution_settings(scene) -> None:
-    settings = getattr(scene, "bname_panel_camera_resolution_settings", None)
+    settings = getattr(scene, "bname_coma_camera_resolution_settings", None)
     if settings is None or len(settings) > 0:
         return
     item = settings.add()
@@ -152,12 +152,12 @@ def ensure_default_resolution_settings(scene) -> None:
     item.resolution_y = int(getattr(scene.render, "resolution_y", 1080))
 
 
-def configure_camera_backgrounds(scene, camera, refs: Iterable[ReferenceImage], page_id: str, panel_stem: str) -> None:
+def configure_camera_backgrounds(scene, camera, refs: Iterable[ReferenceImage], page_id: str, coma_id: str) -> None:
     ref_list = list(refs)
     if not ref_list:
         # 下絵生成に失敗した場合でも、既存のカメラ下絵を消さない。
         return
-    settings = getattr(scene, "bname_panel_camera_settings", None)
+    settings = getattr(scene, "bname_coma_camera_settings", None)
     name_visible = bool(getattr(settings, "name_visible", False))
     name_show_all_pages = bool(getattr(settings, "name_show_all_pages", False))
     koma_visible = bool(getattr(settings, "koma_visible", True))
@@ -177,7 +177,7 @@ def configure_camera_backgrounds(scene, camera, refs: Iterable[ReferenceImage], 
         try:
             img["bname_kind"] = ref.kind
             img["bname_page_id"] = ref.page_id
-            img["bname_panel_stem"] = panel_stem if ref.kind == "koma" else ""
+            img["bname_coma_id"] = coma_id if ref.kind == "koma" else ""
             img["bname_full_page_mask"] = bool(ref.full_page_mask)
             img["bname_page_count"] = int(ref.page_count)
             img["bname_render_side"] = ref.render_side
@@ -203,7 +203,7 @@ def configure_camera_backgrounds(scene, camera, refs: Iterable[ReferenceImage], 
         data.show_background_images = True
 
 
-def sync_world_background_color(context, *, panel=None, work=None, page_id: str = "", panel_stem: str = "") -> None:
+def sync_world_background_color(context, *, panel=None, work=None, page_id: str = "", coma_id: str = "") -> None:
     scene = getattr(context, "scene", None) if context is not None else bpy.context.scene
     if scene is None:
         return
@@ -211,10 +211,10 @@ def sync_world_background_color(context, *, panel=None, work=None, page_id: str 
         if work is None:
             work = get_work(context)
         if not page_id:
-            page_id = str(getattr(scene, "bname_current_panel_page_id", "") or "")
-        if not panel_stem:
-            panel_stem = str(getattr(scene, "bname_current_panel_stem", "") or "")
-        panel = _resolve_panel(work, page_id, panel_stem)
+            page_id = str(getattr(scene, "bname_current_coma_page_id", "") or "")
+        if not coma_id:
+            coma_id = str(getattr(scene, "bname_current_coma_id", "") or "")
+        panel = _resolve_coma(work, page_id, coma_id)
     if panel is None:
         return
     color = getattr(panel, "background_color", None)
@@ -223,7 +223,7 @@ def sync_world_background_color(context, *, panel=None, work=None, page_id: str 
     if scene.world is None:
         scene.world = bpy.data.worlds.new("World")
     world = scene.world
-    settings = getattr(scene, "bname_panel_camera_settings", None)
+    settings = getattr(scene, "bname_coma_camera_settings", None)
     camera_only = bool(getattr(settings, "world_background_camera_only", False))
     rgba = (
         float(color[0]),
@@ -417,7 +417,7 @@ def set_koma_background_depth(context, *, back: bool) -> None:
 
 
 def toggle_backgrounds_by_kind(context, kind: str) -> bool:
-    settings = getattr(context.scene, "bname_panel_camera_settings", None)
+    settings = getattr(context.scene, "bname_coma_camera_settings", None)
     if settings is None:
         return False
     if kind == "name":
@@ -433,9 +433,9 @@ def toggle_backgrounds_by_kind(context, kind: str) -> bool:
 
 
 def set_page_reference_visibility(context, *, show_all: bool) -> None:
-    settings = getattr(context.scene, "bname_panel_camera_settings", None)
+    settings = getattr(context.scene, "bname_coma_camera_settings", None)
     name_visible = bool(getattr(settings, "name_visible", False))
-    current_page_id = str(getattr(context.scene, "bname_current_panel_page_id", "") or "")
+    current_page_id = str(getattr(context.scene, "bname_current_coma_page_id", "") or "")
     for bg in _iter_camera_backgrounds(context):
         img = getattr(bg, "image", None)
         if img is None or "ネーム" not in getattr(img, "name", ""):
@@ -481,7 +481,7 @@ def update_view(context) -> None:
         pass
 
 
-def update_render_border_from_current_panel(context) -> None:
+def update_render_border_from_current_coma(context) -> None:
     scene = getattr(context, "scene", None) if context is not None else bpy.context.scene
     if scene is None or scene.camera is None:
         return
@@ -548,18 +548,18 @@ def apply_selected_resolution_setting(context) -> None:
     scene = getattr(context, "scene", None)
     if scene is None:
         return
-    coll = getattr(scene, "bname_panel_camera_resolution_settings", None)
-    idx = int(getattr(scene, "bname_panel_camera_resolution_settings_index", 0))
+    coll = getattr(scene, "bname_coma_camera_resolution_settings", None)
+    idx = int(getattr(scene, "bname_coma_camera_resolution_settings_index", 0))
     if coll is None or not (0 <= idx < len(coll)):
         return
     item = coll[idx]
-    scene.bname_panel_camera_original_resolution_x = int(item.resolution_x)
-    scene.bname_panel_camera_original_resolution_y = int(item.resolution_y)
+    scene.bname_coma_camera_original_resolution_x = int(item.resolution_x)
+    scene.bname_coma_camera_original_resolution_y = int(item.resolution_y)
     scene.render.resolution_x = int(item.resolution_x)
     scene.render.resolution_y = int(item.resolution_y)
-    if bool(getattr(scene, "bname_panel_camera_fisheye_layout_mode", False)):
+    if bool(getattr(scene, "bname_coma_camera_fisheye_layout_mode", False)):
         _apply_fisheye_layout(scene)
-    if bool(getattr(scene, "bname_panel_camera_reduction_mode", False)):
+    if bool(getattr(scene, "bname_coma_camera_reduction_mode", False)):
         _apply_reduction_layout(scene)
 
 
@@ -569,52 +569,61 @@ def apply_fisheye_mode(context) -> None:
         return
     cam = scene.camera
     if cam is None or getattr(cam, "type", "") != "CAMERA":
-        cam = ensure_panel_camera(scene)
+        cam = ensure_coma_camera(scene)
         scene.camera = cam
-    enabled = bool(getattr(scene, "bname_panel_camera_fisheye_layout_mode", False))
+    enabled = bool(getattr(scene, "bname_coma_camera_fisheye_layout_mode", False))
     if enabled:
-        if int(getattr(scene, "bname_panel_camera_original_resolution_x", 0)) <= 0:
-            scene.bname_panel_camera_original_resolution_x = int(scene.render.resolution_x)
-        if int(getattr(scene, "bname_panel_camera_original_resolution_y", 0)) <= 0:
-            scene.bname_panel_camera_original_resolution_y = int(scene.render.resolution_y)
-        scene.bname_panel_camera_lens = float(cam.data.lens)
+        if int(getattr(scene, "bname_coma_camera_original_resolution_x", 0)) <= 0:
+            scene.bname_coma_camera_original_resolution_x = int(scene.render.resolution_x)
+        if int(getattr(scene, "bname_coma_camera_original_resolution_y", 0)) <= 0:
+            scene.bname_coma_camera_original_resolution_y = int(scene.render.resolution_y)
+        scene.bname_coma_camera_lens = float(cam.data.lens)
         cam.data.type = "PANO"
         if hasattr(cam.data, "panorama_type"):
             try:
-                cam.data.panorama_type = "FISHEYE_EQUISOLID"
+                current = str(getattr(cam.data, "panorama_type", "") or "")
+                if current not in {"FISHEYE_EQUIDISTANT", "FISHEYE_EQUISOLID"}:
+                    cam.data.panorama_type = "FISHEYE_EQUISOLID"
             except TypeError:
                 pass
-        cam.data.fisheye_fov = float(getattr(scene, "bname_panel_camera_fisheye_fov", math.pi))
+        cam.data.fisheye_fov = float(getattr(scene, "bname_coma_camera_fisheye_fov", math.pi))
         scene.render.engine = "CYCLES"
         _apply_fisheye_layout(scene)
     else:
-        scene.bname_panel_camera_fisheye_fov = float(getattr(cam.data, "fisheye_fov", math.pi))
+        scene.bname_coma_camera_fisheye_fov = float(getattr(cam.data, "fisheye_fov", math.pi))
         cam.data.type = "PERSP"
-        cam.data.lens = float(getattr(scene, "bname_panel_camera_lens", cam.data.lens))
-        if bool(getattr(scene, "bname_panel_camera_reduction_mode", False)):
+        cam.data.lens = float(getattr(scene, "bname_coma_camera_lens", cam.data.lens))
+        if bool(getattr(scene, "bname_coma_camera_reduction_mode", False)):
             _apply_reduction_layout(scene)
         else:
             _restore_original_resolution(scene)
-    settings = getattr(scene, "bname_panel_camera_settings", None)
+    settings = getattr(scene, "bname_coma_camera_settings", None)
     if settings is not None:
         set_background_images_scale(context, float(settings.bg_images_scale))
-    update_render_border_from_current_panel(context)
+    update_render_border_from_current_coma(context)
 
 
 def apply_reduction_mode(context) -> None:
     scene = getattr(context, "scene", None)
     if scene is None:
         return
-    if int(getattr(scene, "bname_panel_camera_original_resolution_x", 0)) <= 0:
-        scene.bname_panel_camera_original_resolution_x = int(scene.render.resolution_x)
-    if int(getattr(scene, "bname_panel_camera_original_resolution_y", 0)) <= 0:
-        scene.bname_panel_camera_original_resolution_y = int(scene.render.resolution_y)
-    if bool(getattr(scene, "bname_panel_camera_reduction_mode", False)):
-        _adjust_pencil4_line_width(scene, float(scene.bname_panel_camera_preview_scale_percentage) / 100.0)
+    if int(getattr(scene, "bname_coma_camera_original_resolution_x", 0)) <= 0:
+        scene.bname_coma_camera_original_resolution_x = int(scene.render.resolution_x)
+    if int(getattr(scene, "bname_coma_camera_original_resolution_y", 0)) <= 0:
+        scene.bname_coma_camera_original_resolution_y = int(scene.render.resolution_y)
+    if bool(getattr(scene, "bname_coma_camera_reduction_mode", False)):
+        from ..core.fisheye import pencil4_link
+
+        pencil4_link.apply_scale(
+            float(scene.bname_coma_camera_preview_scale_percentage) / 100.0,
+            ensure_saved=True,
+        )
         _apply_reduction_layout(scene)
     else:
-        _restore_pencil4_line_widths(scene)
-        if bool(getattr(scene, "bname_panel_camera_fisheye_layout_mode", False)):
+        from ..core.fisheye import pencil4_link
+
+        pencil4_link.restore()
+        if bool(getattr(scene, "bname_coma_camera_fisheye_layout_mode", False)):
             _apply_fisheye_layout(scene)
         else:
             _restore_original_resolution(scene)
@@ -623,13 +632,13 @@ def apply_reduction_mode(context) -> None:
 
 def view_camera_in_viewports(context) -> None:
     scene = getattr(context, "scene", None) if context is not None else bpy.context.scene
-    if scene is None or get_mode(context) != MODE_PANEL:
+    if scene is None or get_mode(context) != MODE_COMA:
         return
     for space in _iter_view3d_spaces(context):
-        _configure_panel_camera_view(space, scene)
+        _configure_coma_camera_view(space, scene)
 
 
-def schedule_panel_view_camera(retries: int = 8, interval: float = 0.15) -> None:
+def schedule_coma_view_camera(retries: int = 8, interval: float = 0.15) -> None:
     """Re-apply camera view after Blender has rebuilt UI areas on file load."""
     state = {"left": max(1, int(retries))}
 
@@ -683,7 +692,7 @@ def _iter_view3d_spaces(context):
                     yield space
 
 
-def _configure_panel_camera_view(space, scene=None) -> None:
+def _configure_coma_camera_view(space, scene=None) -> None:
     if scene is None:
         scene = bpy.context.scene
     camera = getattr(scene, "camera", None) if scene is not None else None
@@ -711,12 +720,12 @@ def _configure_panel_camera_view(space, scene=None) -> None:
         shading.light = "STUDIO"
     except Exception:  # noqa: BLE001
         pass
-    _apply_panel_solid_background(space, scene)
+    _apply_coma_solid_background(space, scene)
 
 
-def _apply_panel_solid_background(space, scene) -> None:
+def _apply_coma_solid_background(space, scene) -> None:
     shading = getattr(space, "shading", None)
-    settings = getattr(scene, "bname_panel_camera_settings", None) if scene is not None else None
+    settings = getattr(scene, "bname_coma_camera_settings", None) if scene is not None else None
     if shading is None or settings is None:
         return
     if bool(getattr(settings, "use_solid_background_color", False)):
@@ -734,21 +743,21 @@ def _apply_panel_solid_background(space, scene) -> None:
 
 
 def _apply_fisheye_layout(scene) -> None:
-    ox = int(getattr(scene, "bname_panel_camera_original_resolution_x", 0)) or int(scene.render.resolution_x)
-    oy = int(getattr(scene, "bname_panel_camera_original_resolution_y", 0)) or int(scene.render.resolution_y)
+    ox = int(getattr(scene, "bname_coma_camera_original_resolution_x", 0)) or int(scene.render.resolution_x)
+    oy = int(getattr(scene, "bname_coma_camera_original_resolution_y", 0)) or int(scene.render.resolution_y)
     edge = max(1, ox, oy)
-    if bool(getattr(scene, "bname_panel_camera_reduction_mode", False)):
-        scale = float(getattr(scene, "bname_panel_camera_preview_scale_percentage", 100.0)) / 100.0
+    if bool(getattr(scene, "bname_coma_camera_reduction_mode", False)):
+        scale = float(getattr(scene, "bname_coma_camera_preview_scale_percentage", 100.0)) / 100.0
         edge = max(1, int(edge * scale))
     scene.render.resolution_x = edge
     scene.render.resolution_y = edge
 
 
 def _apply_reduction_layout(scene) -> None:
-    ox = int(getattr(scene, "bname_panel_camera_original_resolution_x", 0)) or int(scene.render.resolution_x)
-    oy = int(getattr(scene, "bname_panel_camera_original_resolution_y", 0)) or int(scene.render.resolution_y)
-    scale = float(getattr(scene, "bname_panel_camera_preview_scale_percentage", 100.0)) / 100.0
-    if bool(getattr(scene, "bname_panel_camera_fisheye_layout_mode", False)):
+    ox = int(getattr(scene, "bname_coma_camera_original_resolution_x", 0)) or int(scene.render.resolution_x)
+    oy = int(getattr(scene, "bname_coma_camera_original_resolution_y", 0)) or int(scene.render.resolution_y)
+    scale = float(getattr(scene, "bname_coma_camera_preview_scale_percentage", 100.0)) / 100.0
+    if bool(getattr(scene, "bname_coma_camera_fisheye_layout_mode", False)):
         edge = max(1, ox, oy)
         scene.render.resolution_x = max(1, int(edge * scale))
         scene.render.resolution_y = max(1, int(edge * scale))
@@ -758,8 +767,8 @@ def _apply_reduction_layout(scene) -> None:
 
 
 def _restore_original_resolution(scene) -> None:
-    ox = int(getattr(scene, "bname_panel_camera_original_resolution_x", 0))
-    oy = int(getattr(scene, "bname_panel_camera_original_resolution_y", 0))
+    ox = int(getattr(scene, "bname_coma_camera_original_resolution_x", 0))
+    oy = int(getattr(scene, "bname_coma_camera_original_resolution_y", 0))
     if ox > 0 and oy > 0:
         scene.render.resolution_x = ox
         scene.render.resolution_y = oy
@@ -790,33 +799,3 @@ def _update_node_tree(node_tree) -> None:
         node_tree.update_tag()
     except Exception:  # noqa: BLE001
         pass
-
-
-def _adjust_pencil4_line_width(scene, scale: float) -> None:
-    for group in bpy.data.node_groups:
-        if not group.name.startswith("Pencil+ 4 Line Node Tree"):
-            continue
-        for node in group.nodes:
-            if not node.name.startswith("Brush Settings"):
-                continue
-            if "original_size" not in node:
-                try:
-                    node["original_size"] = node.size
-                except Exception:  # noqa: BLE001
-                    continue
-            try:
-                node.size = float(node["original_size"]) * scale
-            except Exception:  # noqa: BLE001
-                pass
-
-
-def _restore_pencil4_line_widths(_scene) -> None:
-    for group in bpy.data.node_groups:
-        if not group.name.startswith("Pencil+ 4 Line Node Tree"):
-            continue
-        for node in group.nodes:
-            if node.name.startswith("Brush Settings") and "original_size" in node:
-                try:
-                    node.size = float(node["original_size"])
-                except Exception:  # noqa: BLE001
-                    pass

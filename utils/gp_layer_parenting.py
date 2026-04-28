@@ -7,7 +7,7 @@ import json
 import bpy
 
 from .geom import mm_to_m
-from .layer_hierarchy import page_stack_key, panel_stack_key, split_child_key
+from .layer_hierarchy import page_stack_key, coma_stack_key, split_child_key
 
 PARENT_KEY_PROP = "bname_parent_key"
 PARENT_MAP_PROP = "bname_layer_parent_map_json"
@@ -124,7 +124,7 @@ def set_parent_key(node, key: str) -> None:
     _save_parent_map(gp_data, data)
 
 
-def is_page_or_panel_key(key: str) -> bool:
+def is_page_or_coma_key(key: str) -> bool:
     key = str(key or "")
     if not key:
         return False
@@ -141,12 +141,12 @@ def parent_depth(key: str) -> int:
 
 def parent_keys_for_page(page) -> set[str]:
     keys = {page_stack_key(page)}
-    keys.update(panel_stack_key(page, panel) for panel in getattr(page, "panels", []))
+    keys.update(coma_stack_key(page, panel) for panel in getattr(page, "comas", []))
     return keys
 
 
-def parent_key_for_panel(page, panel) -> str:
-    return panel_stack_key(page, panel)
+def parent_key_for_coma(page, panel) -> str:
+    return coma_stack_key(page, panel)
 
 
 def parent_key_exists(work, key: str) -> bool:
@@ -158,7 +158,7 @@ def parent_key_exists(work, key: str) -> bool:
             continue
         if not child_key:
             return True
-        return any(panel_stack_key(page, panel) == key for panel in getattr(page, "panels", []))
+        return any(coma_stack_key(page, panel) == key for panel in getattr(page, "comas", []))
     return False
 
 

@@ -3,7 +3,7 @@
 計画書 3.4.4 / 3.4.5 / 8.13 参照。アセットブラウザからのリンク追加は
 Blender 標準 UI を使うため、ここでは:
 - リンク元 .blend を subprocess で開く
-- 現在選択中のオブジェクトのリンク情報を panel_NNN.json に記録
+- 現在選択中のオブジェクトのリンク情報を cNN.json に記録
 のみを提供する。
 """
 
@@ -14,9 +14,9 @@ from pathlib import Path
 import bpy
 from bpy.types import Operator
 
-from ..core.mode import MODE_PANEL, get_mode
+from ..core.mode import MODE_COMA, get_mode
 from ..core.work import find_page_by_id, get_work
-from ..io import panel_io
+from ..io import coma_io
 from ..utils import bpy_link, log, paths
 
 _logger = log.get_logger(__name__)
@@ -55,7 +55,7 @@ class BNAME_OT_open_link_source(Operator):
 
 
 class BNAME_OT_record_asset_link(Operator):
-    """コマ編集モード中、選択中オブジェクトのリンク参照を panel_NNN.json に記録."""
+    """コマ編集モード中、選択中オブジェクトのリンク参照を cNN.json に記録."""
 
     bl_idname = "bname.record_asset_link"
     bl_label = "このリンクを記録"
@@ -63,23 +63,23 @@ class BNAME_OT_record_asset_link(Operator):
 
     @classmethod
     def poll(cls, context):
-        if get_mode(context) != MODE_PANEL:
+        if get_mode(context) != MODE_COMA:
             return False
         obj = context.active_object
         return obj is not None
 
     def execute(self, context):
         work = get_work(context)
-        stem = getattr(context.scene, "bname_current_panel_stem", "")
-        page_id = getattr(context.scene, "bname_current_panel_page_id", "")
+        stem = getattr(context.scene, "bname_current_coma_id", "")
+        page_id = getattr(context.scene, "bname_current_coma_page_id", "")
         page = find_page_by_id(work, page_id)
         if work is None or page is None or not stem:
             self.report({"ERROR"}, "コマ編集モード + アクティブコマが必要です")
             return {"CANCELLED"}
-        if not paths.is_valid_panel_stem(stem):
+        if not paths.is_valid_coma_id(stem):
             self.report({"ERROR"}, f"不正なコマ stem: {stem}")
             return {"CANCELLED"}
-        entry = _find_panel_by_stem(page, stem)
+        entry = _find_coma_by_stem(page, stem)
         if entry is None:
             self.report({"ERROR"}, f"コマエントリが見つかりません: {stem}")
             return {"CANCELLED"}
@@ -96,7 +96,7 @@ class BNAME_OT_record_asset_link(Operator):
         ref = entry.layer_refs.add()
         ref.layer_id = link_id
         try:
-            panel_io.save_panel_meta(Path(work.work_dir), page.id, entry)
+            coma_io.save_coma_meta(Path(work.work_dir), page.id, entry)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("record_asset_link failed")
             self.report({"ERROR"}, f"保存失敗: {exc}")
@@ -105,9 +105,9 @@ class BNAME_OT_record_asset_link(Operator):
         return {"FINISHED"}
 
 
-def _find_panel_by_stem(page, stem: str):
-    for entry in page.panels:
-        if entry.panel_stem == stem:
+def _find_coma_by_stem(page, stem: str):
+    for entry in page.comas:
+        if entry.coma_id == stem:
             return entry
     return None
 

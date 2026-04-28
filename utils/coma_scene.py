@@ -1,4 +1,4 @@
-"""panel_NNN.blend 用の scene 構築/掃除ヘルパ."""
+"""cNN.blend 用の scene 構築/掃除ヘルパ."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 
 import bpy
 
-from ..core.mode import MODE_PANEL, set_mode
+from ..core.mode import MODE_COMA, set_mode
 from ..core.work import find_page_by_id, get_work
 from . import gpencil as gp_utils
 from . import log
@@ -24,43 +24,89 @@ _PAGE_HELPER_DATA_RE = re.compile(
 )
 
 
-def bootstrap_new_panel_blend(
+def resolve_coma_blend_template_path(work, work_dir: Path) -> tuple[Path | None, str]:
+    """作品設定のコマテンプレートパスを実ファイルへ解決する.
+
+    戻り値は ``(path, error_message)``。未設定なら ``(None, "")``。
+    相対パスと ``//`` パスは作品ルート基準で扱う。
+    """
+    raw = str(getattr(work, "coma_blend_template_path", "") or "").strip()
+    if not raw:
+        return None, ""
+    path = _template_path_from_raw(raw, Path(work_dir))
+    if path.suffix.lower() != ".blend":
+        return None, f"コマblendテンプレートは .blend を指定してください: {raw}"
+    if not path.is_file():
+        return None, f"コマblendテンプレートが見つかりません: {path}"
+    return path.resolve(), ""
+
+
+def bootstrap_new_coma_blend(
     context,
     work_dir: Path,
     page_id: str,
-    panel_stem: str,
+    coma_id: str,
+    *,
+    template_path: Path | None = None,
 ) -> bool:
-    """空の current mainfile を panel.blend 用 scene として初期化する."""
-    scene = _resolve_scene(context)
-    if scene is None:
-        return False
+    """空の current mainfile を cNN.blend 用 scene として初期化する."""
+    if template_path is not None:
+        if not _open_coma_template_blend(Path(template_path)):
+            return False
+        active_context = bpy.context
+    else:
+        scene = _resolve_scene(context)
+        if scene is None:
+            return False
+        _reset_current_mainfile_to_empty(scene)
+        active_context = context
 
-    _reset_current_mainfile_to_empty(scene)
-    work = _sync_scene_work_from_disk(context, work_dir)
+    work = _sync_scene_work_from_disk(active_context, work_dir)
     if work is None:
         return False
-    if not _set_panel_scene_state(context, work, page_id, panel_stem):
+    if not _set_coma_scene_state(active_context, work, page_id, coma_id):
         return False
-    prepare_panel_blend_scene(context)
+    prepare_coma_blend_scene(active_context, purge_orphans=template_path is None)
     try:
-        from . import panel_camera
+        from . import coma_camera
 
-        panel_camera.ensure_panel_camera_scene(
-            context,
+        coma_camera.ensure_coma_camera_scene(
+            active_context,
             work=work,
             page_id=page_id,
-            panel_stem=panel_stem,
+            coma_id=coma_id,
             generate_references=True,
         )
     except Exception:  # noqa: BLE001
-        _logger.exception("bootstrap_new_panel_blend: panel camera setup failed")
+        _logger.exception("bootstrap_new_coma_blend: panel camera setup failed")
     return True
 
 
-def prepare_panel_blend_scene(context) -> None:
-    """panel.blend を panel 専用 scene に寄せる.
+def _template_path_from_raw(raw: str, work_dir: Path) -> Path:
+    expanded = raw
+    if expanded.startswith("//"):
+        expanded = expanded[2:].lstrip("/\\")
+        return work_dir / expanded
+    path = Path(expanded)
+    if path.is_absolute():
+        return path
+    return work_dir / path
 
-    既存の save_as 由来 panel.blend を開いたときも、この関数で work.blend 由来の
+
+def _open_coma_template_blend(template_path: Path) -> bool:
+    try:
+        bpy.ops.wm.open_mainfile(filepath=str(template_path.resolve()))
+        _logger.info("coma template opened: %s", template_path)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        _logger.exception("open coma template failed: %s (%s)", template_path, exc)
+        return False
+
+
+def prepare_coma_blend_scene(context, *, purge_orphans: bool = True) -> None:
+    """cNN.blend を コマ専用 scene に寄せる.
+
+    既存の save_as 由来 cNN.blend を開いたときも、この関数で work.blend 由来の
     B-Name collection / paper / GP を scene から掃除する。
     """
     scene = _resolve_scene(context)
@@ -71,14 +117,15 @@ def prepare_panel_blend_scene(context) -> None:
     except Exception:  # noqa: BLE001
         pass
 
-    roots = _panel_cleanup_roots(scene)
+    roots = _coma_cleanup_roots(scene)
     for root in roots:
         _remove_collection_tree_objects(root)
     _remove_internal_bname_objects()
     for root in roots:
         _remove_collection_tree(scene, root)
     _purge_internal_bname_data()
-    _purge_generic_orphan_data()
+    if purge_orphans:
+        _purge_generic_orphan_data()
 
 
 def _resolve_scene(context):
@@ -86,7 +133,7 @@ def _resolve_scene(context):
     return scene or bpy.context.scene
 
 
-def _panel_cleanup_roots(scene) -> list[object]:
+def _coma_cleanup_roots(scene) -> list[object]:
     roots: list[object] = []
     for child in tuple(scene.collection.children):
         if _is_internal_bname_collection(child):
@@ -103,10 +150,10 @@ def _sync_scene_work_from_disk(context, work_dir: Path):
     return handlers.sync_scene_work_from_disk(context, Path(work_dir))
 
 
-def _set_panel_scene_state(context, work, page_id: str, panel_stem: str) -> bool:
+def _set_coma_scene_state(context, work, page_id: str, coma_id: str) -> bool:
     page = find_page_by_id(work, page_id)
     if page is None:
-        _logger.error("bootstrap_new_panel_blend: page not found: %s", page_id)
+        _logger.error("bootstrap_new_coma_blend: page not found: %s", page_id)
         return False
     scene = _resolve_scene(context)
     if scene is None:
@@ -116,29 +163,29 @@ def _set_panel_scene_state(context, work, page_id: str, panel_stem: str) -> bool
         if getattr(candidate, "id", "") == page_id:
             work.active_page_index = idx
             break
-    active_panel_index = -1
-    for idx, entry in enumerate(page.panels):
-        if getattr(entry, "panel_stem", "") == panel_stem:
-            active_panel_index = idx
+    active_coma_index = -1
+    for idx, entry in enumerate(page.comas):
+        if getattr(entry, "coma_id", "") == coma_id:
+            active_coma_index = idx
             break
-    if active_panel_index < 0:
+    if active_coma_index < 0:
         _logger.error(
-            "bootstrap_new_panel_blend: panel not found: %s/%s",
+            "bootstrap_new_coma_blend: panel not found: %s/%s",
             page_id,
-            panel_stem,
+            coma_id,
         )
         return False
-    page.active_panel_index = active_panel_index
-    scene.bname_current_panel_stem = panel_stem
-    scene.bname_current_panel_page_id = page_id
+    page.active_coma_index = active_coma_index
+    scene.bname_current_coma_id = coma_id
+    scene.bname_current_coma_page_id = page_id
     if hasattr(scene, "bname_active_layer_kind"):
-        scene.bname_active_layer_kind = "panel"
-    set_mode(MODE_PANEL, context)
+        scene.bname_active_layer_kind = "coma"
+    set_mode(MODE_COMA, context)
     return True
 
 
 def _reset_current_mainfile_to_empty(scene) -> None:
-    """startup file の内容を空にし、panel.blend 用の最小 scene にする."""
+    """startup file の内容を空にし、cNN.blend 用の最小 scene にする."""
     for other_scene in tuple(bpy.data.scenes):
         if other_scene == scene:
             continue
@@ -176,7 +223,7 @@ def _remove_collection_tree_objects(root) -> None:
             try:
                 bpy.data.objects.remove(obj, do_unlink=True)
             except Exception:  # noqa: BLE001
-                _logger.exception("prepare_panel_blend_scene: remove collection object failed: %s", obj.name)
+                _logger.exception("prepare_coma_blend_scene: remove collection object failed: %s", obj.name)
 
 
 def _remove_internal_bname_objects() -> None:
@@ -186,7 +233,7 @@ def _remove_internal_bname_objects() -> None:
         try:
             bpy.data.objects.remove(obj, do_unlink=True)
         except Exception:  # noqa: BLE001
-            _logger.exception("prepare_panel_blend_scene: remove internal object failed: %s", obj.name)
+            _logger.exception("prepare_coma_blend_scene: remove internal object failed: %s", obj.name)
 
 
 def _remove_collection_tree(scene, root) -> None:
@@ -196,7 +243,7 @@ def _remove_collection_tree(scene, root) -> None:
             try:
                 bpy.data.collections.remove(coll)
             except Exception:  # noqa: BLE001
-                _logger.exception("prepare_panel_blend_scene: remove collection failed: %s", coll.name)
+                _logger.exception("prepare_coma_blend_scene: remove collection failed: %s", coll.name)
 
 
 def _collection_tree(root):
@@ -210,7 +257,7 @@ def _unlink_collection_from_all_parents(scene, coll) -> None:
         if coll.name in scene.collection.children:
             scene.collection.children.unlink(coll)
     except Exception:  # noqa: BLE001
-        _logger.exception("prepare_panel_blend_scene: unlink scene child failed: %s", coll.name)
+        _logger.exception("prepare_coma_blend_scene: unlink scene child failed: %s", coll.name)
     for parent in tuple(bpy.data.collections):
         if parent == coll:
             continue
@@ -219,7 +266,7 @@ def _unlink_collection_from_all_parents(scene, coll) -> None:
                 parent.children.unlink(coll)
         except Exception:  # noqa: BLE001
             _logger.exception(
-                "prepare_panel_blend_scene: unlink parent child failed: %s <- %s",
+                "prepare_coma_blend_scene: unlink parent child failed: %s <- %s",
                 parent.name,
                 coll.name,
             )
@@ -234,7 +281,7 @@ def _purge_internal_bname_data() -> None:
         try:
             bpy.data.collections.remove(coll)
         except Exception:  # noqa: BLE001
-            _logger.exception("prepare_panel_blend_scene: purge collection failed: %s", coll.name)
+            _logger.exception("prepare_coma_blend_scene: purge collection failed: %s", coll.name)
 
     for mesh in tuple(bpy.data.meshes):
         if not _PAGE_HELPER_DATA_RE.match(mesh.name):
@@ -244,7 +291,7 @@ def _purge_internal_bname_data() -> None:
         try:
             bpy.data.meshes.remove(mesh)
         except Exception:  # noqa: BLE001
-            _logger.exception("prepare_panel_blend_scene: purge mesh failed: %s", mesh.name)
+            _logger.exception("prepare_coma_blend_scene: purge mesh failed: %s", mesh.name)
 
     gp_blocks = getattr(bpy.data, "grease_pencils_v3", None)
     if gp_blocks is None:
@@ -258,14 +305,14 @@ def _purge_internal_bname_data() -> None:
             try:
                 gp_blocks.remove(gp_data)
             except Exception:  # noqa: BLE001
-                _logger.exception("prepare_panel_blend_scene: purge GP failed: %s", gp_data.name)
+                _logger.exception("prepare_coma_blend_scene: purge GP failed: %s", gp_data.name)
 
     mat = bpy.data.materials.get(gp_utils.PAPER_MATERIAL_NAME)
     if mat is not None and mat.users == 0:
         try:
             bpy.data.materials.remove(mat)
         except Exception:  # noqa: BLE001
-            _logger.exception("prepare_panel_blend_scene: purge paper material failed")
+            _logger.exception("prepare_coma_blend_scene: purge paper material failed")
 
 
 def _purge_generic_orphan_data() -> None:
@@ -286,6 +333,8 @@ def _purge_generic_orphan_data() -> None:
 def _purge_orphan_collection(blocks) -> None:
     for block in tuple(blocks):
         if getattr(block, "users", 1) != 0:
+            continue
+        if bool(getattr(block, "use_fake_user", False)):
             continue
         try:
             blocks.remove(block)

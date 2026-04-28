@@ -15,16 +15,16 @@ from pathlib import Path
 import bpy
 from bpy.props import EnumProperty, StringProperty
 
-from ..utils import log
+from ..utils import log, paths
 
 _logger = log.get_logger(__name__)
 
 MODE_PAGE = "PAGE"
-MODE_PANEL = "PANEL"
+MODE_COMA = "COMA"
 
 _MODE_ITEMS = (
     (MODE_PAGE, "紙面編集", "原稿用紙全体を編集するモード"),
-    (MODE_PANEL, "コマ編集", "選択中のコマの 3D シーンを編集するモード"),
+    (MODE_COMA, "コマ編集", "選択中のコマの 3D シーンを編集するモード"),
 )
 
 
@@ -34,11 +34,11 @@ def register() -> None:
         items=_MODE_ITEMS,
         default=MODE_PAGE,
     )
-    bpy.types.Scene.bname_current_panel_stem = StringProperty(
-        name="現在編集中のコマ stem",
+    bpy.types.Scene.bname_current_coma_id = StringProperty(
+        name="現在編集中のコマ ID",
         default="",
     )
-    bpy.types.Scene.bname_current_panel_page_id = StringProperty(
+    bpy.types.Scene.bname_current_coma_page_id = StringProperty(
         name="現在編集中のコマ page_id",
         default="",
     )
@@ -51,11 +51,11 @@ def unregister() -> None:
     except AttributeError:
         pass
     try:
-        del bpy.types.Scene.bname_current_panel_stem
+        del bpy.types.Scene.bname_current_coma_id
     except AttributeError:
         pass
     try:
-        del bpy.types.Scene.bname_current_panel_page_id
+        del bpy.types.Scene.bname_current_coma_page_id
     except AttributeError:
         pass
 
@@ -97,30 +97,27 @@ def _infer_mode_from_filepath(scene) -> tuple[str, str, str] | None:
     if len(parts) == 1 and parts[0] == "work.blend":
         return MODE_PAGE, "", ""
     if (
-        len(parts) == 4
-        and parts[0] == "pages"
-        and parts[2] == "panels"
-        and parts[3].endswith(".blend")
+        len(parts) == 3
+        and paths.is_valid_page_id(parts[0])
+        and paths.is_valid_coma_id(parts[1])
+        and parts[2] == f"{parts[1]}.blend"
     ):
-        page_id = parts[1]
-        stem = parts[3][: -len(".blend")]
-        if page_id and stem.startswith("panel_"):
-            return MODE_PANEL, page_id, stem
+        return MODE_COMA, parts[0], parts[1]
     return None
 
 
-def _sync_scene_state_from_filepath(scene, mode: str, page_id: str, panel_stem: str) -> None:
+def _sync_scene_state_from_filepath(scene, mode: str, page_id: str, coma_id: str) -> None:
     try:
         if getattr(scene, "bname_mode", MODE_PAGE) != mode:
             scene.bname_mode = mode
     except Exception:  # noqa: BLE001
         return
-    if mode == MODE_PANEL:
+    if mode == MODE_COMA:
         try:
-            if str(getattr(scene, "bname_current_panel_page_id", "") or "") != page_id:
-                scene.bname_current_panel_page_id = page_id
-            if str(getattr(scene, "bname_current_panel_stem", "") or "") != panel_stem:
-                scene.bname_current_panel_stem = panel_stem
+            if str(getattr(scene, "bname_current_coma_page_id", "") or "") != page_id:
+                scene.bname_current_coma_page_id = page_id
+            if str(getattr(scene, "bname_current_coma_id", "") or "") != coma_id:
+                scene.bname_current_coma_id = coma_id
             work = getattr(scene, "bname_work", None)
             for page_index, page in enumerate(getattr(work, "pages", []) or []):
                 if str(getattr(page, "id", "") or "") != page_id:
@@ -130,11 +127,11 @@ def _sync_scene_state_from_filepath(scene, mode: str, page_id: str, panel_stem: 
                         work.active_page_index = page_index
                 except Exception:  # noqa: BLE001
                     pass
-                for panel_index, panel in enumerate(getattr(page, "panels", []) or []):
-                    if str(getattr(panel, "panel_stem", "") or "") == panel_stem:
+                for coma_index, coma in enumerate(getattr(page, "comas", []) or []):
+                    if str(getattr(coma, "coma_id", "") or "") == coma_id:
                         try:
-                            if int(getattr(page, "active_panel_index", -1)) != panel_index:
-                                page.active_panel_index = panel_index
+                            if int(getattr(page, "active_coma_index", -1)) != coma_index:
+                                page.active_coma_index = coma_index
                         except Exception:  # noqa: BLE001
                             pass
                         break
@@ -143,10 +140,10 @@ def _sync_scene_state_from_filepath(scene, mode: str, page_id: str, panel_stem: 
             pass
     elif mode == MODE_PAGE:
         try:
-            if str(getattr(scene, "bname_current_panel_page_id", "") or ""):
-                scene.bname_current_panel_page_id = ""
-            if str(getattr(scene, "bname_current_panel_stem", "") or ""):
-                scene.bname_current_panel_stem = ""
+            if str(getattr(scene, "bname_current_coma_page_id", "") or ""):
+                scene.bname_current_coma_page_id = ""
+            if str(getattr(scene, "bname_current_coma_id", "") or ""):
+                scene.bname_current_coma_id = ""
             if hasattr(scene, "bname_overview_mode") and not bool(scene.bname_overview_mode):
                 scene.bname_overview_mode = True
         except Exception:  # noqa: BLE001
@@ -160,8 +157,8 @@ def get_mode(context: bpy.types.Context | None = None) -> str:
         return MODE_PAGE
     inferred = _infer_mode_from_filepath(scene)
     if inferred is not None:
-        mode, page_id, panel_stem = inferred
-        _sync_scene_state_from_filepath(scene, mode, page_id, panel_stem)
+        mode, page_id, coma_id = inferred
+        _sync_scene_state_from_filepath(scene, mode, page_id, coma_id)
         return mode
     return getattr(scene, "bname_mode", MODE_PAGE)
 
@@ -171,6 +168,6 @@ def set_mode(mode: str, context: bpy.types.Context | None = None) -> None:
     scene = getattr(ctx, "scene", None)
     if scene is None:
         return
-    if mode not in (MODE_PAGE, MODE_PANEL):
+    if mode not in (MODE_PAGE, MODE_COMA):
         raise ValueError(f"invalid mode: {mode}")
     scene.bname_mode = mode

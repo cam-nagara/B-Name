@@ -14,7 +14,7 @@ from typing import Any, Sequence
 
 from . import export_psd, export_raster
 from ..ui import overlay_shared
-from ..utils import border_geom, log, panel_preview
+from ..utils import border_geom, log, coma_preview
 from ..utils.geom import Rect, m_to_mm, mm_to_px, q_to_mm
 
 _logger = log.get_logger(__name__)
@@ -68,7 +68,7 @@ class ExportOptions:
     include_work_info: bool = True
     include_tombo: bool = False
     include_paper_color: bool = True
-    include_panel_previews: bool = True
+    include_coma_previews: bool = True
     icc_profile_path: str = ""
 
 
@@ -378,7 +378,7 @@ def _intersects_mm(a: tuple[float, float, float, float], b: tuple[float, float, 
     return not (a[2] <= b[0] or a[0] >= b[2] or a[3] <= b[1] or a[1] >= b[3])
 
 
-def _panel_polygon_mm(entry) -> list[tuple[float, float]]:
+def _coma_polygon_mm(entry) -> list[tuple[float, float]]:
     if entry.shape_type == "rect":
         return [
             (float(entry.rect_x_mm), float(entry.rect_y_mm)),
@@ -391,20 +391,20 @@ def _panel_polygon_mm(entry) -> list[tuple[float, float]]:
     return []
 
 
-def _panel_group_name(entry) -> str:
-    return str(getattr(entry, "panel_stem", "") or getattr(entry, "id", "") or "panel")
+def _coma_group_name(entry) -> str:
+    return str(getattr(entry, "coma_id", "") or getattr(entry, "id", "") or "coma")
 
 
-def _panel_root_group_path(entry) -> tuple[str, ...]:
-    return ("panels", _panel_group_name(entry))
+def _coma_root_group_path(entry) -> tuple[str, ...]:
+    return ("comas", _coma_group_name(entry))
 
 
-def _panel_content_group_path(entry) -> tuple[str, ...]:
-    return (*_panel_root_group_path(entry), "content")
+def _coma_content_group_path(entry) -> tuple[str, ...]:
+    return (*_coma_root_group_path(entry), "content")
 
 
-def _panel_preview_source(work_dir: Path, page_id: str, entry) -> Path | None:
-    return panel_preview.panel_preview_source_path(work_dir, page_id, entry)
+def _coma_preview_source(work_dir: Path, page_id: str, entry) -> Path | None:
+    return coma_preview.coma_preview_source_path(work_dir, page_id, entry)
 
 
 def _safe_load_image(path: Path) -> Any | None:
@@ -518,8 +518,8 @@ def _draw_styled_loop(
         _draw_styled_segment(draw, pts[i], pts[(i + 1) % len(pts)], color, width_px, style)
 
 
-def _draw_panel_border_layer(entry, canvas_height_px: int, dpi: int) -> ExportLayer | None:
-    poly_mm = _panel_polygon_mm(entry)
+def _draw_coma_border_layer(entry, canvas_height_px: int, dpi: int) -> ExportLayer | None:
+    poly_mm = _coma_polygon_mm(entry)
     bbox = _points_bbox(poly_mm)
     if bbox is None:
         return None
@@ -585,8 +585,8 @@ def _draw_panel_border_layer(entry, canvas_height_px: int, dpi: int) -> ExportLa
     return ExportLayer("border", canvas.image, canvas.left, canvas.top)
 
 
-def _draw_panel_white_margin_layer(entry, canvas_height_px: int, dpi: int) -> ExportLayer | None:
-    poly_mm = _panel_polygon_mm(entry)
+def _draw_coma_white_margin_layer(entry, canvas_height_px: int, dpi: int) -> ExportLayer | None:
+    poly_mm = _coma_polygon_mm(entry)
     bbox = _points_bbox(poly_mm)
     if bbox is None:
         return None
@@ -642,12 +642,12 @@ def _draw_panel_white_margin_layer(entry, canvas_height_px: int, dpi: int) -> Ex
     return ExportLayer("white_margin", canvas.image, canvas.left, canvas.top)
 
 
-def _draw_panel_background_layer(entry, canvas_height_px: int, dpi: int) -> ExportLayer | None:
+def _draw_coma_background_layer(entry, canvas_height_px: int, dpi: int) -> ExportLayer | None:
     color_src = getattr(entry, "background_color", (1.0, 1.0, 1.0, 0.0))
     color = _rgb255(color_src)
     if color[3] <= 0:
         return None
-    poly_mm = _panel_polygon_mm(entry)
+    poly_mm = _coma_polygon_mm(entry)
     bbox = _points_bbox(poly_mm)
     if bbox is None or len(poly_mm) < 3:
         return None
@@ -658,12 +658,12 @@ def _draw_panel_background_layer(entry, canvas_height_px: int, dpi: int) -> Expo
     return ExportLayer("background", canvas.image, canvas.left, canvas.top)
 
 
-def _render_panel_preview_layer(work, page, entry, canvas_size: tuple[int, int], dpi: int) -> ExportLayer | None:
-    poly_mm = _panel_polygon_mm(entry)
+def _render_coma_preview_layer(work, page, entry, canvas_size: tuple[int, int], dpi: int) -> ExportLayer | None:
+    poly_mm = _coma_polygon_mm(entry)
     bbox = _points_bbox(poly_mm)
     if bbox is None or not work.work_dir:
         return None
-    source_path = _panel_preview_source(Path(work.work_dir), page.id, entry)
+    source_path = _coma_preview_source(Path(work.work_dir), page.id, entry)
     if source_path is None:
         return None
     source = _safe_load_image(source_path)
@@ -682,8 +682,8 @@ def _render_panel_preview_layer(work, page, entry, canvas_size: tuple[int, int],
     return ExportLayer("render", canvas.image, canvas.left, canvas.top)
 
 
-def _render_panel_mask(entry, canvas_height_px: int, dpi: int) -> ExportMask | None:
-    poly_mm = _panel_polygon_mm(entry)
+def _render_coma_mask(entry, canvas_height_px: int, dpi: int) -> ExportMask | None:
+    poly_mm = _coma_polygon_mm(entry)
     bbox = _points_bbox(poly_mm)
     if bbox is None or len(poly_mm) < 3:
         return None
@@ -1263,24 +1263,24 @@ def build_page_layers(work, page, options: ExportOptions) -> list[ExportLayer]:
         raster_layers = []
     layers.extend(raster_layers)
 
-    for panel in sorted(page.panels, key=lambda candidate: int(getattr(candidate, "z_order", 0))):
-        panel_group = _panel_root_group_path(panel)
-        content_group = _panel_content_group_path(panel)
+    for panel in sorted(page.comas, key=lambda candidate: int(getattr(candidate, "z_order", 0))):
+        coma_group = _coma_root_group_path(panel)
+        content_group = _coma_content_group_path(panel)
         if options.include_white_margin and getattr(panel.white_margin, "enabled", False):
-            wm_layer = _draw_panel_white_margin_layer(panel, canvas_size[1], dpi)
+            wm_layer = _draw_coma_white_margin_layer(panel, canvas_size[1], dpi)
             if wm_layer is not None:
-                layers.append(replace(wm_layer, group_path=panel_group))
-        bg_layer = _draw_panel_background_layer(panel, canvas_size[1], dpi)
+                layers.append(replace(wm_layer, group_path=coma_group))
+        bg_layer = _draw_coma_background_layer(panel, canvas_size[1], dpi)
         if bg_layer is not None:
             layers.append(replace(bg_layer, group_path=content_group))
-        if options.include_panel_previews:
-            render_layer = _render_panel_preview_layer(work, page, panel, canvas_size, dpi)
+        if options.include_coma_previews:
+            render_layer = _render_coma_preview_layer(work, page, panel, canvas_size, dpi)
             if render_layer is not None:
                 layers.append(replace(render_layer, group_path=content_group))
         if options.include_border and getattr(panel.border, "visible", False):
-            border_layer = _draw_panel_border_layer(panel, canvas_size[1], dpi)
+            border_layer = _draw_coma_border_layer(panel, canvas_size[1], dpi)
             if border_layer is not None:
-                layers.append(replace(border_layer, group_path=panel_group))
+                layers.append(replace(border_layer, group_path=coma_group))
 
     layers.extend(_gp_layers(work, page, canvas_size, dpi))
 
@@ -1339,14 +1339,14 @@ def _crop_layers(
     return (out, (crop_right - crop_left, crop_bottom - crop_top))
 
 
-def _panel_group_masks(work, page, options: ExportOptions) -> dict[tuple[str, ...], ExportMask]:
+def _coma_group_masks(work, page, options: ExportOptions) -> dict[tuple[str, ...], ExportMask]:
     dpi = _dpi(work.paper, options)
     canvas_size = _page_canvas_size_px(work, page, options)
     masks: dict[tuple[str, ...], ExportMask] = {}
-    for panel in sorted(page.panels, key=lambda candidate: int(getattr(candidate, "z_order", 0))):
-        mask = _render_panel_mask(panel, canvas_size[1], dpi)
+    for panel in sorted(page.comas, key=lambda candidate: int(getattr(candidate, "z_order", 0))):
+        mask = _render_coma_mask(panel, canvas_size[1], dpi)
         if mask is not None:
-            masks[_panel_content_group_path(panel)] = mask
+            masks[_coma_content_group_path(panel)] = mask
     return masks
 
 
@@ -1497,7 +1497,7 @@ def save_page_as_psd(work, page, options: ExportOptions, out_path: Path) -> bool
     if options.color_mode == "cmyk":
         raise RuntimeError("PSD レイヤー出力での CMYK は未対応です")
     layers = build_page_layers(work, page, options)
-    group_masks = _panel_group_masks(work, page, options)
+    group_masks = _coma_group_masks(work, page, options)
     layers = [_convert_layer_mode_rgba(layer, options.color_mode) for layer in layers]
     crop_box = _area_rect_px(work.paper, options, is_left_half=_is_left_half_page(work, page))
     if options.area != "canvas":

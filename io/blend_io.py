@@ -3,7 +3,7 @@
 Phase 1 (overview 再設計): モデル変更あり。
 - **work.blend** — 全ページの 2D データを載せるマスター .blend。起動時はこれが
   mainfile。overview 編集ホーム。
-- **panel_NNN.blend** — 各コマの 3D シーン。コマ編集モード時のみ mainfile。
+- **cNN.blend** — 各コマの 3D シーン。コマ編集モード時のみ mainfile。
 
 モード遷移は「現在の mainfile を save_as_mainfile で当該 .blend として保存」
 →「切替先の .blend を open_mainfile で開く」の 2 段で行う。以前の ``page.blend``
@@ -83,25 +83,25 @@ def work_blend_exists(work_dir: Path) -> bool:
     return paths.work_blend_path(Path(work_dir)).is_file()
 
 
-# ---------- panel_NNN.blend (コマ 3D) ----------
+# ---------- cNN.blend (コマ 3D) ----------
 
 
-def save_panel_blend(work_dir: Path, page_id: str, panel_index: int) -> bool:
-    if not paths.is_valid_page_id(page_id):
+def save_coma_blend(work_dir: Path, page_id: str, coma_id: str) -> bool:
+    if not paths.is_valid_page_id(page_id) or not paths.is_valid_coma_id(coma_id):
         return False
-    return save_current_as(paths.panel_blend_path(Path(work_dir), page_id, panel_index))
+    return save_current_as(paths.coma_blend_path(Path(work_dir), page_id, coma_id))
 
 
-def open_panel_blend(work_dir: Path, page_id: str, panel_index: int) -> bool:
-    if not paths.is_valid_page_id(page_id):
+def open_coma_blend(work_dir: Path, page_id: str, coma_id: str) -> bool:
+    if not paths.is_valid_page_id(page_id) or not paths.is_valid_coma_id(coma_id):
         return False
-    return open_mainfile(paths.panel_blend_path(Path(work_dir), page_id, panel_index))
+    return open_mainfile(paths.coma_blend_path(Path(work_dir), page_id, coma_id))
 
 
-def panel_blend_exists(work_dir: Path, page_id: str, panel_index: int) -> bool:
-    if not paths.is_valid_page_id(page_id):
+def coma_blend_exists(work_dir: Path, page_id: str, coma_id: str) -> bool:
+    if not paths.is_valid_page_id(page_id) or not paths.is_valid_coma_id(coma_id):
         return False
-    return paths.panel_blend_path(Path(work_dir), page_id, panel_index).is_file()
+    return paths.coma_blend_path(Path(work_dir), page_id, coma_id).is_file()
 
 
 def current_mainfile_path() -> Path | None:

@@ -19,38 +19,38 @@ _logger = log.get_logger(__name__)
 
 
 def _update_all_bg_opacity(self, context) -> None:
-    from ..utils import panel_camera
+    from ..utils import coma_camera
 
-    panel_camera.set_background_images_opacity(context, float(self.bg_images_opacity))
+    coma_camera.set_background_images_opacity(context, float(self.bg_images_opacity))
 
 
 def _update_all_bg_scale(self, context) -> None:
-    from ..utils import panel_camera
+    from ..utils import coma_camera
 
-    panel_camera.set_background_images_scale(context, float(self.bg_images_scale))
-    panel_camera.update_render_border_from_current_panel(context)
+    coma_camera.set_background_images_scale(context, float(self.bg_images_scale))
+    coma_camera.update_render_border_from_current_coma(context)
 
 
 def _update_name_bg_opacity(self, context) -> None:
-    from ..utils import panel_camera
+    from ..utils import coma_camera
 
-    panel_camera.set_background_images_properties(
+    coma_camera.set_background_images_properties(
         context, "ネーム", opacity=float(self.name_bg_images_opacity)
     )
 
 
 def _update_koma_bg_opacity(self, context) -> None:
-    from ..utils import panel_camera
+    from ..utils import coma_camera
 
-    panel_camera.set_background_images_properties(
+    coma_camera.set_background_images_properties(
         context, "コマ", opacity=float(self.koma_bg_images_opacity)
     )
 
 
 def _update_name_show_all_pages(self, context) -> None:
-    from ..utils import panel_camera
+    from ..utils import coma_camera
 
-    panel_camera.set_page_reference_visibility(
+    coma_camera.set_page_reference_visibility(
         context,
         show_all=bool(self.name_show_all_pages),
     )
@@ -70,65 +70,65 @@ def _update_subsurf_realtime(self, _context) -> None:
 
 
 def _update_hatching_visible(self, context) -> None:
-    from ..utils import panel_camera
+    from ..utils import coma_camera
 
-    panel_camera.set_background_image_visibility(
+    coma_camera.set_background_image_visibility(
         context, "ハッチング間隔.png", bool(self.hatching_visible)
     )
 
 
 def _update_hatching_rotation(self, context) -> None:
-    from ..utils import panel_camera
+    from ..utils import coma_camera
 
-    panel_camera.set_background_image_rotation(
+    coma_camera.set_background_image_rotation(
         context, "ハッチング間隔.png", float(self.hatching_rotation)
     )
 
 
 def _update_koma_depth(self, context) -> None:
-    from ..utils import panel_camera
+    from ..utils import coma_camera
 
-    panel_camera.set_koma_background_depth(context, back=bool(self.koma_depth))
+    coma_camera.set_koma_background_depth(context, back=bool(self.koma_depth))
 
 
 def _update_world_background_camera_only(self, context) -> None:
-    from ..utils import panel_camera
+    from ..utils import coma_camera
 
-    panel_camera.sync_world_background_color(context)
-    panel_camera.update_view(context)
+    coma_camera.sync_world_background_color(context)
+    coma_camera.update_view(context)
 
 
 def _update_solid_background(self, context) -> None:
-    from ..utils import panel_camera
+    from ..utils import coma_camera
 
-    panel_camera.view_camera_in_viewports(context)
+    coma_camera.view_camera_in_viewports(context)
 
 
 def _update_fisheye_mode(self, context) -> None:
-    from ..utils import panel_camera
+    from ..utils import coma_camera
 
-    panel_camera.apply_fisheye_mode(context)
+    coma_camera.apply_fisheye_mode(context)
 
 
 def _update_reduction_mode(self, context) -> None:
-    from ..utils import panel_camera
+    from ..utils import coma_camera
 
-    panel_camera.apply_reduction_mode(context)
+    coma_camera.apply_reduction_mode(context)
 
 
 def _update_preview_scale(self, context) -> None:
-    from ..utils import panel_camera
+    from ..utils import coma_camera
 
-    panel_camera.apply_reduction_mode(context)
+    coma_camera.apply_reduction_mode(context)
 
 
 def _update_resolution_index(self, context) -> None:
-    from ..utils import panel_camera
+    from ..utils import coma_camera
 
-    panel_camera.apply_selected_resolution_setting(context)
+    coma_camera.apply_selected_resolution_setting(context)
 
 
-class BNamePanelCameraAngleItem(bpy.types.PropertyGroup):
+class BNameComaCameraAngleItem(bpy.types.PropertyGroup):
     """カメラ位置・画角・下絵スケールを保存するアングルプリセット."""
 
     name: StringProperty(name="アングル名", default="Angle")  # type: ignore[valid-type]
@@ -142,7 +142,7 @@ class BNamePanelCameraAngleItem(bpy.types.PropertyGroup):
     bg_images_scale: FloatProperty(name="下絵スケール", default=1.0, min=0.1, max=10.0)  # type: ignore[valid-type]
 
 
-class BNamePanelCameraResolutionSetting(bpy.types.PropertyGroup):
+class BNameComaCameraResolutionSetting(bpy.types.PropertyGroup):
     """カメラ出力解像度プリセット."""
 
     name: StringProperty(name="名前", default="新規原稿サイズ")  # type: ignore[valid-type]
@@ -150,10 +150,10 @@ class BNamePanelCameraResolutionSetting(bpy.types.PropertyGroup):
     resolution_y: IntProperty(name="高さ", default=1080, min=1)  # type: ignore[valid-type]
 
 
-class BNamePanelCameraSettings(bpy.types.PropertyGroup):
+class BNameComaCameraSettings(bpy.types.PropertyGroup):
     """参照スクリプトのカメラ操作パネル相当の Scene 設定."""
 
-    camera_angles: CollectionProperty(type=BNamePanelCameraAngleItem)  # type: ignore[valid-type]
+    camera_angles: CollectionProperty(type=BNameComaCameraAngleItem)  # type: ignore[valid-type]
     camera_angles_index: IntProperty(name="アングルIndex", default=0, min=0)  # type: ignore[valid-type]
 
     bg_images_opacity: FloatProperty(
@@ -241,46 +241,46 @@ class BNamePanelCameraSettings(bpy.types.PropertyGroup):
 
 
 _CLASSES = (
-    BNamePanelCameraAngleItem,
-    BNamePanelCameraResolutionSetting,
-    BNamePanelCameraSettings,
+    BNameComaCameraAngleItem,
+    BNameComaCameraResolutionSetting,
+    BNameComaCameraSettings,
 )
 
 
 def register() -> None:
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
-    bpy.types.Scene.bname_panel_camera_settings = PointerProperty(type=BNamePanelCameraSettings)
-    bpy.types.Scene.bname_panel_camera_resolution_settings = CollectionProperty(
-        type=BNamePanelCameraResolutionSetting
+    bpy.types.Scene.bname_coma_camera_settings = PointerProperty(type=BNameComaCameraSettings)
+    bpy.types.Scene.bname_coma_camera_resolution_settings = CollectionProperty(
+        type=BNameComaCameraResolutionSetting
     )
-    bpy.types.Scene.bname_panel_camera_resolution_settings_index = IntProperty(
+    bpy.types.Scene.bname_coma_camera_resolution_settings_index = IntProperty(
         name="Index",
         default=0,
         min=0,
         update=_update_resolution_index,
     )
-    bpy.types.Scene.bname_panel_camera_fisheye_layout_mode = BoolProperty(
+    bpy.types.Scene.bname_coma_camera_fisheye_layout_mode = BoolProperty(
         name="魚眼モード",
         default=False,
         update=_update_fisheye_mode,
     )
-    bpy.types.Scene.bname_panel_camera_reduction_mode = BoolProperty(
+    bpy.types.Scene.bname_coma_camera_reduction_mode = BoolProperty(
         name="縮小モード",
         default=False,
         update=_update_reduction_mode,
     )
-    bpy.types.Scene.bname_panel_camera_original_resolution_x = IntProperty(
+    bpy.types.Scene.bname_coma_camera_original_resolution_x = IntProperty(
         name="Original Resolution X",
         default=0,
         min=0,
     )
-    bpy.types.Scene.bname_panel_camera_original_resolution_y = IntProperty(
+    bpy.types.Scene.bname_coma_camera_original_resolution_y = IntProperty(
         name="Original Resolution Y",
         default=0,
         min=0,
     )
-    bpy.types.Scene.bname_panel_camera_preview_scale_percentage = FloatProperty(
+    bpy.types.Scene.bname_coma_camera_preview_scale_percentage = FloatProperty(
         name="縮小率",
         default=12.5,
         min=1.0,
@@ -288,33 +288,33 @@ def register() -> None:
         subtype="PERCENTAGE",
         update=_update_preview_scale,
     )
-    bpy.types.Scene.bname_panel_camera_lens = FloatProperty(
+    bpy.types.Scene.bname_coma_camera_lens = FloatProperty(
         name="透視投影の焦点距離",
         default=35.0,
         min=1.0,
         max=1000.0,
     )
-    bpy.types.Scene.bname_panel_camera_fisheye_fov = FloatProperty(
+    bpy.types.Scene.bname_coma_camera_fisheye_fov = FloatProperty(
         name="魚眼視野角",
         default=3.1415927,
         min=1.7453293,
         max=6.2831855,
     )
-    _logger.debug("panel_camera registered")
+    _logger.debug("coma_camera registered")
 
 
 def unregister() -> None:
     for attr in (
-        "bname_panel_camera_fisheye_fov",
-        "bname_panel_camera_lens",
-        "bname_panel_camera_preview_scale_percentage",
-        "bname_panel_camera_original_resolution_y",
-        "bname_panel_camera_original_resolution_x",
-        "bname_panel_camera_reduction_mode",
-        "bname_panel_camera_fisheye_layout_mode",
-        "bname_panel_camera_resolution_settings_index",
-        "bname_panel_camera_resolution_settings",
-        "bname_panel_camera_settings",
+        "bname_coma_camera_fisheye_fov",
+        "bname_coma_camera_lens",
+        "bname_coma_camera_preview_scale_percentage",
+        "bname_coma_camera_original_resolution_y",
+        "bname_coma_camera_original_resolution_x",
+        "bname_coma_camera_reduction_mode",
+        "bname_coma_camera_fisheye_layout_mode",
+        "bname_coma_camera_resolution_settings_index",
+        "bname_coma_camera_resolution_settings",
+        "bname_coma_camera_settings",
     ):
         try:
             delattr(bpy.types.Scene, attr)

@@ -256,8 +256,8 @@ class KeymapState:
         _add("bname.gp_cut_to_new_layer", "X", ctrl=True)
         _add("bname.gp_paste_to_new_layer", "V", ctrl=True)
         # F/G/T → B-Name ツール (GP モードでも先取り)
-        _add("bname.panel_knife_cut", "F")
-        _add("bname.panel_edge_move", "G")
+        _add("bname.coma_knife_cut", "F")
+        _add("bname.coma_edge_move", "G")
         _add("bname.text_tool", "T")
 
     def _populate_window_overrides(self, km) -> None:
@@ -293,16 +293,16 @@ class KeymapState:
 
         # Z/X → Undo/Redo、E → 消しゴム切替、F/G/K/T → B-Name ツール (Window kc に登録して
         # 他アドオンに先取りさせる)。
-        # 注: exit_panel_mode の Esc は 3D View kc のみに限定し、Window kc には
+        # 注: exit_coma_mode の Esc は 3D View kc のみに限定し、Window kc には
         # 登録しない。Window kc に Esc を載せると Outliner / Image Editor 等の
-        # area で MODE_PANEL 中に Esc を押した際、本来期待される area 固有の
+        # area で MODE_COMA 中に Esc を押した際、本来期待される area 固有の
         # cancel 動作 (検索キャンセル等) を奪ってしまうため。
         for op_id, key in (
             ("bname.undo", "Z"),
             ("bname.redo", "X"),
             ("bname.toggle_eraser_brush", "E"),
-            ("bname.panel_knife_cut", "F"),
-            ("bname.panel_edge_move", "G"),
+            ("bname.coma_knife_cut", "F"),
+            ("bname.coma_edge_move", "G"),
             ("bname.layer_move_tool", "K"),
             ("bname.text_tool", "T"),
         ):
@@ -368,9 +368,9 @@ class KeymapState:
         _add("bname.view_navigate", _key("key_navigate", "SPACE"))
 
         # F → 枠線カットツール (CSP 互換)
-        _add("bname.panel_knife_cut", "F")
+        _add("bname.coma_knife_cut", "F")
         # G → 枠線選択ツール
-        _add("bname.panel_edge_move", "G")
+        _add("bname.coma_edge_move", "G")
         # K → レイヤー移動ツール
         _add("bname.layer_move_tool", "K")
         # T → テキストツール
@@ -381,9 +381,9 @@ class KeymapState:
         # E → Eraser Hard / Eraser Stroke 切替 (GP描画中のみ実行)
         _add("bname.toggle_eraser_brush", "E")
         # Esc → コマ編集モードを抜けて全ページ一覧 (work.blend) に戻る
-        # poll が MODE_PANEL を要求するため、紙面編集モード中は Blender 既定の
+        # poll が MODE_COMA を要求するため、紙面編集モード中は Blender 既定の
         # Esc 動作が走り (kmi が match しても poll で skip される)、干渉しない。
-        _add("bname.exit_panel_mode", "ESC")
+        _add("bname.exit_coma_mode", "ESC")
 
         # Ctrl + ホイール → 1 ステップズーム (固定)
         kmi = _add("bname.view_zoom_step", "WHEELUPMOUSE", ctrl=True)
@@ -407,7 +407,7 @@ class KeymapState:
         # operator 側で PASS_THROUGH し、Blender 標準のオブジェクト選択は妨げない。
         _add("bname.page_pick_viewport", "LEFTMOUSE")
         # ダブルクリック → コマ編集モードへ (固定)
-        _add("bname.enter_panel_mode", "LEFTMOUSE", value="DOUBLE_CLICK")
+        _add("bname.enter_coma_mode", "LEFTMOUSE", value="DOUBLE_CLICK")
 
         # preferences 設定可能なショートカット
         s, c, a = _mods("mod_set_mode_object")
@@ -467,11 +467,11 @@ class KeymapState:
         if kc_addon is None:
             return 0
         bname_idnames = {
-            "bname.panel_knife_cut",
-            "bname.panel_edge_move",
+            "bname.coma_knife_cut",
+            "bname.coma_edge_move",
             "bname.layer_move_tool",
             "bname.text_tool",
-            "bname.exit_panel_mode",
+            "bname.exit_coma_mode",
         }
         target_keys = set(self._BNAME_RESERVED_SINGLE_KEYS)
         disabled = 0

@@ -1,7 +1,7 @@
 """ページエントリの PropertyGroup.
 
 pages.json の各ページ要素に対応する軽量データモデル。コマ情報本体は
-Phase 2 で追加される panel.py に分離し、ここではページ単位の識別と
+coma.py に分離し、ここではページ単位の識別と
 見開き情報のみ保持する。
 """
 
@@ -18,7 +18,7 @@ from bpy.props import (
 
 from ..utils import log
 from .balloon import BNameBalloonEntry
-from .panel import BNamePanelEntry
+from .coma import BNameComaEntry
 from .text_entry import BNameTextEntry
 
 _logger = log.get_logger(__name__)
@@ -50,7 +50,7 @@ class BNamePageEntry(bpy.types.PropertyGroup):
     # --- 識別子 ---
     id: StringProperty(  # type: ignore[valid-type]
         name="ページ ID",
-        description="pages/NNNN/ の NNNN または NNNN-MMMM (見開き)",
+        description="pNNNN または pNNNN-NNNN (見開き)",
         default="",
     )
     title: StringProperty(  # type: ignore[valid-type]
@@ -59,7 +59,7 @@ class BNamePageEntry(bpy.types.PropertyGroup):
     )
     dir_rel: StringProperty(  # type: ignore[valid-type]
         name="格納ディレクトリ (相対)",
-        description="作品ルートからの相対パス (例: pages/0001/)",
+        description="作品ルートからの相対パス (例: p0001/)",
         default="",
     )
 
@@ -90,7 +90,7 @@ class BNamePageEntry(bpy.types.PropertyGroup):
         name="ページサムネイル (相対パス)",
         default="",
     )
-    panel_count: IntProperty(  # type: ignore[valid-type]
+    coma_count: IntProperty(  # type: ignore[valid-type]
         name="コマ数",
         default=0,
         min=0,
@@ -124,8 +124,8 @@ class BNamePageEntry(bpy.types.PropertyGroup):
     )
 
     # --- コマ一覧 ---
-    panels: CollectionProperty(type=BNamePanelEntry)  # type: ignore[valid-type]
-    active_panel_index: IntProperty(  # type: ignore[valid-type]
+    comas: CollectionProperty(type=BNameComaEntry)  # type: ignore[valid-type]
+    active_coma_index: IntProperty(  # type: ignore[valid-type]
         name="アクティブコマ",
         default=-1,
         min=-1,

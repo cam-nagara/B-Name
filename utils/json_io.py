@@ -5,7 +5,7 @@
 - アトミック書込み: 同ディレクトリの一時ファイルへ書いてから rename
 
 JSON ファイルは .bname フォルダ内の work.json / pages.json / page.json /
-panel_NNN.json / imported.json で共通利用する。
+cNN.json / imported.json で共通利用する。
 """
 
 from __future__ import annotations

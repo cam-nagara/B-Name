@@ -9,15 +9,15 @@ from bpy.props import BoolProperty, FloatVectorProperty
 from bpy.types import Operator
 from mathutils import Vector
 
-from ..core.mode import MODE_PANEL, get_mode
+from ..core.mode import MODE_COMA, get_mode
 from ..core.work import get_work
-from ..utils import log, panel_camera
+from ..utils import log, coma_camera
 
 _logger = log.get_logger(__name__)
 
 
-def _is_panel_mode(context) -> bool:
-    return get_mode(context) == MODE_PANEL
+def _is_coma_mode(context) -> bool:
+    return get_mode(context) == MODE_COMA
 
 
 def _camera(context):
@@ -28,7 +28,7 @@ def _camera(context):
 
 def _settings(context):
     scene = getattr(context, "scene", None)
-    return getattr(scene, "bname_panel_camera_settings", None) if scene is not None else None
+    return getattr(scene, "bname_coma_camera_settings", None) if scene is not None else None
 
 
 def _calculate_shift_drag(
@@ -55,18 +55,18 @@ def _calculate_shift_drag(
     return next_shift, shift_anchor, mouse_anchor, fine_adjust_next
 
 
-class BNAME_OT_panel_camera_ensure(Operator):
-    bl_idname = "bname.panel_camera_ensure"
+class BNAME_OT_coma_camera_ensure(Operator):
+    bl_idname = "bname.coma_camera_ensure"
     bl_label = "コマ編集カメラを用意"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
     def poll(cls, context):
-        return _is_panel_mode(context)
+        return _is_coma_mode(context)
 
     def execute(self, context):
         try:
-            panel_camera.ensure_panel_camera_scene(context)
+            coma_camera.ensure_coma_camera_scene(context)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("panel camera ensure failed")
             self.report({"ERROR"}, f"カメラ準備に失敗: {exc}")
@@ -74,68 +74,68 @@ class BNAME_OT_panel_camera_ensure(Operator):
         return {"FINISHED"}
 
 
-class BNAME_OT_panel_camera_sync_references(Operator):
-    bl_idname = "bname.panel_camera_sync_references"
+class BNAME_OT_coma_camera_sync_references(Operator):
+    bl_idname = "bname.coma_camera_sync_references"
     bl_label = "下絵を生成・同期"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
     def poll(cls, context):
         work = get_work(context)
-        return _is_panel_mode(context) and work is not None and work.loaded
+        return _is_coma_mode(context) and work is not None and work.loaded
 
     def execute(self, context):
         try:
-            panel_camera.ensure_panel_camera_scene(context, generate_references=True)
+            coma_camera.ensure_coma_camera_scene(context, generate_references=True)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("panel camera reference sync failed")
             self.report({"ERROR"}, f"下絵同期に失敗: {exc}")
             return {"CANCELLED"}
-        if panel_camera.camera_background_count(context) <= 0 and not panel_camera.can_render_references():
+        if coma_camera.camera_background_count(context) <= 0 and not coma_camera.can_render_references():
             self.report({"WARNING"}, "Pillow が無いため下絵を生成できません。既存PNGも見つかりませんでした")
             return {"CANCELLED"}
         self.report({"INFO"}, "コマ編集カメラの下絵を同期しました")
         return {"FINISHED"}
 
 
-class BNAME_OT_panel_camera_toggle_all_backgrounds(Operator):
-    bl_idname = "bname.panel_camera_toggle_all_backgrounds"
+class BNAME_OT_coma_camera_toggle_all_backgrounds(Operator):
+    bl_idname = "bname.coma_camera_toggle_all_backgrounds"
     bl_label = "全下絵を表示/非表示"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
     def poll(cls, context):
-        return _is_panel_mode(context) and _camera(context) is not None
+        return _is_coma_mode(context) and _camera(context) is not None
 
     def execute(self, context):
-        if panel_camera.camera_background_count(context) <= 0:
+        if coma_camera.camera_background_count(context) <= 0:
             return {"CANCELLED"}
-        visible = panel_camera.toggle_all_backgrounds(context)
+        visible = coma_camera.toggle_all_backgrounds(context)
         settings = _settings(context)
         if settings is not None:
             settings.name_visible = visible
             settings.koma_visible = visible
-            panel_camera.set_page_reference_visibility(
+            coma_camera.set_page_reference_visibility(
                 context,
                 show_all=bool(getattr(settings, "name_show_all_pages", False)),
             )
         return {"FINISHED"}
 
 
-class BNAME_OT_panel_camera_toggle_name_backgrounds(Operator):
-    bl_idname = "bname.panel_camera_toggle_name_backgrounds"
+class BNAME_OT_coma_camera_toggle_name_backgrounds(Operator):
+    bl_idname = "bname.coma_camera_toggle_name_backgrounds"
     bl_label = "ネーム下絵を表示/非表示"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
     def poll(cls, context):
-        return _is_panel_mode(context) and _camera(context) is not None
+        return _is_coma_mode(context) and _camera(context) is not None
 
     def execute(self, context):
-        visible = panel_camera.toggle_backgrounds_by_kind(context, "name")
+        visible = coma_camera.toggle_backgrounds_by_kind(context, "name")
         settings = _settings(context)
         if settings is not None:
-            panel_camera.set_page_reference_visibility(
+            coma_camera.set_page_reference_visibility(
                 context,
                 show_all=bool(getattr(settings, "name_show_all_pages", False)),
             )
@@ -143,59 +143,59 @@ class BNAME_OT_panel_camera_toggle_name_backgrounds(Operator):
         return {"FINISHED"}
 
 
-class BNAME_OT_panel_camera_toggle_koma_backgrounds(Operator):
-    bl_idname = "bname.panel_camera_toggle_koma_backgrounds"
+class BNAME_OT_coma_camera_toggle_koma_backgrounds(Operator):
+    bl_idname = "bname.coma_camera_toggle_koma_backgrounds"
     bl_label = "コマ下絵を表示/非表示"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
     def poll(cls, context):
-        return _is_panel_mode(context) and _camera(context) is not None
+        return _is_coma_mode(context) and _camera(context) is not None
 
     def execute(self, context):
-        visible = panel_camera.toggle_backgrounds_by_kind(context, "koma")
+        visible = coma_camera.toggle_backgrounds_by_kind(context, "koma")
         self.report({"INFO"}, "コマ下絵: 表示" if visible else "コマ下絵: 非表示")
         return {"FINISHED"}
 
 
-class BNAME_OT_panel_camera_reload_backgrounds(Operator):
-    bl_idname = "bname.panel_camera_reload_backgrounds"
+class BNAME_OT_coma_camera_reload_backgrounds(Operator):
+    bl_idname = "bname.coma_camera_reload_backgrounds"
     bl_label = "すべての下絵を再読込"
     bl_options = {"REGISTER"}
 
     @classmethod
     def poll(cls, context):
-        return _is_panel_mode(context) and _camera(context) is not None
+        return _is_coma_mode(context) and _camera(context) is not None
 
     def execute(self, context):
-        count = panel_camera.reload_background_images(context)
-        panel_camera.update_view(context)
+        count = coma_camera.reload_background_images(context)
+        coma_camera.update_view(context)
         self.report({"INFO"}, f"{count}件の下絵を再読込しました")
         return {"FINISHED"}
 
 
-class BNAME_OT_panel_camera_update_view(Operator):
-    bl_idname = "bname.panel_camera_update_view"
+class BNAME_OT_coma_camera_update_view(Operator):
+    bl_idname = "bname.coma_camera_update_view"
     bl_label = "ビューを更新"
     bl_options = {"REGISTER"}
 
     @classmethod
     def poll(cls, context):
-        return _is_panel_mode(context)
+        return _is_coma_mode(context)
 
     def execute(self, context):
-        panel_camera.update_view(context)
+        coma_camera.update_view(context)
         return {"FINISHED"}
 
 
-class BNAME_OT_panel_camera_angle_add(Operator):
-    bl_idname = "bname.panel_camera_angle_add"
+class BNAME_OT_coma_camera_angle_add(Operator):
+    bl_idname = "bname.coma_camera_angle_add"
     bl_label = "カメラアングル追加"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
     def poll(cls, context):
-        return _is_panel_mode(context) and _camera(context) is not None
+        return _is_coma_mode(context) and _camera(context) is not None
 
     def execute(self, context):
         cam = _camera(context)
@@ -209,22 +209,22 @@ class BNAME_OT_panel_camera_angle_add(Operator):
         item.lens = float(getattr(cam.data, "lens", 35.0))
         item.shift_x = float(getattr(cam.data, "shift_x", 0.0))
         item.shift_y = float(getattr(cam.data, "shift_y", 0.0))
-        item.fisheye_layout_mode = bool(context.scene.bname_panel_camera_fisheye_layout_mode)
+        item.fisheye_layout_mode = bool(context.scene.bname_coma_camera_fisheye_layout_mode)
         item.fisheye_fov = float(getattr(cam.data, "fisheye_fov", math.pi))
         item.bg_images_scale = float(getattr(settings, "bg_images_scale", 1.0))
         settings.camera_angles_index = len(settings.camera_angles) - 1
         return {"FINISHED"}
 
 
-class BNAME_OT_panel_camera_angle_remove(Operator):
-    bl_idname = "bname.panel_camera_angle_remove"
+class BNAME_OT_coma_camera_angle_remove(Operator):
+    bl_idname = "bname.coma_camera_angle_remove"
     bl_label = "カメラアングル削除"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
     def poll(cls, context):
         settings = _settings(context)
-        return _is_panel_mode(context) and settings is not None and len(settings.camera_angles) > 0
+        return _is_coma_mode(context) and settings is not None and len(settings.camera_angles) > 0
 
     def execute(self, context):
         settings = _settings(context)
@@ -238,8 +238,8 @@ class BNAME_OT_panel_camera_angle_remove(Operator):
         return {"FINISHED"}
 
 
-class BNAME_OT_panel_camera_angle_apply(Operator):
-    bl_idname = "bname.panel_camera_angle_apply"
+class BNAME_OT_coma_camera_angle_apply(Operator):
+    bl_idname = "bname.coma_camera_angle_apply"
     bl_label = "カメラアングル適用"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -247,7 +247,7 @@ class BNAME_OT_panel_camera_angle_apply(Operator):
     def poll(cls, context):
         settings = _settings(context)
         return (
-            _is_panel_mode(context)
+            _is_coma_mode(context)
             and _camera(context) is not None
             and settings is not None
             and len(settings.camera_angles) > 0
@@ -269,61 +269,61 @@ class BNAME_OT_panel_camera_angle_apply(Operator):
         cam.data.lens = float(item.lens)
         if hasattr(cam.data, "fisheye_fov"):
             cam.data.fisheye_fov = float(item.fisheye_fov)
-        context.scene.bname_panel_camera_fisheye_fov = float(item.fisheye_fov)
-        context.scene.bname_panel_camera_lens = float(item.lens)
-        context.scene.bname_panel_camera_fisheye_layout_mode = bool(item.fisheye_layout_mode)
+        context.scene.bname_coma_camera_fisheye_fov = float(item.fisheye_fov)
+        context.scene.bname_coma_camera_lens = float(item.lens)
+        context.scene.bname_coma_camera_fisheye_layout_mode = bool(item.fisheye_layout_mode)
         settings.bg_images_scale = float(item.bg_images_scale)
-        panel_camera.update_render_border_from_current_panel(context)
+        coma_camera.update_render_border_from_current_coma(context)
         return {"FINISHED"}
 
 
-class BNAME_OT_panel_camera_resolution_add(Operator):
-    bl_idname = "bname.panel_camera_resolution_add"
+class BNAME_OT_coma_camera_resolution_add(Operator):
+    bl_idname = "bname.coma_camera_resolution_add"
     bl_label = "原稿サイズプリセット追加"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
     def poll(cls, context):
-        return _is_panel_mode(context)
+        return _is_coma_mode(context)
 
     def execute(self, context):
         scene = context.scene
-        coll = scene.bname_panel_camera_resolution_settings
+        coll = scene.bname_coma_camera_resolution_settings
         item = coll.add()
         item.name = f"Preset {len(coll)}"
         item.resolution_x = int(scene.render.resolution_x)
         item.resolution_y = int(scene.render.resolution_y)
-        scene.bname_panel_camera_resolution_settings_index = len(coll) - 1
+        scene.bname_coma_camera_resolution_settings_index = len(coll) - 1
         return {"FINISHED"}
 
 
-class BNAME_OT_panel_camera_resolution_remove(Operator):
-    bl_idname = "bname.panel_camera_resolution_remove"
+class BNAME_OT_coma_camera_resolution_remove(Operator):
+    bl_idname = "bname.coma_camera_resolution_remove"
     bl_label = "原稿サイズプリセット削除"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
     def poll(cls, context):
         scene = getattr(context, "scene", None)
-        coll = getattr(scene, "bname_panel_camera_resolution_settings", None) if scene else None
-        return _is_panel_mode(context) and coll is not None and len(coll) > 0
+        coll = getattr(scene, "bname_coma_camera_resolution_settings", None) if scene else None
+        return _is_coma_mode(context) and coll is not None and len(coll) > 0
 
     def execute(self, context):
         scene = context.scene
-        coll = scene.bname_panel_camera_resolution_settings
-        idx = int(scene.bname_panel_camera_resolution_settings_index)
+        coll = scene.bname_coma_camera_resolution_settings
+        idx = int(scene.bname_coma_camera_resolution_settings_index)
         if not (0 <= idx < len(coll)):
             return {"CANCELLED"}
         coll.remove(idx)
-        scene.bname_panel_camera_resolution_settings_index = min(
+        scene.bname_coma_camera_resolution_settings_index = min(
             max(0, idx - 1),
             max(0, len(coll) - 1),
         )
         return {"FINISHED"}
 
 
-class BNAME_OT_panel_camera_shift_drag(Operator):
-    bl_idname = "bname.panel_camera_shift_drag"
+class BNAME_OT_coma_camera_shift_drag(Operator):
+    bl_idname = "bname.coma_camera_shift_drag"
     bl_label = "カメラのシフトをビューで調整"
     bl_description = "カメラビュー上でドラッグしてカメラシフトを調整します"
     bl_options = {"REGISTER", "UNDO"}
@@ -339,7 +339,7 @@ class BNAME_OT_panel_camera_shift_drag(Operator):
         space = getattr(context, "space_data", None)
         rv3d = getattr(space, "region_3d", None)
         return (
-            _is_panel_mode(context)
+            _is_coma_mode(context)
             and area is not None
             and area.type == "VIEW_3D"
             and rv3d is not None
@@ -387,19 +387,19 @@ class BNAME_OT_panel_camera_shift_drag(Operator):
 
 
 _CLASSES = (
-    BNAME_OT_panel_camera_ensure,
-    BNAME_OT_panel_camera_sync_references,
-    BNAME_OT_panel_camera_toggle_all_backgrounds,
-    BNAME_OT_panel_camera_toggle_name_backgrounds,
-    BNAME_OT_panel_camera_toggle_koma_backgrounds,
-    BNAME_OT_panel_camera_reload_backgrounds,
-    BNAME_OT_panel_camera_update_view,
-    BNAME_OT_panel_camera_angle_add,
-    BNAME_OT_panel_camera_angle_remove,
-    BNAME_OT_panel_camera_angle_apply,
-    BNAME_OT_panel_camera_resolution_add,
-    BNAME_OT_panel_camera_resolution_remove,
-    BNAME_OT_panel_camera_shift_drag,
+    BNAME_OT_coma_camera_ensure,
+    BNAME_OT_coma_camera_sync_references,
+    BNAME_OT_coma_camera_toggle_all_backgrounds,
+    BNAME_OT_coma_camera_toggle_name_backgrounds,
+    BNAME_OT_coma_camera_toggle_koma_backgrounds,
+    BNAME_OT_coma_camera_reload_backgrounds,
+    BNAME_OT_coma_camera_update_view,
+    BNAME_OT_coma_camera_angle_add,
+    BNAME_OT_coma_camera_angle_remove,
+    BNAME_OT_coma_camera_angle_apply,
+    BNAME_OT_coma_camera_resolution_add,
+    BNAME_OT_coma_camera_resolution_remove,
+    BNAME_OT_coma_camera_shift_drag,
 )
 
 

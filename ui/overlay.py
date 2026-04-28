@@ -33,17 +33,17 @@ except ImportError:  # pragma: no cover - 古い Blender
     gpu_texture = None  # type: ignore
     _HAS_GPU_TEXTURE = False
 
-from ..core.mode import MODE_PAGE, MODE_PANEL, get_mode
+from ..core.mode import MODE_PAGE, MODE_COMA, get_mode
 from ..core.work import get_active_page, get_work
 from ..utils import border_geom, color_space, log, page_browser, text_style, viewport_colors
 from ..utils.geom import Rect, bleed_rect, mm_to_m
 from . import overlay_balloon
 from . import overlay_effect_line
-from . import overlay_panel_selection
+from . import overlay_coma_selection
 from . import overlay_shared
 from . import overlay_text
 from . import overlay_visibility
-from . import panel_preview_overlay
+from . import coma_preview_overlay
 
 _logger = log.get_logger(__name__)
 
@@ -471,7 +471,7 @@ def _draw_balloons(page, ox_mm: float = 0.0, oy_mm: float = 0.0) -> None:
         draw_rect_outline=_draw_rect_outline,
         draw_polygon_fill=_draw_polygon_fill,
         draw_polyline_loop=_draw_polyline_loop,
-        is_entry_visible=lambda entry: overlay_visibility.entry_in_visible_panel(page, entry),
+        is_entry_visible=lambda entry: overlay_visibility.entry_in_visible_coma(page, entry),
         active=active_guides,
     )
 
@@ -649,7 +649,7 @@ def _draw_text_in_rect(context, rect, entry_or_text, color=(0, 0, 0, 1)) -> None
             blf.draw(glyph_font_id, glyph.ch)
 
 
-def _edge_selection_targets_panel(work, page, wm) -> bool:
+def _edge_selection_targets_coma(work, page, wm) -> bool:
     if (
         wm is None
         or getattr(wm, "bname_edge_select_kind", "none")
@@ -657,16 +657,16 @@ def _edge_selection_targets_panel(work, page, wm) -> bool:
     ):
         return False
     page_index = int(getattr(wm, "bname_edge_select_page", -1))
-    panel_index = int(getattr(wm, "bname_edge_select_panel", -1))
+    coma_index = int(getattr(wm, "bname_edge_select_coma", -1))
     if not (0 <= page_index < len(work.pages)):
         return False
     selected_page = work.pages[page_index]
     if str(getattr(selected_page, "id", "") or "") != str(getattr(page, "id", "") or ""):
         return False
-    return 0 <= panel_index < len(getattr(page, "panels", []))
+    return 0 <= coma_index < len(getattr(page, "comas", []))
 
 
-def _draw_panels(
+def _draw_comas(
     work,
     page,
     ox_mm: float = 0.0,
@@ -686,20 +686,20 @@ def _draw_panels(
     active_page_idx = int(getattr(work, "active_page_index", -1))
     active_page = work.pages[active_page_idx] if 0 <= active_page_idx < len(work.pages) else None
     wm = getattr(bpy.context, "window_manager", None)
-    edge_selection_matches = _edge_selection_targets_panel(work, page, wm)
+    edge_selection_matches = _edge_selection_targets_coma(work, page, wm)
     is_active_page = (
-        active_kind == "panel"
+        active_kind == "coma"
         and not edge_selection_matches
         and active_page is not None
         and str(getattr(active_page, "id", "") or "") == str(getattr(page, "id", "") or "")
     )
     if is_active_page:
-        active_idx = int(getattr(page, "active_panel_index", -1))
-        if 0 <= active_idx < len(page.panels):
-            active_stem = str(getattr(page.panels[active_idx], "panel_stem", "") or "")
-    sorted_panels = sorted(page.panels, key=lambda p: p.z_order)
-    for entry in sorted_panels:
-        if not overlay_visibility.panel_visible(entry):
+        active_idx = int(getattr(page, "active_coma_index", -1))
+        if 0 <= active_idx < len(page.comas):
+            active_stem = str(getattr(page.comas[active_idx], "coma_id", "") or "")
+    sorted_comas = sorted(page.comas, key=lambda p: p.z_order)
+    for entry in sorted_comas:
+        if not overlay_visibility.coma_visible(entry):
             continue
         # ポリゴン頂点リスト (mm) を取得 — rect なら 4 隅、polygon なら vertices
         if entry.shape_type == "rect":
@@ -723,8 +723,8 @@ def _draw_panels(
                 poly,
                 (float(bg[0]), float(bg[1]), float(bg[2]), float(bg[3])),
             )
-        if getattr(entry, "panel_stem", "") != skip_preview_stem:
-            panel_preview_overlay.draw_panel_preview(
+        if getattr(entry, "coma_id", "") != skip_preview_stem:
+            coma_preview_overlay.draw_coma_preview(
                 work, page, entry, ox_mm=ox_mm, oy_mm=oy_mm
             )
         # 白フチ (枠線の外側) — 矩形のみ簡易対応 (polygon は外接矩形で近似)
@@ -742,9 +742,9 @@ def _draw_panels(
                 float(wm.color[2]), float(wm.color[3]),
             )
             _draw_rect_fill(outer, color)
-        is_active_panel = (
+        is_active_coma = (
             bool(active_stem)
-            and str(getattr(entry, "panel_stem", "") or "") == active_stem
+            and str(getattr(entry, "coma_id", "") or "") == active_stem
         )
         # 枠線 (mm 単位の太さ = ズーム連動、紙に追従)
         # 辺ごとに描画 (edge_styles に個別 override があればそれを優先)
@@ -775,7 +775,7 @@ def _draw_panels(
                 if loops is not None:
                     outer_loop, inner_loop = loops
                     _draw_stroke_band_fill(outer_loop, inner_loop, base_color)
-                    if is_active_panel:
+                    if is_active_coma:
                         segs = [
                             (poly[i], poly[(i + 1) % len(poly)])
                             for i in range(len(poly))
@@ -798,7 +798,7 @@ def _draw_panels(
                     color = base_color
                     w = base_width
                 _draw_segments_mm([seg], color, width_mm=w)
-        if is_active_panel:
+        if is_active_coma:
             segs = [
                 (poly[i], poly[(i + 1) % len(poly)])
                 for i in range(len(poly))
@@ -910,12 +910,12 @@ def _draw_page_overlay(
     if mode == MODE_PAGE and draw_image_layers:
         _draw_image_layers(context.scene)
 
-    # コマ枠 / フキダシ / テキスト。panel モードでは参照表示として描く。
-    if mode in (MODE_PAGE, MODE_PANEL) and page is not None:
+    # コマ枠 / フキダシ / テキスト。コマ編集モードでは参照表示として描く。
+    if mode in (MODE_PAGE, MODE_COMA) and page is not None:
         skip_stem = ""
-        if mode == MODE_PANEL:
-            skip_stem = getattr(context.scene, "bname_current_panel_stem", "")
-        _draw_panels(work, page, ox_mm=ox_mm, oy_mm=oy_mm, skip_preview_stem=skip_stem)
+        if mode == MODE_COMA:
+            skip_stem = getattr(context.scene, "bname_current_coma_id", "")
+        _draw_comas(work, page, ox_mm=ox_mm, oy_mm=oy_mm, skip_preview_stem=skip_stem)
         _draw_balloons(page, ox_mm=ox_mm, oy_mm=oy_mm)
         active_text_guides = False
         if getattr(context.scene, "bname_active_layer_kind", "") == "text":
@@ -933,7 +933,7 @@ def _draw_page_overlay(
             ox_mm=ox_mm,
             oy_mm=oy_mm,
             active=active_text_guides,
-            entry_visible=lambda entry: overlay_visibility.entry_in_visible_panel(page, entry),
+            entry_visible=lambda entry: overlay_visibility.entry_in_visible_coma(page, entry),
             draw_rect_fill=_draw_rect_fill,
             draw_rect_outline=_draw_rect_outline,
         )
@@ -1270,7 +1270,7 @@ def _draw_callback() -> None:
         return
     mode = get_mode(context)
     is_page_browser = page_browser.is_page_browser_area(context)
-    if mode == MODE_PANEL and not is_page_browser:
+    if mode == MODE_COMA and not is_page_browser:
         return
     paper = work.paper
     rects = overlay_shared.compute_paper_rects(paper)
@@ -1319,7 +1319,7 @@ def _draw_callback() -> None:
                 if highlight_active_page and i == active_idx:
                     active_highlight_rect = _page_highlight_rect(rects, ox, oy)
             _draw_page_highlight(active_highlight_rect)
-        elif mode == MODE_PANEL and len(work.pages) > 0:
+        elif mode == MODE_COMA and len(work.pages) > 0:
             from ..utils.page_grid import (
                 is_left_half_page as _is_left_half,
             )
@@ -1401,7 +1401,7 @@ def apply_bname_shading_mode(context=None) -> int:
     wm = ctx.window_manager
     if wm is None:
         return 0
-    target_light = "STUDIO" if get_mode(ctx) == MODE_PANEL else "FLAT"
+    target_light = "STUDIO" if get_mode(ctx) == MODE_COMA else "FLAT"
     count = 0
     for window in wm.windows:
         screen = getattr(window, "screen", None)
@@ -1582,7 +1582,7 @@ def _draw_callback_pixel() -> None:
                     page,
                     ox_mm=ox,
                     oy_mm=oy,
-                    entry_visible=lambda entry: overlay_visibility.entry_in_visible_panel(page, entry),
+                    entry_visible=lambda entry: overlay_visibility.entry_in_visible_coma(page, entry),
                     draw_text_in_rect=_draw_text_in_rect,
                 )
     else:
@@ -1611,11 +1611,11 @@ def _draw_callback_pixel() -> None:
                 page,
                 ox_mm=ox,
                 oy_mm=oy,
-                entry_visible=lambda entry: overlay_visibility.entry_in_visible_panel(page, entry),
+                entry_visible=lambda entry: overlay_visibility.entry_in_visible_coma(page, entry),
                 draw_text_in_rect=_draw_text_in_rect,
             )
     region, rv3d = _resolve_active_region(context)
-    overlay_panel_selection.draw(context, work, region, rv3d)
+    overlay_coma_selection.draw(context, work, region, rv3d)
 
 
 def _draw_work_info_texts_pixel(context, work, inner_rect, page_index: int,

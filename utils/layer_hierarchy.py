@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 PAGE_KIND = "page"
-PANEL_KIND = "panel"
+COMA_KIND = "coma"
 
 
 def page_stack_key(page) -> str:
     return str(getattr(page, "id", "") or "")
 
 
-def panel_stack_key(page, panel) -> str:
-    stem = getattr(panel, "panel_stem", "") or getattr(panel, "id", "")
+def coma_stack_key(page, panel) -> str:
+    stem = getattr(panel, "coma_id", "") or getattr(panel, "id", "")
     return f"{page_stack_key(page)}:{stem}"
 
 
@@ -20,7 +20,7 @@ def split_child_key(key: str) -> tuple[str, str]:
     return page_id, child_id if sep else ""
 
 
-def panel_polygon(panel) -> list[tuple[float, float]]:
+def coma_polygon(panel) -> list[tuple[float, float]]:
     if getattr(panel, "shape_type", "") == "rect":
         x = float(getattr(panel, "rect_x_mm", 0.0))
         y = float(getattr(panel, "rect_y_mm", 0.0))
@@ -49,12 +49,12 @@ def point_in_polygon(point: tuple[float, float], poly: list[tuple[float, float]]
     return inside
 
 
-def panel_containing_point(page, x_mm: float, y_mm: float):
+def coma_containing_point(page, x_mm: float, y_mm: float):
     """ページローカル座標を含む最前面コマを返す。見つからなければ None."""
     best = None
     best_z = None
-    for panel in getattr(page, "panels", []):
-        if not point_in_polygon((x_mm, y_mm), panel_polygon(panel)):
+    for panel in getattr(page, "comas", []):
+        if not point_in_polygon((x_mm, y_mm), coma_polygon(panel)):
             continue
         z = int(getattr(panel, "z_order", 0))
         if best is None or z > (best_z if best_z is not None else z - 1):

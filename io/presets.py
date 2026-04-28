@@ -113,8 +113,8 @@ def apply_preset_to_paper(preset: PaperPreset, paper) -> None:
 def apply_preset_to_work(preset: PaperPreset, work) -> None:
     apply_preset_to_paper(preset, work.paper)
     _apply_display_on_canvas(preset.data.get("displayOnCanvas", {}), work.work_info)
-    if "panelGap" in preset.data:
-        schema.panel_gap_from_dict(work.panel_gap, preset.data.get("panelGap", {}))
+    if "comaGap" in preset.data:
+        schema.coma_gap_from_dict(work.coma_gap, preset.data.get("comaGap", {}))
 
 
 def save_local_preset(work_dir: Path, work, name: str, description: str = "") -> Path:
@@ -132,7 +132,7 @@ def save_local_preset(work_dir: Path, work, name: str, description: str = "") ->
         "description": description,
         "paper": paper_data,
         "displayOnCanvas": _display_on_canvas_to_dict(work.work_info),
-        "panelGap": schema.panel_gap_to_dict(work.panel_gap),
+        "comaGap": schema.coma_gap_to_dict(work.coma_gap),
     }
     json_io.write_json(out, data)
     _logger.info("local preset saved: %s", out)

@@ -1,6 +1,6 @@
 """JSON スキーマの定義・バージョン・シリアライザ.
 
-work.json / pages.json / page.json / panel_NNN.json の構造を 1 箇所に
+work.json / pages.json / page.json / cNN.json の構造を 1 箇所に
 集約する。将来のフォーマット変更に備えて ``schemaVersion`` フィールドを
 各 JSON のトップレベルに付与する。
 
@@ -18,7 +18,7 @@ from ..utils import balloon_shapes, color_space
 WORK_SCHEMA_VERSION = 2
 PAGES_SCHEMA_VERSION = 1
 PAGE_SCHEMA_VERSION = 1
-PANEL_SCHEMA_VERSION = 1
+COMA_SCHEMA_VERSION = 1
 
 # ---------- 共通変換 ----------
 
@@ -280,17 +280,17 @@ def safe_area_from_dict(sa, data: dict[str, Any]) -> None:
     # 旧 opacity / blendMode フィールドが残っていても無視 (互換読込)
 
 
-# ---------- PanelGap ----------
+# ---------- ComaGap ----------
 
 
-def panel_gap_to_dict(pg) -> dict[str, Any]:
+def coma_gap_to_dict(pg) -> dict[str, Any]:
     return {
         "verticalMm": round(pg.vertical_mm, 3),
         "horizontalMm": round(pg.horizontal_mm, 3),
     }
 
 
-def panel_gap_from_dict(pg, data: dict[str, Any]) -> None:
+def coma_gap_from_dict(pg, data: dict[str, Any]) -> None:
     data = data or {}
     pg.vertical_mm = float(data.get("verticalMm", 7.3))
     pg.horizontal_mm = float(data.get("horizontalMm", 2.1))
@@ -356,7 +356,8 @@ def work_to_dict(work) -> dict[str, Any]:
         "workInfo": work_info_to_dict(work.work_info),
         "nombre": nombre_to_dict(work.nombre),
         "paper": paper_to_dict(work.paper),
-        "panelGap": panel_gap_to_dict(work.panel_gap),
+        "comaGap": coma_gap_to_dict(work.coma_gap),
+        "comaBlendTemplatePath": str(getattr(work, "coma_blend_template_path", "") or ""),
         "safeAreaOverlay": safe_area_to_dict(work.safe_area_overlay),
         "raster_layers": [
             raster_layer_to_dict(entry)
@@ -375,7 +376,9 @@ def work_from_dict(work, data: dict[str, Any]) -> None:
     work_info_from_dict(work.work_info, data.get("workInfo", {}))
     nombre_from_dict(work.nombre, data.get("nombre", {}))
     paper_from_dict(work.paper, data.get("paper", {}))
-    panel_gap_from_dict(work.panel_gap, data.get("panelGap", {}))
+    coma_gap_from_dict(work.coma_gap, data.get("comaGap", {}))
+    if hasattr(work, "coma_blend_template_path"):
+        work.coma_blend_template_path = str(data.get("comaBlendTemplatePath", "") or "")
     safe_area_from_dict(work.safe_area_overlay, data.get("safeAreaOverlay", {}))
     scene = _scene_from_work(work)
     raster_layers = getattr(scene, "bname_raster_layers", None) if scene is not None else None
@@ -410,8 +413,8 @@ def page_entry_to_dict(entry) -> dict[str, Any]:
         }
     if entry.thumbnail_rel:
         d["thumbnail"] = entry.thumbnail_rel
-    if entry.panel_count:
-        d["panelCount"] = int(entry.panel_count)
+    if entry.coma_count:
+        d["comaCount"] = int(entry.coma_count)
     return d
 
 
@@ -435,7 +438,7 @@ def page_entry_from_dict(entry, data: dict[str, Any]) -> None:
     entry.tombo_aligned = bool(tombo.get("aligned", True))
     entry.tombo_gap_mm = float(tombo.get("gapMm", -9.6))
     entry.thumbnail_rel = data.get("thumbnail", "")
-    entry.panel_count = int(data.get("panelCount", 0))
+    entry.coma_count = int(data.get("comaCount", 0))
 
 
 def pages_to_dict(work, *, last_modified: str = "") -> dict[str, Any]:
@@ -448,7 +451,7 @@ def pages_to_dict(work, *, last_modified: str = "") -> dict[str, Any]:
     }
 
 
-# ---------- Panel (border/white_margin/entry) ----------
+# ---------- Coma (border/white_margin/entry) ----------
 
 
 def _edge_override_to_dict(edge) -> dict[str, Any]:
@@ -484,7 +487,7 @@ def _edge_override_from_dict(edge, data: dict[str, Any]) -> None:
         edge.enabled = bool(data["enabled"])
 
 
-def panel_border_to_dict(border) -> dict[str, Any]:
+def coma_border_to_dict(border) -> dict[str, Any]:
     return {
         "style": border.style,
         "widthMm": round(border.width_mm, 3),
@@ -503,7 +506,7 @@ def panel_border_to_dict(border) -> dict[str, Any]:
     }
 
 
-def panel_border_from_dict(border, data: dict[str, Any]) -> None:
+def coma_border_from_dict(border, data: dict[str, Any]) -> None:
     data = data or {}
     border.style = data.get("style", "solid")
     border.width_mm = float(data.get("widthMm", 0.8))
@@ -519,7 +522,7 @@ def panel_border_from_dict(border, data: dict[str, Any]) -> None:
     _edge_override_from_dict(border.edge_left, per.get("left", {}))
 
 
-def panel_white_margin_to_dict(wm) -> dict[str, Any]:
+def coma_white_margin_to_dict(wm) -> dict[str, Any]:
     return {
         "enabled": bool(wm.enabled),
         "widthMm": round(wm.width_mm, 3),
@@ -533,7 +536,7 @@ def panel_white_margin_to_dict(wm) -> dict[str, Any]:
     }
 
 
-def panel_white_margin_from_dict(wm, data: dict[str, Any]) -> None:
+def coma_white_margin_from_dict(wm, data: dict[str, Any]) -> None:
     data = data or {}
     wm.enabled = bool(data.get("enabled", False))
     wm.width_mm = float(data.get("widthMm", 0.37))
@@ -545,12 +548,12 @@ def panel_white_margin_from_dict(wm, data: dict[str, Any]) -> None:
     _edge_override_from_dict(wm.edge_left, per.get("left", {}))
 
 
-def panel_entry_to_dict(entry) -> dict[str, Any]:
+def coma_entry_to_dict(entry) -> dict[str, Any]:
     d: dict[str, Any] = {
-        "schemaVersion": PANEL_SCHEMA_VERSION,
+        "schemaVersion": COMA_SCHEMA_VERSION,
         "id": entry.id,
         "title": entry.title,
-        "panelStem": entry.panel_stem,
+        "comaId": entry.coma_id,
         "shape": {
             "type": entry.shape_type,
             "rect": {
@@ -566,8 +569,8 @@ def panel_entry_to_dict(entry) -> dict[str, Any]:
         "visible": bool(getattr(entry, "visible", True)),
         "backgroundColor": color_to_hex(entry.background_color),
         "backgroundColorAlpha": round(entry.background_color[3], 3),
-        "border": panel_border_to_dict(entry.border),
-        "whiteMargin": panel_white_margin_to_dict(entry.white_margin),
+        "border": coma_border_to_dict(entry.border),
+        "whiteMargin": coma_white_margin_to_dict(entry.white_margin),
         "edgeStyles": [
             {
                 "edgeIndex": int(s.edge_index),
@@ -578,19 +581,19 @@ def panel_entry_to_dict(entry) -> dict[str, Any]:
             for s in entry.edge_styles
         ],
         "layerRefs": [r.layer_id for r in entry.layer_refs],
-        "panelGap": {
-            "verticalMm": round(entry.panel_gap_vertical_mm, 3),
-            "horizontalMm": round(entry.panel_gap_horizontal_mm, 3),
+        "comaGap": {
+            "verticalMm": round(entry.coma_gap_vertical_mm, 3),
+            "horizontalMm": round(entry.coma_gap_horizontal_mm, 3),
         },
     }
     return d
 
 
-def panel_entry_from_dict(entry, data: dict[str, Any]) -> None:
+def coma_entry_from_dict(entry, data: dict[str, Any]) -> None:
     data = data or {}
     entry.id = data.get("id", "")
     entry.title = data.get("title", "")
-    entry.panel_stem = data.get("panelStem", "")
+    entry.coma_id = data.get("comaId", "")
     shape = data.get("shape", {})
     entry.shape_type = shape.get("type", "rect")
     rect = shape.get("rect", {})
@@ -609,8 +612,8 @@ def panel_entry_from_dict(entry, data: dict[str, Any]) -> None:
         entry.visible = bool(data.get("visible", True))
     bg_alpha = float(data.get("backgroundColorAlpha", 0.0))
     entry.background_color = hex_to_rgba(data.get("backgroundColor", "#FFFFFF"), bg_alpha)
-    panel_border_from_dict(entry.border, data.get("border", {}))
-    panel_white_margin_from_dict(entry.white_margin, data.get("whiteMargin", {}))
+    coma_border_from_dict(entry.border, data.get("border", {}))
+    coma_white_margin_from_dict(entry.white_margin, data.get("whiteMargin", {}))
     entry.edge_styles.clear()
     for st in data.get("edgeStyles", []) or []:
         es = entry.edge_styles.add()
@@ -622,9 +625,9 @@ def panel_entry_from_dict(entry, data: dict[str, Any]) -> None:
     for lid in data.get("layerRefs", []):
         ref = entry.layer_refs.add()
         ref.layer_id = str(lid)
-    gap = data.get("panelGap", {})
-    entry.panel_gap_vertical_mm = float(gap.get("verticalMm", -1.0))
-    entry.panel_gap_horizontal_mm = float(gap.get("horizontalMm", -1.0))
+    gap = data.get("comaGap", {})
+    entry.coma_gap_vertical_mm = float(gap.get("verticalMm", -1.0))
+    entry.coma_gap_horizontal_mm = float(gap.get("horizontalMm", -1.0))
 
 
 # ---------- Balloon / Text (Phase 3) ----------
@@ -838,7 +841,7 @@ def text_entry_from_dict(entry, data: dict[str, Any]) -> None:
 def page_to_dict(page_entry) -> dict[str, Any]:
     """page.json (個別ページメタ) を書き出す.
 
-    page_entry は BNamePageEntry。panels / balloons / texts をシリアライズする。
+    page_entry は BNamePageEntry。comas / balloons / texts をシリアライズする。
     """
     return {
         "schemaVersion": PAGE_SCHEMA_VERSION,
@@ -847,10 +850,10 @@ def page_to_dict(page_entry) -> dict[str, Any]:
         "spread": bool(page_entry.spread),
         "offsetXMm": round(float(getattr(page_entry, "offset_x_mm", 0.0)), 3),
         "offsetYMm": round(float(getattr(page_entry, "offset_y_mm", 0.0)), 3),
-        "activePanelIndex": int(page_entry.active_panel_index),
+        "activeComaIndex": int(page_entry.active_coma_index),
         "activeBalloonIndex": int(page_entry.active_balloon_index),
         "activeTextIndex": int(page_entry.active_text_index),
-        "panels": [panel_entry_to_dict(p) for p in page_entry.panels],
+        "comas": [coma_entry_to_dict(p) for p in page_entry.comas],
         "balloons": [balloon_entry_to_dict(b) for b in page_entry.balloons],
         "texts": [text_entry_to_dict(t) for t in page_entry.texts],
     }
@@ -863,10 +866,10 @@ def page_from_dict(page_entry, data: dict[str, Any]) -> None:
         page_entry.title = data["title"]
     page_entry.offset_x_mm = float(data.get("offsetXMm", getattr(page_entry, "offset_x_mm", 0.0)))
     page_entry.offset_y_mm = float(data.get("offsetYMm", getattr(page_entry, "offset_y_mm", 0.0)))
-    page_entry.panels.clear()
-    for panel_data in data.get("panels", []):
-        entry = page_entry.panels.add()
-        panel_entry_from_dict(entry, panel_data)
+    page_entry.comas.clear()
+    for coma_data in data.get("comas", []):
+        entry = page_entry.comas.add()
+        coma_entry_from_dict(entry, coma_data)
     page_entry.balloons.clear()
     for b_data in data.get("balloons", []):
         entry = page_entry.balloons.add()
@@ -875,10 +878,10 @@ def page_from_dict(page_entry, data: dict[str, Any]) -> None:
     for t_data in data.get("texts", []):
         entry = page_entry.texts.add()
         text_entry_from_dict(entry, t_data)
-    idx = int(data.get("activePanelIndex", -1))
-    if idx < -1 or idx >= len(page_entry.panels):
-        idx = 0 if len(page_entry.panels) > 0 else -1
-    page_entry.active_panel_index = idx
+    idx = int(data.get("activeComaIndex", -1))
+    if idx < -1 or idx >= len(page_entry.comas):
+        idx = 0 if len(page_entry.comas) > 0 else -1
+    page_entry.active_coma_index = idx
     idx = int(data.get("activeBalloonIndex", -1))
     if idx < -1 or idx >= len(page_entry.balloons):
         idx = 0 if len(page_entry.balloons) > 0 else -1

@@ -31,8 +31,8 @@ def page_layer_name(target, work=None) -> str:
     return _zero_based_layer_name("p", str(getattr(target, "id", "") or ""), 3)
 
 
-def panel_layer_name(target) -> str:
-    stem = str(getattr(target, "panel_stem", "") or getattr(target, "id", "") or "")
+def coma_layer_name(target) -> str:
+    stem = str(getattr(target, "coma_id", "") or getattr(target, "id", "") or "")
     return _zero_based_layer_name("c", stem, 2)
 
 
@@ -290,7 +290,7 @@ def _draw_effect_selected_settings(box, context, obj, active_layer) -> None:
     else:
         line_box.prop(params, "spacing_distance_mm")
     line_box.prop(params, "length_mm")
-    line_box.prop(params, "extend_past_panel")
+    line_box.prop(params, "extend_past_coma")
 
     base_box = box.box()
     base_box.label(text="基準位置 / ギザ")
@@ -338,27 +338,27 @@ def _draw_page_selected_settings(box, context, entry) -> None:
     row.prop(entry, "offset_y_mm", text="表示Y")
 
 
-def _draw_panel_selected_settings(box, context, entry) -> None:
+def _draw_coma_selected_settings(box, context, entry) -> None:
     settings = box.column(align=True)
-    settings.label(text=f"選択中: {panel_layer_name(entry)} (コマ)", icon="MOD_WIREFRAME")
+    settings.label(text=f"選択中: {coma_layer_name(entry)} (コマ)", icon="MOD_WIREFRAME")
     settings.prop(entry, "title", text="表示名")
     if hasattr(entry, "visible"):
         settings.prop(entry, "visible", text="表示")
-    box.operator("bname.enter_panel_mode", text="コマ編集へ", icon="PLAY")
+    box.operator("bname.enter_coma_mode", text="コマ編集へ", icon="PLAY")
 
-    from . import panel_detail_panel
+    from . import coma_detail_panel
 
     shape_box = box.box()
     shape_box.label(text="形状")
-    panel_detail_panel.draw_panel_shape_settings(shape_box, context, entry)
+    coma_detail_panel.draw_coma_shape_settings(shape_box, context, entry)
 
     border_box = box.box()
     border_box.label(text="枠線")
-    panel_detail_panel.draw_panel_border_settings(border_box, context, entry)
+    coma_detail_panel.draw_coma_border_settings(border_box, context, entry)
 
     white_box = box.box()
     white_box.label(text="白フチ")
-    panel_detail_panel.draw_panel_white_margin_settings(white_box, entry)
+    coma_detail_panel.draw_coma_white_margin_settings(white_box, entry)
 
 
 def draw_stack_item_detail(layout, context, item, resolved) -> bool:
@@ -370,8 +370,8 @@ def draw_stack_item_detail(layout, context, item, resolved) -> bool:
     obj = resolved.get("object")
     if kind == "page":
         _draw_page_selected_settings(box, context, target)
-    elif kind == "panel":
-        _draw_panel_selected_settings(box, context, target)
+    elif kind == "coma":
+        _draw_coma_selected_settings(box, context, target)
     elif kind == "gp":
         _draw_gp_selected_settings(box, obj, target)
     elif kind == "image":

@@ -3,22 +3,22 @@
 from __future__ import annotations
 
 from ..utils import object_selection
-from .edge_style_ui import draw_selected_edge_style_box, get_selected_panel_entry
+from .edge_style_ui import draw_selected_edge_style_box, get_selected_coma_entry
 
 
-def _same_panel_entry(left, right) -> bool:
+def _same_coma_entry(left, right) -> bool:
     if left is None or right is None:
         return False
     try:
         return int(left.as_pointer()) == int(right.as_pointer())
     except Exception:  # noqa: BLE001
         pass
-    left_key = str(getattr(left, "panel_stem", "") or getattr(left, "id", "") or "")
-    right_key = str(getattr(right, "panel_stem", "") or getattr(right, "id", "") or "")
+    left_key = str(getattr(left, "coma_id", "") or getattr(left, "id", "") or "")
+    right_key = str(getattr(right, "coma_id", "") or getattr(right, "id", "") or "")
     return bool(left_key and left_key == right_key)
 
 
-def draw_panel_shape_settings(layout, context, entry) -> None:
+def draw_coma_shape_settings(layout, context, entry) -> None:
     layout.prop(entry, "shape_type")
     if entry.shape_type == "rect":
         row = layout.row(align=True)
@@ -32,7 +32,7 @@ def draw_panel_shape_settings(layout, context, entry) -> None:
 
     row = layout.row(align=True)
     row.operator(
-        "bname.panel_edit_vertices",
+        "bname.coma_edit_vertices",
         text="頂点/辺をドラッグ編集",
         icon="EDITMODE_HLT",
     )
@@ -40,21 +40,21 @@ def draw_panel_shape_settings(layout, context, entry) -> None:
 
     row = layout.row(align=True)
     if entry.shape_type == "rect":
-        row.operator("bname.panel_to_polygon", text="多角形化", icon="MESH_DATA")
+        row.operator("bname.coma_to_polygon", text="多角形化", icon="MESH_DATA")
     else:
-        row.operator("bname.panel_to_rect", text="矩形化 (外接)", icon="MESH_PLANE")
-    if object_selection.selected_panel_count(context) >= 2:
-        layout.operator("bname.panel_merge_selected", text="コマ結合", icon="AUTOMERGE_ON")
+        row.operator("bname.coma_to_rect", text="矩形化 (外接)", icon="MESH_PLANE")
+    if object_selection.selected_coma_count(context) >= 2:
+        layout.operator("bname.coma_merge_selected", text="コマ結合", icon="AUTOMERGE_ON")
 
     layout.prop(entry, "overlap_clipping")
     layout.prop(entry, "background_color")
     row = layout.row(align=True)
-    row.prop(entry, "panel_gap_vertical_mm", text="上下 (個別)")
-    row.prop(entry, "panel_gap_horizontal_mm", text="左右 (個別)")
+    row.prop(entry, "coma_gap_vertical_mm", text="上下 (個別)")
+    row.prop(entry, "coma_gap_horizontal_mm", text="左右 (個別)")
     layout.label(text="(負値は作品共通ルールを継承)", icon="INFO")
 
 
-def draw_panel_border_settings(layout, context, entry) -> None:
+def draw_coma_border_settings(layout, context, entry) -> None:
     b = entry.border
     layout.prop(b, "visible", text="枠線を表示")
     content = layout.column()
@@ -75,12 +75,12 @@ def draw_panel_border_settings(layout, context, entry) -> None:
     _draw_border_edge(box, "下", b.edge_bottom)
     _draw_border_edge(box, "左", b.edge_left)
 
-    selected_panel = get_selected_panel_entry(context)
-    if _same_panel_entry(selected_panel, entry):
+    selected_coma = get_selected_coma_entry(context)
+    if _same_coma_entry(selected_coma, entry):
         draw_selected_edge_style_box(layout, context)
 
 
-def draw_panel_white_margin_settings(layout, entry) -> None:
+def draw_coma_white_margin_settings(layout, entry) -> None:
     wm = entry.white_margin
     layout.prop(wm, "enabled", text="白フチを表示")
     content = layout.column()

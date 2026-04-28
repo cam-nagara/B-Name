@@ -84,16 +84,15 @@ def load_pages_json(work_dir: Path, work) -> dict:
 
 
 def ensure_page_dir(work_dir: Path, page_id: str) -> Path:
-    """pages/NNNN/ ディレクトリ (と panels/ サブディレクトリ) を用意."""
+    """pNNNN/ ディレクトリを用意."""
     paths.validate_page_id(page_id)
     page_path = paths.page_dir(Path(work_dir), page_id)
     page_path.mkdir(parents=True, exist_ok=True)
-    (page_path / paths.PANELS_DIR_NAME).mkdir(exist_ok=True)
     return page_path
 
 
 def remove_page_dir(work_dir: Path, page_id: str) -> None:
-    """pages/NNNN/ をまるごと削除 (コマ含む)."""
+    """pNNNN/ をまるごと削除 (コマ含む)."""
     paths.validate_page_id(page_id)
     page_path = paths.page_dir(Path(work_dir), page_id)
     if page_path.exists():
@@ -148,9 +147,9 @@ def register_new_page(work, title: str = "") -> object:
     entry = work.pages.add()
     entry.id = page_id
     entry.title = title or page_id
-    entry.dir_rel = f"{paths.PAGES_DIR_NAME}/{page_id}/"
+    entry.dir_rel = f"{page_id}/"
     entry.spread = False
-    entry.panel_count = 0
+    entry.coma_count = 0
     work.active_page_index = len(work.pages) - 1
     return entry
 

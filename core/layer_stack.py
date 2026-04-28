@@ -12,7 +12,7 @@ _active_index_update_depth = 0
 
 LAYER_KIND_ITEMS = (
     ("page", "ページ", ""),
-    ("panel", "コマ", ""),
+    ("coma", "コマ", ""),
     ("gp", "グリースペンシル", ""),
     ("gp_folder", "フォルダ", ""),
     ("image", "画像", ""),
@@ -25,7 +25,7 @@ LAYER_KIND_ITEMS = (
 
 ACTIVE_LAYER_KIND_ITEMS = (
     ("page", "ページ", ""),
-    ("panel", "コマ", ""),
+    ("coma", "コマ", ""),
     ("gp", "グリースペンシル", ""),
     ("gp_folder", "フォルダ", ""),
     ("image", "画像", ""),

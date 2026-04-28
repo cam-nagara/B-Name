@@ -11,12 +11,12 @@ import json
 import bpy
 from bpy.types import Operator
 
-from ..core.mode import MODE_PANEL, get_mode
+from ..core.mode import MODE_COMA, get_mode
 from ..core.work import get_work
 from ..utils import detail_popup, log, object_selection
 from ..utils.geom import m_to_mm
 from ..utils import layer_stack as layer_stack_utils
-from . import panel_modal_state, view_event_region
+from . import coma_modal_state, view_event_region
 
 _logger = log.get_logger(__name__)
 
@@ -430,30 +430,30 @@ class BNAME_OT_effect_line_tool(Operator):
     @classmethod
     def poll(cls, context):
         work = get_work(context)
-        return bool(work and work.loaded and get_mode(context) != MODE_PANEL)
+        return bool(work and work.loaded and get_mode(context) != MODE_COMA)
 
     def invoke(self, context, _event):
-        active = panel_modal_state.get_active("effect_line_tool")
+        active = coma_modal_state.get_active("effect_line_tool")
         if active is not None:
             active.finish_from_external(context, keep_selection=True)
             return {"FINISHED"}
-        panel_modal_state.finish_active("panel_vertex_edit", context, keep_selection=True)
-        panel_modal_state.finish_active("knife_cut", context, keep_selection=False)
-        panel_modal_state.finish_active("edge_move", context, keep_selection=True)
-        panel_modal_state.finish_active("layer_move", context, keep_selection=True)
-        panel_modal_state.finish_active("balloon_tool", context, keep_selection=True)
-        panel_modal_state.finish_active("text_tool", context, keep_selection=True)
+        coma_modal_state.finish_active("coma_vertex_edit", context, keep_selection=True)
+        coma_modal_state.finish_active("knife_cut", context, keep_selection=False)
+        coma_modal_state.finish_active("edge_move", context, keep_selection=True)
+        coma_modal_state.finish_active("layer_move", context, keep_selection=True)
+        coma_modal_state.finish_active("balloon_tool", context, keep_selection=True)
+        coma_modal_state.finish_active("text_tool", context, keep_selection=True)
         self._externally_finished = False
-        self._cursor_modal_set = panel_modal_state.set_modal_cursor(context, "CROSSHAIR")
+        self._cursor_modal_set = coma_modal_state.set_modal_cursor(context, "CROSSHAIR")
         self._clear_drag_state()
         context.window_manager.modal_handler_add(self)
-        panel_modal_state.set_active("effect_line_tool", self, context)
+        coma_modal_state.set_active("effect_line_tool", self, context)
         self.report({"INFO"}, "効果線ツール: ドラッグで作成")
         return {"RUNNING_MODAL"}
 
     def modal(self, context, event):
         if getattr(self, "_externally_finished", False):
-            panel_modal_state.clear_active("effect_line_tool", self, context)
+            coma_modal_state.clear_active("effect_line_tool", self, context)
             return {"FINISHED", "PASS_THROUGH"}
         if getattr(self, "_dragging", False):
             return self._modal_dragging(context, event)
@@ -652,7 +652,7 @@ class BNAME_OT_effect_line_tool(Operator):
 
     def _cleanup(self, context) -> None:
         if getattr(self, "_cursor_modal_set", False):
-            panel_modal_state.restore_modal_cursor(context)
+            coma_modal_state.restore_modal_cursor(context)
             self._cursor_modal_set = False
         self._clear_drag_state()
 
@@ -662,7 +662,7 @@ class BNAME_OT_effect_line_tool(Operator):
             return
         self._externally_finished = True
         self._cleanup(context)
-        panel_modal_state.clear_active("effect_line_tool", self, context)
+        coma_modal_state.clear_active("effect_line_tool", self, context)
 
 
 _CLASSES = (BNAME_OT_effect_line_generate, BNAME_OT_effect_line_tool)

@@ -5,9 +5,9 @@ from __future__ import annotations
 import bpy
 from bpy.types import Panel
 
-from ..core.mode import MODE_PANEL, get_mode
+from ..core.mode import MODE_COMA, get_mode
 from ..core.work import get_work
-from ..operators import panel_modal_state
+from ..operators import coma_modal_state
 
 B_NAME_CATEGORY = "B-Name"
 _MODAL_TOOL_NAMES = (
@@ -18,7 +18,7 @@ _MODAL_TOOL_NAMES = (
     "balloon_tool",
     "text_tool",
     "effect_line_tool",
-    "panel_vertex_edit",
+    "coma_vertex_edit",
 )
 
 
@@ -32,7 +32,7 @@ def _active_stack_kind(context) -> str:
 
 
 def _any_bname_modal_tool_active() -> bool:
-    return any(panel_modal_state.is_active(name) for name in _MODAL_TOOL_NAMES)
+    return any(coma_modal_state.is_active(name) for name in _MODAL_TOOL_NAMES)
 
 
 class BNAME_PT_tools(Panel):
@@ -46,7 +46,7 @@ class BNAME_PT_tools(Panel):
     @classmethod
     def poll(cls, context):
         work = get_work(context)
-        return bool(work and work.loaded and get_mode(context) != MODE_PANEL)
+        return bool(work and work.loaded and get_mode(context) != MODE_COMA)
 
     def draw(self, context):
         layout = self.layout
@@ -78,7 +78,7 @@ class BNAME_PT_tools(Panel):
             text="",
             icon="OBJECT_DATAMODE",
             depress=(
-                panel_modal_state.is_active("object_tool")
+                coma_modal_state.is_active("object_tool")
                 or (not modal_tool_active and active_mode == "OBJECT")
             ),
         )
@@ -118,40 +118,40 @@ class BNAME_PT_tools(Panel):
         row.separator()
         row.operator_context = "INVOKE_DEFAULT"
         row.operator(
-            "bname.panel_knife_cut",
+            "bname.coma_knife_cut",
             text="",
             icon="SCULPTMODE_HLT",
-            depress=panel_modal_state.is_active("knife_cut"),
+            depress=coma_modal_state.is_active("knife_cut"),
         )
         row.operator(
-            "bname.panel_edge_move",
+            "bname.coma_edge_move",
             text="",
             icon="EMPTY_ARROWS",
-            depress=panel_modal_state.is_active("edge_move"),
+            depress=coma_modal_state.is_active("edge_move"),
         )
         row.operator(
             "bname.layer_move_tool",
             text="",
             icon="DRIVER_TRANSFORM",
-            depress=panel_modal_state.is_active("layer_move"),
+            depress=coma_modal_state.is_active("layer_move"),
         )
         row.operator(
             "bname.balloon_tool",
             text="",
             icon="MOD_FLUID",
-            depress=panel_modal_state.is_active("balloon_tool"),
+            depress=coma_modal_state.is_active("balloon_tool"),
         )
         row.operator(
             "bname.text_tool",
             text="",
             icon="FONT_DATA",
-            depress=panel_modal_state.is_active("text_tool"),
+            depress=coma_modal_state.is_active("text_tool"),
         )
         row.operator(
             "bname.effect_line_tool",
             text="",
             icon="STROKE",
-            depress=panel_modal_state.is_active("effect_line_tool"),
+            depress=coma_modal_state.is_active("effect_line_tool"),
         )
 
 

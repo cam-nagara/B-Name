@@ -11,10 +11,10 @@ from . import (
     gpencil_panel,
     layer_panel as _legacy_layer_panel,
     page_panel as _legacy_page_panel,
-    panel_camera_panel,
-    panel_detail_panel,
-    panel_list_panel as _legacy_panel_list_panel,
-    panel_tools_panel as _legacy_panel_tools_panel,
+    coma_camera_panel,
+    coma_detail_panel,
+    coma_list_panel as _legacy_coma_list_panel,
+    coma_tools_panel as _legacy_coma_tools_panel,
     paper_panel,
     tool_panel,
     view_panel,
@@ -26,8 +26,8 @@ _MODULES = (
     paper_panel,
     tool_panel,
     view_panel,
-    panel_camera_panel,
-    panel_detail_panel,
+    coma_camera_panel,
+    coma_detail_panel,
     gpencil_panel,
     export_panel,
 )
@@ -55,8 +55,8 @@ def _unregister_legacy_tool_panels() -> None:
         _legacy_balloon_panel,
         _legacy_effect_line_panel,
         _legacy_page_panel,
-        _legacy_panel_list_panel,
-        _legacy_panel_tools_panel,
+        _legacy_coma_list_panel,
+        _legacy_coma_tools_panel,
     ):
         try:
             module.unregister()
@@ -70,13 +70,13 @@ def _unregister_legacy_tool_panels() -> None:
         "BNAME_PT_effect_line",
         "BNAME_UL_pages",
         "BNAME_PT_pages",
-        "BNAME_OT_panel_enter_from_list",
-        "BNAME_UL_panels",
-        "BNAME_PT_panels",
-        "BNAME_PT_panel_tools",
-        "BNAME_PT_panel_shape",
-        "BNAME_PT_panel_border",
-        "BNAME_PT_panel_white_margin",
+        "BNAME_OT_coma_enter_from_list",
+        "BNAME_UL_comas",
+        "BNAME_PT_comas",
+        "BNAME_PT_coma_tools",
+        "BNAME_PT_coma_shape",
+        "BNAME_PT_coma_border",
+        "BNAME_PT_coma_white_margin",
     ):
         cls = getattr(bpy.types, class_name, None)
         if cls is None:

@@ -10,12 +10,12 @@ from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty
 from bpy.types import Operator
 
 from ..core.work import get_active_page, get_work
-from ..io import page_io, panel_io, schema
+from ..io import page_io, coma_io, schema
 from ..utils import edge_selection, object_selection
 from ..utils import layer_stack as layer_stack_utils
 from ..utils import log, page_grid, paths
-from .panel_knife_cut_op import _panel_polygon, _polygon_area, _set_panel_polygon, _split_convex_polygon_by_line
-from . import panel_modal_state
+from .coma_knife_cut_op import _coma_polygon, _polygon_area, _set_coma_polygon, _split_convex_polygon_by_line
+from . import coma_modal_state
 
 _logger = log.get_logger(__name__)
 
@@ -34,18 +34,18 @@ def _require_active_page(op: Operator, context):
 
 def _save_page_and_pages(work, page, work_dir: Path) -> None:
     page_io.save_page_json(work_dir, page)
-    page.panel_count = len(page.panels)
+    page.coma_count = len(page.comas)
     page_io.save_pages_json(work_dir, work)
 
 
-def _sync_layer_stack_after_panel_change(context) -> None:
+def _sync_layer_stack_after_coma_change(context) -> None:
     layer_stack_utils.sync_layer_stack_after_data_change(
         context,
-        align_panel_order=True,
+        align_coma_order=True,
     )
 
 
-def _selected_edge_panel_target(context):
+def _selected_edge_coma_target(context):
     wm = context.window_manager
     if getattr(wm, "bname_edge_select_kind", "none") == "none":
         return None
@@ -53,46 +53,46 @@ def _selected_edge_panel_target(context):
     if work is None or not work.loaded:
         return None
     page_index = int(getattr(wm, "bname_edge_select_page", -1))
-    panel_index = int(getattr(wm, "bname_edge_select_panel", -1))
+    coma_index = int(getattr(wm, "bname_edge_select_coma", -1))
     if not (0 <= page_index < len(work.pages)):
         return None
     page = work.pages[page_index]
-    if not (0 <= panel_index < len(page.panels)):
+    if not (0 <= coma_index < len(page.comas)):
         return None
-    return work, page_index, page, panel_index, page.panels[panel_index]
+    return work, page_index, page, coma_index, page.comas[coma_index]
 
 
-def _require_target_panel(op: Operator, context):
-    selected = _selected_edge_panel_target(context)
+def _require_target_coma(op: Operator, context):
+    selected = _selected_edge_coma_target(context)
     if selected is not None:
-        work, page_index, page, panel_index, panel = selected
+        work, page_index, page, coma_index, panel = selected
         work.active_page_index = page_index
-        page.active_panel_index = panel_index
-        return work, page_index, page, panel_index, panel, True
+        page.active_coma_index = coma_index
+        return work, page_index, page, coma_index, panel, True
 
     work = get_work(context)
     page = get_active_page(context)
     if work is None or not work.loaded or page is None:
         op.report({"ERROR"}, "作品 / コマが選択されていません")
         return None
-    panel_index = int(page.active_panel_index)
-    if not (0 <= panel_index < len(page.panels)):
+    coma_index = int(page.active_coma_index)
+    if not (0 <= coma_index < len(page.comas)):
         op.report({"ERROR"}, "コマが選択されていません")
         return None
     page_index = int(work.active_page_index)
-    return work, page_index, page, panel_index, page.panels[panel_index], False
+    return work, page_index, page, coma_index, page.comas[coma_index], False
 
 
-def _set_edge_selection(context, *, kind: str, page_index: int, panel_index: int) -> None:
+def _set_edge_selection(context, *, kind: str, page_index: int, coma_index: int) -> None:
     edge_selection.set_selection(
         context,
         kind,
         page_index=page_index,
-        panel_index=panel_index,
+        coma_index=coma_index,
     )
 
 
-def _panel_bounds_mm(poly: list[tuple[float, float]]) -> tuple[float, float, float, float] | None:
+def _coma_bounds_mm(poly: list[tuple[float, float]]) -> tuple[float, float, float, float] | None:
     if len(poly) < 3:
         return None
     xs = [p[0] for p in poly]
@@ -273,7 +273,7 @@ def _split_polygon_grid(
     gap_v: float,
     gap_h: float,
 ) -> tuple[list[list[list[tuple[float, float]]]], float, float] | None:
-    bounds = _panel_bounds_mm(poly)
+    bounds = _coma_bounds_mm(poly)
     if bounds is None:
         return None
     min_x, min_y, max_x, max_y = bounds
@@ -331,7 +331,7 @@ def _split_polygon_grid(
 # ---------- コマ生成ヘルパ (page_op などから再利用) ----------
 
 
-def create_rect_panel(
+def create_rect_coma(
     work,
     page,
     work_dir: Path,
@@ -341,14 +341,14 @@ def create_rect_panel(
     height_mm: float,
     title: str | None = None,
 ):
-    """指定矩形の新規コマを page.panels に追加し、panel.json と page.json を保存.
+    """指定矩形の新規コマを page.comas に追加し、cNN.json と page.json を保存.
 
     pages.json の保存は呼出側の責務。新規 entry を返す。
     """
-    stem = panel_io.allocate_new_panel_stem(work_dir, page.id)
-    entry = page.panels.add()
-    entry.panel_stem = stem
-    entry.id = stem.split("_", 1)[1]
+    stem = coma_io.allocate_new_coma_id(work_dir, page.id)
+    entry = page.comas.add()
+    entry.coma_id = stem
+    entry.id = stem
     entry.title = title if title is not None else stem
     entry.shape_type = "rect"
     entry.rect_x_mm = x_mm
@@ -357,23 +357,23 @@ def create_rect_panel(
     entry.rect_height_mm = height_mm
     # 追加直後の entry を除いて max を取る (entry 自身は初期値 0)
     max_z = max(
-        (pe.z_order for pe in page.panels if pe is not entry),
+        (pe.z_order for pe in page.comas if pe is not entry),
         default=-1,
     )
     entry.z_order = max_z + 1
-    page.active_panel_index = len(page.panels) - 1
-    panel_io.save_panel_meta(work_dir, page.id, entry)
+    page.active_coma_index = len(page.comas) - 1
+    coma_io.save_coma_meta(work_dir, page.id, entry)
     page_io.save_page_json(work_dir, page)
-    page.panel_count = len(page.panels)
+    page.coma_count = len(page.comas)
     return entry
 
 
-def create_basic_frame_panel(work, page, work_dir: Path):
+def create_basic_frame_coma(work, page, work_dir: Path):
     """基本枠 (用紙の inner_frame) サイズの矩形コマを 1 個生成して返す."""
     p = work.paper
     x_mm = (p.canvas_width_mm - p.inner_frame_width_mm) / 2.0 + p.inner_frame_offset_x_mm
     y_mm = (p.canvas_height_mm - p.inner_frame_height_mm) / 2.0 + p.inner_frame_offset_y_mm
-    return create_rect_panel(
+    return create_rect_coma(
         work,
         page,
         work_dir,
@@ -388,10 +388,10 @@ def create_basic_frame_panel(work, page, work_dir: Path):
 # ---------- コマ追加 ----------
 
 
-class BNAME_OT_panel_add(Operator):
+class BNAME_OT_coma_add(Operator):
     """現在のページに矩形コマを追加."""
 
-    bl_idname = "bname.panel_add"
+    bl_idname = "bname.coma_add"
     bl_label = "コマを追加"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -409,12 +409,12 @@ class BNAME_OT_panel_add(Operator):
             p = work.paper
             x_mm = (p.canvas_width_mm - 60.0) / 2.0
             y_mm = (p.canvas_height_mm - 40.0) / 2.0
-            entry = create_rect_panel(work, page, work_dir, x_mm, y_mm, 60.0, 40.0)
-            stem = entry.panel_stem
+            entry = create_rect_coma(work, page, work_dir, x_mm, y_mm, 60.0, 40.0)
+            stem = entry.coma_id
             page_io.save_pages_json(work_dir, work)
             if hasattr(context.scene, "bname_active_layer_kind"):
-                context.scene.bname_active_layer_kind = "panel"
-            _sync_layer_stack_after_panel_change(context)
+                context.scene.bname_active_layer_kind = "coma"
+            _sync_layer_stack_after_coma_change(context)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("panel_add failed")
             self.report({"ERROR"}, f"コマ追加失敗: {exc}")
@@ -423,17 +423,17 @@ class BNAME_OT_panel_add(Operator):
         return {"FINISHED"}
 
 
-class BNAME_OT_panel_remove(Operator):
+class BNAME_OT_coma_remove(Operator):
     """選択中のコマを削除."""
 
-    bl_idname = "bname.panel_remove"
+    bl_idname = "bname.coma_remove"
     bl_label = "コマを削除"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
     def poll(cls, context):
         page = get_active_page(context)
-        return page is not None and 0 <= page.active_panel_index < len(page.panels)
+        return page is not None and 0 <= page.active_coma_index < len(page.comas)
 
     def invoke(self, context, event):
         return context.window_manager.invoke_confirm(self, event)
@@ -442,24 +442,24 @@ class BNAME_OT_panel_remove(Operator):
         work, page = _require_active_page(self, context)
         if page is None:
             return {"CANCELLED"}
-        idx = page.active_panel_index
-        if not (0 <= idx < len(page.panels)):
+        idx = page.active_coma_index
+        if not (0 <= idx < len(page.comas)):
             return {"CANCELLED"}
-        entry = page.panels[idx]
-        stem = entry.panel_stem
+        entry = page.comas[idx]
+        stem = entry.coma_id
         work_dir = Path(work.work_dir)
         try:
-            panel_io.remove_panel_files(work_dir, page.id, stem)
+            coma_io.remove_coma_files(work_dir, page.id, stem)
             layer_stack_utils.delete_gp_layers_for_parent_keys(
-                context, {layer_stack_utils.gp_parent_key_for_panel(page, entry)}
+                context, {layer_stack_utils.gp_parent_key_for_coma(page, entry)}
             )
-            page.panels.remove(idx)
-            if len(page.panels) == 0:
-                page.active_panel_index = -1
-            elif idx >= len(page.panels):
-                page.active_panel_index = len(page.panels) - 1
+            page.comas.remove(idx)
+            if len(page.comas) == 0:
+                page.active_coma_index = -1
+            elif idx >= len(page.comas):
+                page.active_coma_index = len(page.comas) - 1
             _save_page_and_pages(work, page, work_dir)
-            _sync_layer_stack_after_panel_change(context)
+            _sync_layer_stack_after_coma_change(context)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("panel_remove failed")
             self.report({"ERROR"}, f"コマ削除失敗: {exc}")
@@ -468,64 +468,64 @@ class BNAME_OT_panel_remove(Operator):
         return {"FINISHED"}
 
 
-class BNAME_OT_panel_duplicate(Operator):
+class BNAME_OT_coma_duplicate(Operator):
     """選択中のコマを同ページ内で複製."""
 
-    bl_idname = "bname.panel_duplicate"
+    bl_idname = "bname.coma_duplicate"
     bl_label = "コマを複製"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
     def poll(cls, context):
         page = get_active_page(context)
-        return page is not None and 0 <= page.active_panel_index < len(page.panels)
+        return page is not None and 0 <= page.active_coma_index < len(page.comas)
 
     def execute(self, context):
         work, page = _require_active_page(self, context)
         if page is None:
             return {"CANCELLED"}
-        idx = page.active_panel_index
-        src = page.panels[idx]
+        idx = page.active_coma_index
+        src = page.comas[idx]
         work_dir = Path(work.work_dir)
         try:
-            new_stem = panel_io.allocate_new_panel_stem(work_dir, page.id)
-            panel_io.copy_panel_files(work_dir, page.id, page.id, src.panel_stem, new_stem)
+            new_stem = coma_io.allocate_new_coma_id(work_dir, page.id)
+            coma_io.copy_coma_files(work_dir, page.id, page.id, src.coma_id, new_stem)
             # entry を複製
-            new_entry = page.panels.add()
-            _copy_panel_entry(src, new_entry)
-            new_entry.panel_stem = new_stem
-            new_entry.id = new_stem.split("_", 1)[1]
+            new_entry = page.comas.add()
+            _copy_coma_entry(src, new_entry)
+            new_entry.coma_id = new_stem
+            new_entry.id = new_stem
             new_entry.title = f"{src.title} (複製)"
             new_entry.rect_x_mm = src.rect_x_mm + 5.0
             new_entry.rect_y_mm = src.rect_y_mm - 5.0
-            new_entry.z_order = max((p.z_order for p in page.panels), default=0) + 1
+            new_entry.z_order = max((p.z_order for p in page.comas), default=0) + 1
             # 直後に配置
-            new_index = len(page.panels) - 1
+            new_index = len(page.comas) - 1
             if new_index != idx + 1:
-                page.panels.move(new_index, idx + 1)
-            page.active_panel_index = idx + 1
+                page.comas.move(new_index, idx + 1)
+            page.active_coma_index = idx + 1
             if hasattr(context.scene, "bname_active_layer_kind"):
-                context.scene.bname_active_layer_kind = "panel"
-            panel_io.save_panel_meta(work_dir, page.id, new_entry)
+                context.scene.bname_active_layer_kind = "coma"
+            coma_io.save_coma_meta(work_dir, page.id, new_entry)
             _save_page_and_pages(work, page, work_dir)
-            _sync_layer_stack_after_panel_change(context)
+            _sync_layer_stack_after_coma_change(context)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("panel_duplicate failed")
             self.report({"ERROR"}, f"コマ複製失敗: {exc}")
             return {"CANCELLED"}
-        self.report({"INFO"}, f"コマ複製: {src.panel_stem} → {new_stem}")
+        self.report({"INFO"}, f"コマ複製: {src.coma_id} → {new_stem}")
         return {"FINISHED"}
 
 
-def _copy_panel_entry(src, dst) -> None:
-    """PanelEntry の内容を複製.
+def _copy_coma_entry(src, dst) -> None:
+    """ComaEntry の内容を複製.
 
     PointerProperty (border / white_margin) と CollectionProperty
     (vertices / layer_refs) を含めてすべてコピーするため、schema 経由で
-    dict を往復させる。dst.id / dst.panel_stem は呼出側で上書きされる想定。
+    dict を往復させる。dst.id / dst.coma_id は呼出側で上書きされる想定。
     """
-    data = schema.panel_entry_to_dict(src)
-    schema.panel_entry_from_dict(dst, data)
+    data = schema.coma_entry_to_dict(src)
+    schema.coma_entry_from_dict(dst, data)
 
 
 # ---------- 他ページへの移動 ----------
@@ -550,10 +550,10 @@ def _other_page_enum_items(_self, context):
 _OTHER_PAGE_CACHE: list[tuple[str, str, str]] = []
 
 
-class BNAME_OT_panel_move_to_page(Operator):
+class BNAME_OT_coma_move_to_page(Operator):
     """選択中のコマを別のページへ移動."""
 
-    bl_idname = "bname.panel_move_to_page"
+    bl_idname = "bname.coma_move_to_page"
     bl_label = "コマを他ページへ移動"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -570,7 +570,7 @@ class BNAME_OT_panel_move_to_page(Operator):
             w is not None
             and w.loaded
             and page is not None
-            and 0 <= page.active_panel_index < len(page.panels)
+            and 0 <= page.active_coma_index < len(page.comas)
             and len(w.pages) >= 2
         )
 
@@ -593,23 +593,23 @@ class BNAME_OT_panel_move_to_page(Operator):
         if target_page is None:
             self.report({"ERROR"}, f"移動先ページが見つかりません: {self.target_page_id}")
             return {"CANCELLED"}
-        idx = page.active_panel_index
-        src_entry = page.panels[idx]
-        old_parent_key = layer_stack_utils.gp_parent_key_for_panel(page, src_entry)
+        idx = page.active_coma_index
+        src_entry = page.comas[idx]
+        old_parent_key = layer_stack_utils.gp_parent_key_for_coma(page, src_entry)
         work_dir = Path(work.work_dir)
         try:
             # 移動先で衝突しないファイル名を採番
-            dst_stem = panel_io.allocate_new_panel_stem(work_dir, target_page.id)
-            panel_io.move_panel_files(
-                work_dir, page.id, target_page.id, src_entry.panel_stem, dst_stem
+            dst_stem = coma_io.allocate_new_coma_id(work_dir, target_page.id)
+            coma_io.move_coma_files(
+                work_dir, page.id, target_page.id, src_entry.coma_id, dst_stem
             )
             # 移動先 collection に追加
-            new_entry = target_page.panels.add()
-            _copy_panel_entry(src_entry, new_entry)
-            new_entry.panel_stem = dst_stem
-            new_entry.id = dst_stem.split("_", 1)[1]
+            new_entry = target_page.comas.add()
+            _copy_coma_entry(src_entry, new_entry)
+            new_entry.coma_id = dst_stem
+            new_entry.id = dst_stem
             new_entry.title = src_entry.title
-            new_parent_key = layer_stack_utils.gp_parent_key_for_panel(target_page, new_entry)
+            new_parent_key = layer_stack_utils.gp_parent_key_for_coma(target_page, new_entry)
             source_page_index = next((i for i, p in enumerate(work.pages) if p.id == page.id), -1)
             target_page_index = next((i for i, p in enumerate(work.pages) if p.id == target_page.id), -1)
             if source_page_index >= 0 and target_page_index >= 0:
@@ -619,18 +619,19 @@ class BNAME_OT_panel_move_to_page(Operator):
                     context, {old_parent_key}, dst_ox - src_ox, dst_oy - src_oy
                 )
             layer_stack_utils.reparent_gp_layers(context, old_parent_key, new_parent_key)
+            coma_io.save_coma_meta(work_dir, target_page.id, new_entry)
             # 元の collection から削除
-            page.panels.remove(idx)
-            if len(page.panels) == 0:
-                page.active_panel_index = -1
-            elif idx >= len(page.panels):
-                page.active_panel_index = len(page.panels) - 1
+            page.comas.remove(idx)
+            if len(page.comas) == 0:
+                page.active_coma_index = -1
+            elif idx >= len(page.comas):
+                page.active_coma_index = len(page.comas) - 1
             page_io.save_page_json(work_dir, page)
             page_io.save_page_json(work_dir, target_page)
-            page.panel_count = len(page.panels)
-            target_page.panel_count = len(target_page.panels)
+            page.coma_count = len(page.comas)
+            target_page.coma_count = len(target_page.comas)
             page_io.save_pages_json(work_dir, work)
-            _sync_layer_stack_after_panel_change(context)
+            _sync_layer_stack_after_coma_change(context)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("panel_move_to_page failed")
             self.report({"ERROR"}, f"コマ移動失敗: {exc}")
@@ -642,10 +643,10 @@ class BNAME_OT_panel_move_to_page(Operator):
 # ---------- Z順序 ----------
 
 
-class BNAME_OT_panel_z_order(Operator):
+class BNAME_OT_coma_z_order(Operator):
     """選択中のコマの Z 順序を変更."""
 
-    bl_idname = "bname.panel_z_order"
+    bl_idname = "bname.coma_z_order"
     bl_label = "Z順序変更"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -662,29 +663,29 @@ class BNAME_OT_panel_z_order(Operator):
     @classmethod
     def poll(cls, context):
         page = get_active_page(context)
-        return page is not None and 0 <= page.active_panel_index < len(page.panels)
+        return page is not None and 0 <= page.active_coma_index < len(page.comas)
 
     def execute(self, context):
         work, page = _require_active_page(self, context)
         if page is None:
             return {"CANCELLED"}
-        idx = page.active_panel_index
-        current = page.panels[idx].z_order
-        all_orders = [p.z_order for p in page.panels]
+        idx = page.active_coma_index
+        current = page.comas[idx].z_order
+        all_orders = [p.z_order for p in page.comas]
         mn, mx = (min(all_orders), max(all_orders)) if all_orders else (0, 0)
         if self.direction == "FRONT":
-            page.panels[idx].z_order = mx + 1
+            page.comas[idx].z_order = mx + 1
         elif self.direction == "BACK":
-            page.panels[idx].z_order = mn - 1
+            page.comas[idx].z_order = mn - 1
         elif self.direction == "FORWARD":
-            page.panels[idx].z_order = current + 1
+            page.comas[idx].z_order = current + 1
         elif self.direction == "BACKWARD":
-            page.panels[idx].z_order = current - 1
+            page.comas[idx].z_order = current - 1
         work_dir = Path(work.work_dir)
         try:
-            panel_io.save_panel_meta(work_dir, page.id, page.panels[idx])
+            coma_io.save_coma_meta(work_dir, page.id, page.comas[idx])
             page_io.save_page_json(work_dir, page)
-            _sync_layer_stack_after_panel_change(context)
+            _sync_layer_stack_after_coma_change(context)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("panel_z_order failed")
             self.report({"ERROR"}, f"Z順序変更失敗: {exc}")
@@ -692,16 +693,16 @@ class BNAME_OT_panel_z_order(Operator):
         return {"FINISHED"}
 
 
-class BNAME_OT_panel_merge_selected(Operator):
+class BNAME_OT_coma_merge_selected(Operator):
     """複数選択中のコマ枠を 1 つの多角形コマへ結合."""
 
-    bl_idname = "bname.panel_merge_selected"
+    bl_idname = "bname.coma_merge_selected"
     bl_label = "コマ結合"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
     def poll(cls, context):
-        refs = object_selection.selected_panel_refs(context)
+        refs = object_selection.selected_coma_refs(context)
         if len(refs) < 2:
             return False
         page_ids = {str(getattr(page, "id", "") or "") for _pi, page, _idx, _panel in refs}
@@ -711,7 +712,7 @@ class BNAME_OT_panel_merge_selected(Operator):
         work = get_work(context)
         if work is None or not getattr(work, "loaded", False):
             return {"CANCELLED"}
-        refs = object_selection.selected_panel_refs(context)
+        refs = object_selection.selected_coma_refs(context)
         if len(refs) < 2:
             self.report({"ERROR"}, "結合するコマを2つ以上選択してください")
             return {"CANCELLED"}
@@ -719,55 +720,55 @@ class BNAME_OT_panel_merge_selected(Operator):
         if len(page_ids) != 1:
             self.report({"ERROR"}, "コマ結合は同じページ内のコマだけが対象です")
             return {"CANCELLED"}
-        polys = [_panel_polygon(panel) for _pi, _page, _idx, panel in refs]
+        polys = [_coma_polygon(panel) for _pi, _page, _idx, panel in refs]
         merged = _merge_boundary_polygon(polys)
         if merged is None or len(merged) < 3:
             self.report({"ERROR"}, "選択コマの外周を作れません。隣接しているコマを選択してください")
             return {"CANCELLED"}
         page_index, page, survivor_index, survivor = refs[0]
-        active_index = int(getattr(page, "active_panel_index", -1))
-        for ref_page_index, ref_page, ref_index, ref_panel in refs:
+        active_index = int(getattr(page, "active_coma_index", -1))
+        for ref_page_index, ref_page, ref_index, ref_coma in refs:
             if ref_page == page and ref_index == active_index:
-                page_index, page, survivor_index, survivor = ref_page_index, ref_page, ref_index, ref_panel
+                page_index, page, survivor_index, survivor = ref_page_index, ref_page, ref_index, ref_coma
                 break
-        survivor_key = layer_stack_utils.gp_parent_key_for_panel(page, survivor)
+        survivor_key = layer_stack_utils.gp_parent_key_for_coma(page, survivor)
         work_dir = Path(work.work_dir)
         remove_indices = sorted(
             (idx for _pi, _page, idx, _panel in refs if idx != survivor_index),
             reverse=True,
         )
         try:
-            _set_panel_polygon(survivor, merged)
+            _set_coma_polygon(survivor, merged)
             survivor.edge_styles.clear()
             survivor.title = getattr(survivor, "title", "") or "結合コマ"
             survivor.z_order = max((int(getattr(panel, "z_order", 0)) for _pi, _page, _idx, panel in refs), default=survivor.z_order)
             for idx in remove_indices:
-                if not (0 <= idx < len(page.panels)):
+                if not (0 <= idx < len(page.comas)):
                     continue
-                removed = page.panels[idx]
-                old_key = layer_stack_utils.gp_parent_key_for_panel(page, removed)
+                removed = page.comas[idx]
+                old_key = layer_stack_utils.gp_parent_key_for_coma(page, removed)
                 layer_stack_utils.reparent_gp_layers(context, old_key, survivor_key)
                 try:
-                    panel_io.remove_panel_files(work_dir, page.id, removed.panel_stem)
+                    coma_io.remove_coma_files(work_dir, page.id, removed.coma_id)
                 except Exception:  # noqa: BLE001
                     _logger.exception("panel_merge_selected: remove panel files failed")
-                page.panels.remove(idx)
+                page.comas.remove(idx)
                 if idx < survivor_index:
                     survivor_index -= 1
-            page.active_panel_index = max(0, min(survivor_index, len(page.panels) - 1))
+            page.active_coma_index = max(0, min(survivor_index, len(page.comas) - 1))
             work.active_page_index = page_index
-            page.panel_count = len(page.panels)
-            for panel in page.panels:
-                panel_io.save_panel_meta(work_dir, page.id, panel)
+            page.coma_count = len(page.comas)
+            for panel in page.comas:
+                coma_io.save_coma_meta(work_dir, page.id, panel)
             _save_page_and_pages(work, page, work_dir)
-            _sync_layer_stack_after_panel_change(context)
+            _sync_layer_stack_after_coma_change(context)
             edge_selection.set_selection(
                 context,
                 "border",
                 page_index=page_index,
-                panel_index=page.active_panel_index,
+                coma_index=page.active_coma_index,
             )
-            object_selection.set_keys(context, [object_selection.panel_key(page, page.panels[page.active_panel_index])])
+            object_selection.set_keys(context, [object_selection.coma_key(page, page.comas[page.active_coma_index])])
         except Exception as exc:  # noqa: BLE001
             _logger.exception("panel_merge_selected failed")
             self.report({"ERROR"}, f"コマ結合失敗: {exc}")
@@ -779,10 +780,10 @@ class BNAME_OT_panel_merge_selected(Operator):
 # ---------- 分割テンプレート ----------
 
 
-class BNAME_OT_panel_split_template(Operator):
+class BNAME_OT_coma_split_template(Operator):
     """選択中コマを縦横に均等分割して置き換える."""
 
-    bl_idname = "bname.panel_split_template"
+    bl_idname = "bname.coma_split_template"
     bl_label = "分割テンプレートで一括生成"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -794,7 +795,7 @@ class BNAME_OT_panel_split_template(Operator):
         default=True,
     )
     target_page_id: StringProperty(default="", options={"HIDDEN"})  # type: ignore[valid-type]
-    target_panel_index: IntProperty(default=-1, options={"HIDDEN"})  # type: ignore[valid-type]
+    target_coma_index: IntProperty(default=-1, options={"HIDDEN"})  # type: ignore[valid-type]
     target_from_edge_selection: BoolProperty(default=False, options={"HIDDEN"})  # type: ignore[valid-type]
 
     @classmethod
@@ -802,25 +803,25 @@ class BNAME_OT_panel_split_template(Operator):
         work = get_work(context)
         if work is None or not work.loaded:
             return False
-        if _selected_edge_panel_target(context) is not None:
+        if _selected_edge_coma_target(context) is not None:
             return True
         page = get_active_page(context)
-        return page is not None and 0 <= page.active_panel_index < len(page.panels)
+        return page is not None and 0 <= page.active_coma_index < len(page.comas)
 
     def invoke(self, context, event):
-        target = _require_target_panel(self, context)
+        target = _require_target_coma(self, context)
         if target is None:
             return {"CANCELLED"}
-        work, page_index, page, panel_index, panel, from_edge = target
+        work, page_index, page, coma_index, panel, from_edge = target
         if panel.shape_type not in {"rect", "polygon"}:
             self.report({"WARNING"}, "矩形または多角形コマを選択してください")
             return {"CANCELLED"}
         self.target_page_id = page.id
-        self.target_panel_index = panel_index
+        self.target_coma_index = coma_index
         self.target_from_edge_selection = from_edge
         work.active_page_index = page_index
-        page.active_panel_index = panel_index
-        panel_modal_state.finish_all(context)
+        page.active_coma_index = coma_index
+        coma_modal_state.finish_all(context)
         return context.window_manager.invoke_props_dialog(self)
 
     def execute(self, context):
@@ -835,30 +836,30 @@ class BNAME_OT_panel_split_template(Operator):
                 page_index = i
                 break
         if page is None:
-            target = _require_target_panel(self, context)
+            target = _require_target_coma(self, context)
             if target is None:
                 return {"CANCELLED"}
-            work, page_index, page, self.target_panel_index, _panel, self.target_from_edge_selection = target
+            work, page_index, page, self.target_coma_index, _panel, self.target_from_edge_selection = target
             self.target_page_id = page.id
-        if not (0 <= self.target_panel_index < len(page.panels)):
+        if not (0 <= self.target_coma_index < len(page.comas)):
             self.report({"ERROR"}, "分割対象のコマが見つかりません")
             return {"CANCELLED"}
-        src = page.panels[self.target_panel_index]
+        src = page.comas[self.target_coma_index]
         if src.shape_type not in {"rect", "polygon"}:
             self.report({"WARNING"}, "矩形または多角形コマを選択してください")
             return {"CANCELLED"}
         work_dir = Path(work.work_dir)
-        panel_modal_state.finish_all(context)
-        gap_v = work.panel_gap.vertical_mm
-        gap_h = work.panel_gap.horizontal_mm
+        coma_modal_state.finish_all(context)
+        gap_v = work.coma_gap.vertical_mm
+        gap_h = work.coma_gap.horizontal_mm
         rows, cols = self.rows, self.cols
         src_title = src.title
         src_z = int(src.z_order)
-        src_template = schema.panel_entry_to_dict(src)
+        src_template = schema.coma_entry_to_dict(src)
         insert_z_base = src_z if self.clear_existing else (
-            max((p.z_order for p in page.panels), default=-1) + 1
+            max((p.z_order for p in page.comas), default=-1) + 1
         )
-        src_poly = _panel_polygon(src)
+        src_poly = _coma_polygon(src)
         if src.shape_type == "rect":
             total_gap_w = gap_h * (cols - 1)
             total_gap_h = gap_v * (rows - 1)
@@ -879,25 +880,25 @@ class BNAME_OT_panel_split_template(Operator):
 
         try:
             if self.clear_existing:
-                panel_io.remove_panel_files(work_dir, page.id, src.panel_stem)
+                coma_io.remove_coma_files(work_dir, page.id, src.coma_id)
                 layer_stack_utils.delete_gp_layers_for_parent_keys(
-                    context, {layer_stack_utils.gp_parent_key_for_panel(page, src)}
+                    context, {layer_stack_utils.gp_parent_key_for_coma(page, src)}
                 )
-                page.panels.remove(self.target_panel_index)
-                if len(page.panels) == 0:
-                    page.active_panel_index = -1
-                elif self.target_panel_index >= len(page.panels):
-                    page.active_panel_index = len(page.panels) - 1
+                page.comas.remove(self.target_coma_index)
+                if len(page.comas) == 0:
+                    page.active_coma_index = -1
+                elif self.target_coma_index >= len(page.comas):
+                    page.active_coma_index = len(page.comas) - 1
 
-            first_new_index = len(page.panels)
+            first_new_index = len(page.comas)
             # 行は上から下へ (漫画は右→左の読み順だが、ここでは配列順のみ)
             for r in range(rows):
                 for c in range(cols):
-                    stem = panel_io.allocate_new_panel_stem(work_dir, page.id)
-                    entry = page.panels.add()
-                    schema.panel_entry_from_dict(entry, src_template)
-                    entry.panel_stem = stem
-                    entry.id = stem.split("_", 1)[1]
+                    stem = coma_io.allocate_new_coma_id(work_dir, page.id)
+                    entry = page.comas.add()
+                    schema.coma_entry_from_dict(entry, src_template)
+                    entry.coma_id = stem
+                    entry.id = stem
                     entry.title = f"{src_title} {r + 1}-{c + 1}"
                     if split_grid is None:
                         entry.shape_type = "rect"
@@ -909,37 +910,37 @@ class BNAME_OT_panel_split_template(Operator):
                         entry.rect_width_mm = cell_w
                         entry.rect_height_mm = cell_h
                     else:
-                        _set_panel_polygon(entry, split_grid[c][r])
+                        _set_coma_polygon(entry, split_grid[c][r])
                         entry.edge_styles.clear()
                     entry.z_order = insert_z_base + r * cols + c
-                    panel_io.save_panel_meta(work_dir, page.id, entry)
-            page.active_panel_index = first_new_index if len(page.panels) > first_new_index else -1
+                    coma_io.save_coma_meta(work_dir, page.id, entry)
+            page.active_coma_index = first_new_index if len(page.comas) > first_new_index else -1
             work.active_page_index = page_index
             _save_page_and_pages(work, page, work_dir)
-            _sync_layer_stack_after_panel_change(context)
+            _sync_layer_stack_after_coma_change(context)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("panel_split_template failed")
             self.report({"ERROR"}, f"分割失敗: {exc}")
             return {"CANCELLED"}
-        if self.target_from_edge_selection and page.active_panel_index >= 0:
+        if self.target_from_edge_selection and page.active_coma_index >= 0:
             _set_edge_selection(
                 context,
                 kind="border",
                 page_index=page_index,
-                panel_index=page.active_panel_index,
+                coma_index=page.active_coma_index,
             )
         self.report({"INFO"}, f"分割: {rows}×{cols} = {rows * cols} コマ")
         return {"FINISHED"}
 
 
 _CLASSES = (
-    BNAME_OT_panel_add,
-    BNAME_OT_panel_remove,
-    BNAME_OT_panel_duplicate,
-    BNAME_OT_panel_move_to_page,
-    BNAME_OT_panel_z_order,
-    BNAME_OT_panel_merge_selected,
-    BNAME_OT_panel_split_template,
+    BNAME_OT_coma_add,
+    BNAME_OT_coma_remove,
+    BNAME_OT_coma_duplicate,
+    BNAME_OT_coma_move_to_page,
+    BNAME_OT_coma_z_order,
+    BNAME_OT_coma_merge_selected,
+    BNAME_OT_coma_split_template,
 )
 
 

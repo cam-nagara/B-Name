@@ -549,9 +549,9 @@ class BNAME_OT_raster_layer_paint_enter(Operator):
             self.report({"WARNING"}, "非表示のラスターには描画できません")
             return {"CANCELLED"}
         try:
-            from . import panel_modal_state
+            from . import coma_modal_state
 
-            panel_modal_state.finish_all(context)
+            coma_modal_state.finish_all(context)
         except Exception:  # noqa: BLE001
             pass
         obj = ensure_raster_plane(context, entry)

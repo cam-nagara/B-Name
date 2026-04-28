@@ -5,16 +5,16 @@ from __future__ import annotations
 import bpy
 from bpy.types import Panel, UIList
 
-from ..core.mode import MODE_PAGE, MODE_PANEL, get_mode
+from ..core.mode import MODE_PAGE, MODE_COMA, get_mode
 from ..core.work import get_active_page
 
 B_NAME_CATEGORY = "B-Name"
 
 
-class BNAME_OT_panel_enter_from_list(bpy.types.Operator):
-    """UIList 行の「コマ編集へ」ボタン用: 指定 index のコマを選択してから enter_panel_mode."""
+class BNAME_OT_coma_enter_from_list(bpy.types.Operator):
+    """UIList 行の「コマ編集へ」ボタン用: 指定 index のコマを選択してから enter_coma_mode."""
 
-    bl_idname = "bname.panel_enter_from_list"
+    bl_idname = "bname.coma_enter_from_list"
     bl_label = "このコマを編集"
     bl_options = {"REGISTER"}
 
@@ -25,17 +25,17 @@ class BNAME_OT_panel_enter_from_list(bpy.types.Operator):
         if page is None:
             self.report({"ERROR"}, "ページが選択されていません")
             return {"CANCELLED"}
-        if not (0 <= self.index < len(page.panels)):
+        if not (0 <= self.index < len(page.comas)):
             self.report({"ERROR"}, "コマ index が不正です")
             return {"CANCELLED"}
-        page.active_panel_index = self.index
-        # enter_panel_mode.execute は active panel を対象にするので、
+        page.active_coma_index = self.index
+        # enter_coma_mode.execute は active panel を対象にするので、
         # ここで invoke ではなく execute 経由で呼び出せば ok。
-        return bpy.ops.bname.enter_panel_mode("EXEC_DEFAULT")
+        return bpy.ops.bname.enter_coma_mode("EXEC_DEFAULT")
 
 
-class BNAME_UL_panels(UIList):
-    bl_idname = "BNAME_UL_panels"
+class BNAME_UL_comas(UIList):
+    bl_idname = "BNAME_UL_comas"
 
     def draw_item(
         self,
@@ -50,12 +50,12 @@ class BNAME_UL_panels(UIList):
     ):
         if self.layout_type in {"DEFAULT", "COMPACT"}:
             row = layout.row(align=True)
-            row.label(text=item.panel_stem, icon="IMAGE_DATA")
+            row.label(text=item.coma_id, icon="IMAGE_DATA")
             row.prop(item, "title", text="", emboss=False)
             row.label(text=f"z={item.z_order}")
             # 行内「コマ編集へ」ボタン (overview ダブルクリックと同等の導線)
             op = row.operator(
-                "bname.panel_enter_from_list",
+                "bname.coma_enter_from_list",
                 text="",
                 icon="PLAY",
                 emboss=False,
@@ -63,11 +63,11 @@ class BNAME_UL_panels(UIList):
             op.index = index
         elif self.layout_type == "GRID":
             layout.alignment = "CENTER"
-            layout.label(text=item.panel_stem)
+            layout.label(text=item.coma_id)
 
 
-class BNAME_PT_panels(Panel):
-    bl_idname = "BNAME_PT_panels"
+class BNAME_PT_comas(Panel):
+    bl_idname = "BNAME_PT_comas"
     bl_label = "コマ一覧"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
@@ -92,47 +92,47 @@ class BNAME_PT_panels(Panel):
         row = box.row(align=True)
         if mode == MODE_PAGE:
             row.label(text="紙面編集モード", icon="FILE_IMAGE")
-            row.operator("bname.enter_panel_mode", text="コマ編集へ", icon="PLAY")
+            row.operator("bname.enter_coma_mode", text="コマ編集へ", icon="PLAY")
         else:
-            stem = getattr(context.scene, "bname_current_panel_stem", "")
+            stem = getattr(context.scene, "bname_current_coma_id", "")
             row.label(text=f"コマ編集モード: {stem}", icon="IMAGE_DATA")
-            row.operator("bname.exit_panel_mode", text="戻る (Esc)", icon="BACK")
+            row.operator("bname.exit_coma_mode", text="戻る (Esc)", icon="BACK")
 
         row = layout.row()
         row.template_list(
-            BNAME_UL_panels.bl_idname,
+            BNAME_UL_comas.bl_idname,
             "",
             page,
-            "panels",
+            "comas",
             page,
-            "active_panel_index",
+            "active_coma_index",
             rows=6,
         )
         col = row.column(align=True)
-        col.operator("bname.panel_add", text="", icon="ADD")
-        col.operator("bname.panel_remove", text="", icon="REMOVE")
+        col.operator("bname.coma_add", text="", icon="ADD")
+        col.operator("bname.coma_remove", text="", icon="REMOVE")
         col.separator()
-        col.operator("bname.panel_duplicate", text="", icon="DUPLICATE")
-        col.operator("bname.panel_move_to_page", text="", icon="FORWARD")
+        col.operator("bname.coma_duplicate", text="", icon="DUPLICATE")
+        col.operator("bname.coma_move_to_page", text="", icon="FORWARD")
 
         # Z順序操作
         box = layout.box()
         box.label(text="Z順序")
         row = box.row(align=True)
-        op = row.operator("bname.panel_z_order", text="最背面", icon="TRIA_DOWN_BAR")
+        op = row.operator("bname.coma_z_order", text="最背面", icon="TRIA_DOWN_BAR")
         op.direction = "BACK"
-        op = row.operator("bname.panel_z_order", text="背面へ", icon="TRIA_DOWN")
+        op = row.operator("bname.coma_z_order", text="背面へ", icon="TRIA_DOWN")
         op.direction = "BACKWARD"
-        op = row.operator("bname.panel_z_order", text="前面へ", icon="TRIA_UP")
+        op = row.operator("bname.coma_z_order", text="前面へ", icon="TRIA_UP")
         op.direction = "FORWARD"
-        op = row.operator("bname.panel_z_order", text="最前面", icon="TRIA_UP_BAR")
+        op = row.operator("bname.coma_z_order", text="最前面", icon="TRIA_UP_BAR")
         op.direction = "FRONT"
 
 
 _CLASSES = (
-    BNAME_OT_panel_enter_from_list,
-    BNAME_UL_panels,
-    BNAME_PT_panels,
+    BNAME_OT_coma_enter_from_list,
+    BNAME_UL_comas,
+    BNAME_PT_comas,
 )
 
 

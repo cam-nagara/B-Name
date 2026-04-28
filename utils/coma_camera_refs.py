@@ -7,9 +7,9 @@ from typing import Iterable
 
 from ..core.work import find_page_by_id
 from ..io import export_pipeline
-from . import log, page_grid, panel_preview, paths
+from . import log, page_grid, coma_preview, paths
 from .geom import mm_to_px
-from .panel_camera_constants import (
+from .coma_camera_constants import (
     DEFAULT_REF_DPI,
     KOMA_REF_PREFIX,
     NAME_REF_PREFIX,
@@ -42,11 +42,11 @@ class ReferenceImage:
         self.render_side = render_side if render_side in {"left", "right", "full"} else "full"
 
 
-def ensure_reference_images(work, current_page_id: str, panel_stem: str) -> list[ReferenceImage]:
+def ensure_reference_images(work, current_page_id: str, coma_id: str) -> list[ReferenceImage]:
     """現在コマ用のページ全体マスク下絵を生成して返す."""
     if not export_pipeline.has_pillow():
         _logger.warning("panel camera references require Pillow")
-        return _collect_existing_reference_images(work, current_page_id, panel_stem)
+        return _collect_existing_reference_images(work, current_page_id, coma_id)
     work_dir = Path(work.work_dir)
     ref_dir = reference_dir(work_dir)
     ref_dir.mkdir(parents=True, exist_ok=True)
@@ -54,23 +54,23 @@ def ensure_reference_images(work, current_page_id: str, panel_stem: str) -> list
     refs: list[ReferenceImage] = []
     include_work_blend_mtime = _has_master_gpencil()
     page = find_page_by_id(work, current_page_id)
-    panel = _resolve_panel(work, current_page_id, panel_stem)
+    panel = _resolve_coma(work, current_page_id, coma_id)
     if page is not None and panel is not None:
-        page_count, render_side, _width_mm, _height_mm = _reference_frame_info(work, current_page_id, panel_stem)
+        page_count, render_side, _width_mm, _height_mm = _reference_frame_info(work, current_page_id, coma_id)
         current_page_ref = _ensure_page_reference(work, work_dir, page, ref_dir, include_work_blend_mtime)
         mate_page = _find_spread_mate_page(work, current_page_id)
         mate_page_ref = None
         if mate_page is not None:
             mate_page_ref = _ensure_page_reference(work, work_dir, mate_page, ref_dir, include_work_blend_mtime)
-        masked_page = _koma_ref_path(ref_dir, page.id, panel_stem)
-        if _panel_mask_is_stale((current_page_ref, mate_page_ref), masked_page):
-            _render_current_panel_page_mask(work, page, panel, current_page_ref, mate_page, mate_page_ref, masked_page)
+        masked_page = _koma_ref_path(ref_dir, page.id, coma_id)
+        if _coma_mask_is_stale((current_page_ref, mate_page_ref), masked_page):
+            _render_current_coma_page_mask(work, page, panel, current_page_ref, mate_page, mate_page_ref, masked_page)
         if masked_page.is_file():
             refs.insert(
                 0,
                 ReferenceImage(
                     masked_page,
-                    f"{KOMA_REF_PREFIX}_{page.id}_{panel_stem}",
+                    f"{KOMA_REF_PREFIX}_{page.id}_{coma_id}",
                     "koma",
                     page.id,
                     visible=True,
@@ -86,21 +86,21 @@ def reference_dir(work_dir: Path) -> Path:
     return paths.assets_dir(Path(work_dir)) / REFERENCE_DIR_NAME
 
 
-def _collect_existing_reference_images(work, current_page_id: str, panel_stem: str) -> list[ReferenceImage]:
+def _collect_existing_reference_images(work, current_page_id: str, coma_id: str) -> list[ReferenceImage]:
     """Pillow が無い環境でも、既存PNGやコマプレビューを下絵として拾う."""
     work_dir = Path(getattr(work, "work_dir", "") or "")
     ref_dir = reference_dir(work_dir)
     refs: list[ReferenceImage] = []
-    page_count, render_side, _width_mm, _height_mm = _reference_frame_info(work, current_page_id, panel_stem)
-    masked_page = _koma_ref_path(ref_dir, current_page_id, panel_stem)
-    legacy_crop = ref_dir / f"{KOMA_REF_PREFIX}_{current_page_id}_{panel_stem}.png"
+    page_count, render_side, _width_mm, _height_mm = _reference_frame_info(work, current_page_id, coma_id)
+    masked_page = _koma_ref_path(ref_dir, current_page_id, coma_id)
+    legacy_crop = ref_dir / f"{KOMA_REF_PREFIX}_{current_page_id}_{coma_id}.png"
     crop = masked_page if masked_page.is_file() else legacy_crop
     if crop.is_file():
         refs.insert(
             0,
             ReferenceImage(
                 crop,
-                f"{KOMA_REF_PREFIX}_{current_page_id}_{panel_stem}",
+                f"{KOMA_REF_PREFIX}_{current_page_id}_{coma_id}",
                 "koma",
                 current_page_id,
                 visible=True,
@@ -110,14 +110,14 @@ def _collect_existing_reference_images(work, current_page_id: str, panel_stem: s
             ),
         )
         return refs
-    panel = _resolve_panel(work, current_page_id, panel_stem)
-    source = panel_preview.panel_preview_source_path(work_dir, current_page_id, panel)
+    panel = _resolve_coma(work, current_page_id, coma_id)
+    source = coma_preview.coma_preview_source_path(work_dir, current_page_id, panel)
     if source is not None and source.is_file():
         refs.insert(
             0,
             ReferenceImage(
                 source,
-                f"{KOMA_REF_PREFIX}_{current_page_id}_{panel_stem}",
+                f"{KOMA_REF_PREFIX}_{current_page_id}_{coma_id}",
                 "koma",
                 current_page_id,
                 visible=True,
@@ -130,11 +130,11 @@ def _page_ref_path(ref_dir: Path, page_id: str) -> Path:
     return ref_dir / f"{NAME_REF_PREFIX}_pageclean_{page_id}.png"
 
 
-def _koma_ref_path(ref_dir: Path, page_id: str, panel_stem: str) -> Path:
-    return ref_dir / f"{KOMA_REF_PREFIX}_{page_id}_{panel_stem}_page.png"
+def _koma_ref_path(ref_dir: Path, page_id: str, coma_id: str) -> Path:
+    return ref_dir / f"{KOMA_REF_PREFIX}_{page_id}_{coma_id}_page.png"
 
 
-def _reference_frame_info(work, page_id: str, panel_stem: str = "") -> tuple[int, str, float, float]:
+def _reference_frame_info(work, page_id: str, coma_id: str = "") -> tuple[int, str, float, float]:
     paper = getattr(work, "paper", None) if work is not None else None
     page = find_page_by_id(work, page_id) if work is not None and page_id else None
     page_width = float(getattr(paper, "canvas_width_mm", 0.0) or 0.0)
@@ -142,8 +142,8 @@ def _reference_frame_info(work, page_id: str, panel_stem: str = "") -> tuple[int
     if page is None or page_width <= 0.0 or page_height <= 0.0:
         return 1, "full", page_width, page_height
     if bool(getattr(page, "spread", False)):
-        panel = _resolve_panel(work, page_id, panel_stem)
-        return 2, _spread_panel_side(panel, page_width), page_width, page_height
+        panel = _resolve_coma(work, page_id, coma_id)
+        return 2, _spread_coma_side(panel, page_width), page_width, page_height
     mate = _find_spread_mate_page(work, page_id)
     if mate is None:
         return 1, "full", page_width, page_height
@@ -151,8 +151,8 @@ def _reference_frame_info(work, page_id: str, panel_stem: str = "") -> tuple[int
     return 2, side, page_width, page_height
 
 
-def _spread_panel_side(panel, page_width_mm: float) -> str:
-    bbox = _panel_bbox(panel)
+def _spread_coma_side(panel, page_width_mm: float) -> str:
+    bbox = _coma_bbox(panel)
     if bbox is None or page_width_mm <= 0.0:
         return "full"
     center_x = (bbox[0] + bbox[2]) * 0.5
@@ -214,7 +214,7 @@ def _render_page_reference(work, page, out: Path) -> bool:
             dpi_override=DEFAULT_REF_DPI,
             include_tombo=False,
             include_paper_color=True,
-            include_panel_previews=False,
+            include_coma_previews=False,
         )
         img = export_pipeline.render_page(work, page, options)
         if img is None:
@@ -227,7 +227,7 @@ def _render_page_reference(work, page, out: Path) -> bool:
         return False
 
 
-def _render_current_panel_page_mask(work, page, panel, page_ref: Path | None, mate_page, mate_ref: Path | None, out: Path) -> bool:
+def _render_current_coma_page_mask(work, page, panel, page_ref: Path | None, mate_page, mate_ref: Path | None, out: Path) -> bool:
     Image = export_pipeline.Image
     ImageDraw = export_pipeline.ImageDraw
     if Image is None or ImageDraw is None or page_ref is None:
@@ -245,7 +245,7 @@ def _render_current_panel_page_mask(work, page, panel, page_ref: Path | None, ma
         except Exception:  # noqa: BLE001
             mate_img = None
     canvas, panel_offset_x = _compose_page_reference_pair(work, page, page_img, mate_img)
-    points = _panel_points_px(panel, page_img.height, DEFAULT_REF_DPI, panel_offset_x)
+    points = _coma_points_px(panel, page_img.height, DEFAULT_REF_DPI, panel_offset_x)
     if len(points) < 3:
         return False
     try:
@@ -280,8 +280,8 @@ def _compose_page_reference_pair(work, page, page_img, mate_img):
     return canvas, mate_img.width
 
 
-def _panel_points_px(panel, image_height: int, dpi: int, offset_x: int) -> list[tuple[int, int]]:
-    points = _panel_points_mm(panel)
+def _coma_points_px(panel, image_height: int, dpi: int, offset_x: int) -> list[tuple[int, int]]:
+    points = _coma_points_mm(panel)
     out: list[tuple[int, int]] = []
     for x_mm, y_mm in points:
         x = offset_x + int(round(mm_to_px(x_mm, dpi)))
@@ -290,7 +290,7 @@ def _panel_points_px(panel, image_height: int, dpi: int, offset_x: int) -> list[
     return out
 
 
-def _panel_points_mm(panel) -> list[tuple[float, float]]:
+def _coma_points_mm(panel) -> list[tuple[float, float]]:
     if panel is None:
         return []
     if getattr(panel, "shape_type", "") == "rect":
@@ -312,8 +312,8 @@ def _reference_is_stale(work_dir: Path, page, out: Path, *, include_work_blend: 
         latest = max(latest, _path_mtime(paths.work_blend_path(work_dir)))
     latest = max(latest, _path_mtime(paths.pages_meta_path(work_dir)))
     latest = max(latest, _path_mtime(paths.page_meta_path(work_dir, page.id)))
-    for panel in getattr(page, "panels", []):
-        source = panel_preview.panel_preview_source_path(work_dir, page.id, panel)
+    for panel in getattr(page, "comas", []):
+        source = coma_preview.coma_preview_source_path(work_dir, page.id, panel)
         if source is not None:
             latest = max(latest, _path_mtime(source))
     return _path_mtime(out) < latest
@@ -328,7 +328,7 @@ def _has_master_gpencil() -> bool:
         return False
 
 
-def _panel_mask_is_stale(page_refs: Iterable[Path | None], out: Path) -> bool:
+def _coma_mask_is_stale(page_refs: Iterable[Path | None], out: Path) -> bool:
     valid_refs = [Path(ref) for ref in page_refs if ref is not None and Path(ref).is_file()]
     if not valid_refs:
         return False
@@ -345,24 +345,24 @@ def _path_mtime(path: Path) -> float:
         return 0.0
 
 
-def _resolve_panel(work, page_id: str, panel_stem: str):
+def _resolve_coma(work, page_id: str, coma_id: str):
     page = find_page_by_id(work, page_id) if work is not None else None
     if page is None:
         return None
-    for panel in getattr(page, "panels", []):
-        if getattr(panel, "panel_stem", "") == panel_stem:
+    for panel in getattr(page, "comas", []):
+        if getattr(panel, "coma_id", "") == coma_id:
             return panel
     return None
 
 
-def _panel_bbox_size(panel) -> tuple[float, float]:
-    bbox = _panel_bbox(panel)
+def _coma_bbox_size(panel) -> tuple[float, float]:
+    bbox = _coma_bbox(panel)
     if bbox is None:
         return 0.0, 0.0
     return max(0.0, bbox[2] - bbox[0]), max(0.0, bbox[3] - bbox[1])
 
 
-def _panel_bbox(panel) -> tuple[float, float, float, float] | None:
+def _coma_bbox(panel) -> tuple[float, float, float, float] | None:
     if panel is None:
         return None
     if getattr(panel, "shape_type", "") == "rect":

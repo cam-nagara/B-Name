@@ -1,10 +1,9 @@
 """作品 (.bname) フォルダの作成・読み込み・保存.
 
-ディレクトリ構造は計画書 4.2 参照:
+ディレクトリ構造は新構造を参照:
   MyWork.bname/
     work.json
     pages.json  (page_io 担当)
-    pages/      (page_io 担当)
     assets/
     scenario/
     exports/
@@ -29,7 +28,6 @@ def create_bname_skeleton(work_dir: Path) -> None:
     """.bname フォルダのディレクトリ骨格を作成する (中身の JSON は別関数で書く)."""
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
-    (work_dir / paths.PAGES_DIR_NAME).mkdir(exist_ok=True)
     assets = paths.assets_dir(work_dir)
     assets.mkdir(exist_ok=True)
     (assets / paths.ASSETS_BRUSHES_DIR).mkdir(exist_ok=True)

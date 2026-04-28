@@ -113,9 +113,9 @@ def _editing_operator(context, page, entry):
     if context is None:
         return None
     try:
-        from ..operators import panel_modal_state
+        from ..operators import coma_modal_state
 
-        op = panel_modal_state.get_active("text_tool")
+        op = coma_modal_state.get_active("text_tool")
     except Exception:  # noqa: BLE001
         return None
     if op is None or not bool(getattr(op, "_editing", False)):

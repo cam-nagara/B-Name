@@ -68,7 +68,7 @@ class BNameBorderEdgeOverride(bpy.types.PropertyGroup):
     )
 
 
-class BNamePanelBorder(bpy.types.PropertyGroup):
+class BNameComaBorder(bpy.types.PropertyGroup):
     """コマ枠線スタイル (全辺共通既定 + 辺ごとオーバーライド)."""
 
     style: EnumProperty(  # type: ignore[valid-type]
@@ -129,7 +129,7 @@ class BNameWhiteMarginEdgeOverride(bpy.types.PropertyGroup):
     )
 
 
-class BNamePanelWhiteMargin(bpy.types.PropertyGroup):
+class BNameComaWhiteMargin(bpy.types.PropertyGroup):
     """コマの白フチ (枠線の外側)."""
 
     enabled: BoolProperty(  # type: ignore[valid-type]
@@ -156,7 +156,7 @@ class BNamePanelWhiteMargin(bpy.types.PropertyGroup):
     edge_left: PointerProperty(type=BNameWhiteMarginEdgeOverride)  # type: ignore[valid-type]
 
 
-class BNamePanelEdgeStyle(bpy.types.PropertyGroup):
+class BNameComaEdgeStyle(bpy.types.PropertyGroup):
     """edge_index ベースの個別辺スタイル (多角形コマ対応).
 
     枠線選択ツールで個別の辺をクリック選択した際、その辺だけの色・太さを
@@ -188,17 +188,17 @@ class BNamePanelEdgeStyle(bpy.types.PropertyGroup):
 
 _CLASSES = (
     BNameBorderEdgeOverride,
-    BNamePanelBorder,
+    BNameComaBorder,
     BNameWhiteMarginEdgeOverride,
-    BNamePanelWhiteMargin,
-    BNamePanelEdgeStyle,
+    BNameComaWhiteMargin,
+    BNameComaEdgeStyle,
 )
 
 
 def register() -> None:
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
-    _logger.debug("panel_border registered")
+    _logger.debug("coma_border registered")
 
 
 def unregister() -> None:

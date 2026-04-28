@@ -170,7 +170,7 @@ def _ingest_scenario(payload: dict) -> None:
 
     payload の形式 (暫定):
       {"workName": "...", "episode": 1, "pages": [
-         {"panels": [{"text": "...", "speakerType": "normal", "rubies": [...]}]},
+         {"comas": [{"text": "...", "speakerType": "normal", "rubies": [...]}]},
          ...]}
     """
     work = get_work()

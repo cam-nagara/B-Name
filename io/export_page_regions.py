@@ -90,7 +90,7 @@ def build_page_region_layers(
 ) -> tuple[list[ExportLayer], tuple[int, int], dict[tuple[str, ...], Any]]:
     """Build layers cropped to a full page or a spread half."""
     layers = export_pipeline.build_page_layers(work, page, options)
-    masks = export_pipeline._panel_group_masks(work, page, options)
+    masks = export_pipeline._coma_group_masks(work, page, options)
     crop_box = page_crop_box(work, page, options, spread_side=spread_side)
     if _crop_needed(work, page, options, crop_box):
         layers, size = export_pipeline._crop_layers(layers, crop_box)

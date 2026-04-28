@@ -28,7 +28,7 @@ from .work_info import BNameNombre, BNameWorkInfo
 _logger = log.get_logger(__name__)
 
 
-class BNamePanelGap(bpy.types.PropertyGroup):
+class BNameComaGap(bpy.types.PropertyGroup):
     """コマ間隔ルール (作品共通、計画書 3.2.5.4).
 
     既定値: 上下 7.3mm / 左右 2.1mm。値は mm 単位。
@@ -64,13 +64,22 @@ class BNameWorkData(bpy.types.PropertyGroup):
         default="",
         subtype="DIR_PATH",
     )
+    coma_blend_template_path: StringProperty(  # type: ignore[valid-type]
+        name="コマblendテンプレート",
+        description=(
+            "新規 cNN.blend 作成時に初回コピーする .blend。"
+            "空ならB-Name標準の空コマシーンを作成"
+        ),
+        default="",
+        subtype="FILE_PATH",
+    )
 
     # --- 各セクション ---
     work_info: PointerProperty(type=BNameWorkInfo)  # type: ignore[valid-type]
     nombre: PointerProperty(type=BNameNombre)  # type: ignore[valid-type]
     paper: PointerProperty(type=BNamePaperSettings)  # type: ignore[valid-type]
     safe_area_overlay: PointerProperty(type=BNameSafeAreaOverlay)  # type: ignore[valid-type]
-    panel_gap: PointerProperty(type=BNamePanelGap)  # type: ignore[valid-type]
+    coma_gap: PointerProperty(type=BNameComaGap)  # type: ignore[valid-type]
 
     # --- ページ一覧 ---
     pages: CollectionProperty(type=BNamePageEntry)  # type: ignore[valid-type]
@@ -116,7 +125,7 @@ def find_page_by_id(work: BNameWorkData | None, page_id: str) -> BNamePageEntry 
 
 
 _CLASSES = (
-    BNamePanelGap,
+    BNameComaGap,
     BNameWorkData,
 )
 

@@ -20,7 +20,7 @@ from ..core.work import get_active_page, get_work
 from ..io import balloon_presets
 from ..utils import detail_popup, layer_stack as layer_stack_utils, log, object_selection
 from ..utils.layer_hierarchy import page_stack_key
-from . import panel_modal_state, view_event_region
+from . import coma_modal_state, view_event_region
 
 _logger = log.get_logger(__name__)
 
@@ -150,7 +150,7 @@ def _default_position_for(work, page, local_x_mm: float | None, local_y_mm: floa
 
 
 def _creation_violates_layer_scope(context, page, x_mm: float, y_mm: float, width_mm: float, height_mm: float) -> bool:
-    from ..core.mode import MODE_PANEL, MODE_PAGE, get_mode
+    from ..core.mode import MODE_COMA, MODE_PAGE, get_mode
     from ..utils import layer_stack
 
     cx = x_mm + width_mm * 0.5
@@ -158,15 +158,15 @@ def _creation_violates_layer_scope(context, page, x_mm: float, y_mm: float, widt
     mode = get_mode(context)
     if mode == MODE_PAGE:
         return False
-    if mode == MODE_PANEL:
-        idx = int(getattr(page, "active_panel_index", -1))
-        if not (0 <= idx < len(page.panels)):
+    if mode == MODE_COMA:
+        idx = int(getattr(page, "active_coma_index", -1))
+        if not (0 <= idx < len(page.comas)):
             return False
-        hit = layer_stack.panel_containing_point(page, cx, cy)
+        hit = layer_stack.coma_containing_point(page, cx, cy)
         return (
             hit is None
-            or str(getattr(hit, "panel_stem", "") or "")
-            != str(getattr(page.panels[idx], "panel_stem", "") or "")
+            or str(getattr(hit, "coma_id", "") or "")
+            != str(getattr(page.comas[idx], "coma_id", "") or "")
         )
     return False
 
@@ -629,25 +629,25 @@ class BNAME_OT_balloon_tool(Operator):
         return work is not None and work.loaded and get_active_page(context) is not None
 
     def invoke(self, context, _event):
-        if panel_modal_state.get_active("balloon_tool") is not None:
+        if coma_modal_state.get_active("balloon_tool") is not None:
             return {"FINISHED"}
-        panel_modal_state.finish_active("panel_vertex_edit", context, keep_selection=True)
-        panel_modal_state.finish_active("knife_cut", context, keep_selection=False)
-        panel_modal_state.finish_active("edge_move", context, keep_selection=True)
-        panel_modal_state.finish_active("layer_move", context, keep_selection=True)
-        panel_modal_state.finish_active("text_tool", context, keep_selection=True)
-        panel_modal_state.finish_active("effect_line_tool", context, keep_selection=True)
+        coma_modal_state.finish_active("coma_vertex_edit", context, keep_selection=True)
+        coma_modal_state.finish_active("knife_cut", context, keep_selection=False)
+        coma_modal_state.finish_active("edge_move", context, keep_selection=True)
+        coma_modal_state.finish_active("layer_move", context, keep_selection=True)
+        coma_modal_state.finish_active("text_tool", context, keep_selection=True)
+        coma_modal_state.finish_active("effect_line_tool", context, keep_selection=True)
         self._externally_finished = False
-        self._cursor_modal_set = panel_modal_state.set_modal_cursor(context, "CROSSHAIR")
+        self._cursor_modal_set = coma_modal_state.set_modal_cursor(context, "CROSSHAIR")
         self._clear_drag_state()
         context.window_manager.modal_handler_add(self)
-        panel_modal_state.set_active("balloon_tool", self, context)
+        coma_modal_state.set_active("balloon_tool", self, context)
         self.report({"INFO"}, "フキダシツール: ドラッグで作成")
         return {"RUNNING_MODAL"}
 
     def modal(self, context, event):
         if getattr(self, "_externally_finished", False):
-            panel_modal_state.clear_active("balloon_tool", self, context)
+            coma_modal_state.clear_active("balloon_tool", self, context)
             return {"FINISHED", "PASS_THROUGH"}
         if getattr(self, "_dragging", False):
             return self._modal_dragging(context, event)
@@ -898,7 +898,7 @@ class BNAME_OT_balloon_tool(Operator):
 
     def _cleanup(self, context) -> None:
         if getattr(self, "_cursor_modal_set", False):
-            panel_modal_state.restore_modal_cursor(context)
+            coma_modal_state.restore_modal_cursor(context)
             self._cursor_modal_set = False
         self._clear_drag_state()
 
@@ -908,7 +908,7 @@ class BNAME_OT_balloon_tool(Operator):
             return
         self._externally_finished = True
         self._cleanup(context)
-        panel_modal_state.clear_active("balloon_tool", self, context)
+        coma_modal_state.clear_active("balloon_tool", self, context)
 
 
 class BNAME_OT_balloon_save_preset(Operator):

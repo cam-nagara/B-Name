@@ -9,7 +9,7 @@ from bpy.types import Operator
 from ..core.work import get_work
 from ..utils import layer_stack as layer_stack_utils
 from ..utils import text_style
-from . import panel_modal_state
+from . import coma_modal_state
 
 
 def _find_page_by_id(context, page_id: str):
@@ -33,7 +33,7 @@ def _find_text_entry(context, page_id: str, text_id: str):
 
 
 def _active_text_tool_matches(page_id: str, text_id: str) -> bool:
-    op = panel_modal_state.get_active("text_tool")
+    op = coma_modal_state.get_active("text_tool")
     return (
         op is not None
         and bool(getattr(op, "_editing", False))
@@ -132,7 +132,7 @@ class BNAME_OT_text_selection_style_popup(Operator):
             return False
         page.active_text_index = idx
         if _active_text_tool_matches(self.page_id, self.text_id):
-            active = panel_modal_state.get_active("text_tool")
+            active = coma_modal_state.get_active("text_tool")
             if active is not None:
                 active._selection_anchor = start
                 active._cursor_index = end

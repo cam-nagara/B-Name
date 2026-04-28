@@ -5,7 +5,7 @@ from __future__ import annotations
 import bpy
 from bpy.types import Panel
 
-from ..core.mode import MODE_PAGE, MODE_PANEL, get_mode
+from ..core.mode import MODE_PAGE, MODE_COMA, get_mode
 from ..core.work import get_work
 from ..utils import page_browser
 
@@ -23,16 +23,16 @@ class BNAME_PT_view(Panel):
     @classmethod
     def poll(cls, context):
         w = get_work(context)
-        return bool(w and w.loaded and get_mode(context) != MODE_PANEL)
+        return bool(w and w.loaded and get_mode(context) != MODE_COMA)
 
     def draw(self, context):
         layout = self.layout
         mode = get_mode(context)
-        is_panel_mode = mode == MODE_PANEL
+        is_coma_mode = mode == MODE_COMA
         scene = context.scene
 
         col = layout.column(align=True)
-        col.enabled = not is_panel_mode
+        col.enabled = not is_coma_mode
         row = col.row(align=True)
         row.operator("bname.view_fit_page", text="ページに合わせる", icon="ZOOM_SELECTED")
         row.operator("bname.view_fit_all", text="全ページを一覧", icon="IMGDISPLAY")

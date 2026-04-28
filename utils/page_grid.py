@@ -1,6 +1,6 @@
 """overview 配置の grid transform 計算.
 
-overlay 描画・panel_picker・ページ Collection transform がすべて同じ式で
+overlay 描画・coma_picker・ページ Collection transform がすべて同じ式で
 page_index → (ox_mm, oy_mm) を導出する必要があるため、この 1 ファイルに
 集約する。日本漫画は右→左読みのため、ページ 0001 が x=0 で以降は負の X
 方向に展開される。

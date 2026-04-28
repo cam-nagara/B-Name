@@ -227,14 +227,14 @@ def ensure_pages_for_number_range(context) -> int:
     created = 0
     previous_active = int(getattr(work, "active_page_index", -1))
     try:
-        from ..operators.panel_op import create_basic_frame_panel
+        from ..operators.coma_op import create_basic_frame_coma
 
         for _ in range(max(0, desired - current)):
             entry = page_io.register_new_page(work)
             if hasattr(entry, "in_page_range"):
                 entry.in_page_range = True
             page_io.ensure_page_dir(work_dir, entry.id)
-            create_basic_frame_panel(work, entry, work_dir)
+            create_basic_frame_coma(work, entry, work_dir)
             gp_utils.ensure_page_gpencil(context.scene, entry.id)
             created += 1
         range_changed = update_page_range_visibility(work) or range_changed
@@ -253,7 +253,7 @@ def ensure_pages_for_number_range(context) -> int:
         layer_stack_utils.sync_layer_stack_after_data_change(
             context,
             align_page_order=True,
-            align_panel_order=True,
+            align_coma_order=True,
         )
     except Exception:  # noqa: BLE001
         _logger.exception("ensure_pages_for_number_range failed")

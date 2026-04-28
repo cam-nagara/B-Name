@@ -5,12 +5,12 @@ from __future__ import annotations
 import bpy
 
 from ..utils import log
-from . import panel_edge_move_op
+from . import coma_edge_move_op
 
 _logger = log.get_logger(__name__)
 
 
-class PanelEdgeDragSession:
+class ComaEdgeDragSession:
     """枠線選択オペレータ外から辺/頂点ドラッグ処理を再利用するセッション."""
 
     def __init__(
@@ -33,7 +33,7 @@ class PanelEdgeDragSession:
         self._original_geometry = None
         self._restore_states = []
         self._drag_moved = False
-        panel_edge_move_op.BNAME_OT_panel_edge_move._capture_original_geometry(self)
+        coma_edge_move_op.BNAME_OT_coma_edge_move._capture_original_geometry(self)
         self._restore_states = self._capture_restore_states()
 
     def _to_window(self, ev):
@@ -54,14 +54,14 @@ class PanelEdgeDragSession:
 
     def apply(self, event) -> bool:
         before = bool(getattr(self, "_drag_moved", False))
-        panel_edge_move_op.BNAME_OT_panel_edge_move._apply_drag(self, event)
+        coma_edge_move_op.BNAME_OT_coma_edge_move._apply_drag(self, event)
         self._tag_redraw()
         return bool(getattr(self, "_drag_moved", False)) or before
 
     def finish(self, message: str = "B-Name: 枠線移動") -> bool:
-        changed = panel_edge_move_op.BNAME_OT_panel_edge_move._geometry_changed(self)
+        changed = coma_edge_move_op.BNAME_OT_coma_edge_move._geometry_changed(self)
         if changed:
-            panel_edge_move_op.BNAME_OT_panel_edge_move._save_changes(self)
+            coma_edge_move_op.BNAME_OT_coma_edge_move._save_changes(self)
             self._push_undo_step(message)
         self._tag_redraw()
         return bool(changed)
@@ -71,13 +71,13 @@ class PanelEdgeDragSession:
             return
         for state in self._restore_states:
             page_index = int(state["page"])
-            panel_index = int(state["panel"])
+            coma_index = int(state["coma"])
             if not (0 <= page_index < len(self._work.pages)):
                 continue
             page = self._work.pages[page_index]
-            if not (0 <= panel_index < len(page.panels)):
+            if not (0 <= coma_index < len(page.comas)):
                 continue
-            panel = page.panels[panel_index]
+            panel = page.comas[coma_index]
             if state["shape"] == "rect":
                 x, y, w, h = state["rect"]
                 panel.shape_type = "rect"
@@ -86,7 +86,7 @@ class PanelEdgeDragSession:
                 panel.rect_width_mm = w
                 panel.rect_height_mm = h
             else:
-                panel_edge_move_op._set_panel_polygon(panel, state["poly"])
+                coma_edge_move_op._set_coma_polygon(panel, state["poly"])
         self._tag_redraw()
 
     def _capture_restore_states(self) -> list[dict]:
@@ -95,22 +95,22 @@ class PanelEdgeDragSession:
         refs: set[tuple[int, int]] = set()
         sel = self._selection
         if sel is not None:
-            refs.add((int(sel.get("page", -1)), int(sel.get("panel", -1))))
+            refs.add((int(sel.get("page", -1)), int(sel.get("coma", -1))))
         original = self._original_geometry or {}
         for key in ("adjacent_edges", "vertex_adjacent_edges", "shared_vertices"):
             for item in original.get(key, []) or []:
-                refs.add((int(item.get("page", -1)), int(item.get("panel", -1))))
+                refs.add((int(item.get("page", -1)), int(item.get("coma", -1))))
         states = []
-        for page_index, panel_index in sorted(refs):
+        for page_index, coma_index in sorted(refs):
             if not (0 <= page_index < len(self._work.pages)):
                 continue
             page = self._work.pages[page_index]
-            if not (0 <= panel_index < len(page.panels)):
+            if not (0 <= coma_index < len(page.comas)):
                 continue
-            panel = page.panels[panel_index]
+            panel = page.comas[coma_index]
             states.append({
                 "page": page_index,
-                "panel": panel_index,
+                "coma": coma_index,
                 "shape": str(getattr(panel, "shape_type", "") or ""),
                 "rect": (
                     float(getattr(panel, "rect_x_mm", 0.0)),
@@ -118,6 +118,6 @@ class PanelEdgeDragSession:
                     float(getattr(panel, "rect_width_mm", 0.0)),
                     float(getattr(panel, "rect_height_mm", 0.0)),
                 ),
-                "poly": panel_edge_move_op._panel_polygon(panel),
+                "poly": coma_edge_move_op._coma_polygon(panel),
             })
         return states

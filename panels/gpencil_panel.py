@@ -13,7 +13,7 @@ from __future__ import annotations
 import bpy
 from bpy.types import Panel, UIList
 
-from ..core.mode import MODE_PANEL, get_mode
+from ..core.mode import MODE_COMA, get_mode
 from ..core.work import get_work
 from ..utils import gpencil as gp_utils
 from ..utils import layer_stack as layer_stack_utils
@@ -85,7 +85,7 @@ def _indent(row, depth: int) -> None:
 def _kind_icon(kind: str) -> str:
     return {
         "page": "FILE_BLANK",
-        "panel": "MOD_WIREFRAME",
+        "coma": "MOD_WIREFRAME",
         "gp": "OUTLINER_OB_GREASEPENCIL",
         "gp_folder": "FILE_FOLDER",
         "image": "IMAGE_DATA",
@@ -149,7 +149,7 @@ def _draw_square_label(row, text: str = "", icon: str = "BLANK1") -> None:
 def _draw_visibility_slot(row, item, target, index: int) -> None:
     if target is None:
         _draw_square_label(row)
-    elif item.kind in {"page", "panel"} and hasattr(target, "visible"):
+    elif item.kind in {"page", "coma"} and hasattr(target, "visible"):
         _visibility_button(row, index, not bool(target.visible))
     elif item.kind in {"image", "raster"} and hasattr(target, "visible"):
         _visibility_button(row, index, not bool(target.visible))
@@ -260,11 +260,11 @@ def _draw_right_aux_lock(row, target, prop_name: str = "lock") -> None:
     )
 
 
-def _draw_right_aux_panel_enter(row, index: int) -> None:
+def _draw_right_aux_coma_enter(row, index: int) -> None:
     cell = row.row(align=True)
     cell.ui_units_x = 1.0
     op = cell.operator(
-        "bname.layer_stack_enter_panel",
+        "bname.layer_stack_enter_coma",
         text="",
         icon="PLAY",
         emboss=False,
@@ -286,8 +286,8 @@ def _draw_right_controls(row, controls, index: int) -> None:
         _draw_square_placeholder(slots)
 
     aux = controls.get("aux")
-    if aux == "panel_enter":
-        _draw_right_aux_panel_enter(slots, index)
+    if aux == "coma_enter":
+        _draw_right_aux_coma_enter(slots, index)
     elif aux == "lock":
         _draw_right_aux_lock(slots, controls.get("lock_target"), controls.get("lock_prop", "lock"))
     else:
@@ -319,13 +319,13 @@ def _draw_stack_page_row(row, item, resolved, index: int, work=None) -> None:
     _select_icon_name(row, index, layer_stack_detail_ui.page_layer_name(target, work), icon)
 
 
-def _draw_stack_panel_row(row, controls, item, resolved, index: int) -> None:
+def _draw_stack_coma_row(row, controls, item, resolved, index: int) -> None:
     target = resolved.get("target") if resolved is not None else None
     if target is None:
         _select_icon_name(row, index, item.label, _kind_icon(item.kind))
         return
-    _select_icon_name(row, index, layer_stack_detail_ui.panel_layer_name(target), "MOD_WIREFRAME")
-    controls["aux"] = "panel_enter"
+    _select_icon_name(row, index, layer_stack_detail_ui.coma_layer_name(target), "MOD_WIREFRAME")
+    controls["aux"] = "coma_enter"
 
 
 def _draw_stack_data_row(row, controls, item, resolved, index: int) -> None:
@@ -396,8 +396,8 @@ class BNAME_UL_layer_stack(UIList):
         controls = {}
         if item.kind == "page":
             _draw_stack_page_row(left, item, resolved, index, get_work(context))
-        elif item.kind == "panel":
-            _draw_stack_panel_row(left, controls, item, resolved, index)
+        elif item.kind == "coma":
+            _draw_stack_coma_row(left, controls, item, resolved, index)
         elif item.kind in {"gp", "gp_folder", "effect"}:
             _draw_stack_gp_row(left, controls, item, resolved, index)
         else:
@@ -464,7 +464,7 @@ class BNAME_PT_layer_stack(Panel):
     @classmethod
     def poll(cls, context):
         work = get_work(context)
-        return bool(work and work.loaded and get_mode(context) != MODE_PANEL)
+        return bool(work and work.loaded and get_mode(context) != MODE_COMA)
 
     def draw(self, context):
         layout = self.layout
@@ -488,7 +488,7 @@ class BNAME_PT_gpencil(Panel):
 
     @classmethod
     def poll(cls, context):
-        return get_mode(context) != MODE_PANEL
+        return get_mode(context) != MODE_COMA
 
     def draw(self, context):
         layout = self.layout
@@ -604,9 +604,9 @@ class BNAME_OT_gpencil_master_mode_set(bpy.types.Operator):
 
     def execute(self, context):
         try:
-            from ..operators import panel_modal_state
+            from ..operators import coma_modal_state
 
-            panel_modal_state.finish_all(context)
+            coma_modal_state.finish_all(context)
         except Exception:  # noqa: BLE001
             pass
         if self.mode in {_GP_PAINT_MODE, _GP_EDIT_MODE}:

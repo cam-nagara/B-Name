@@ -5,7 +5,7 @@ from __future__ import annotations
 import bpy
 from bpy.types import Panel, UIList
 
-from ..core.mode import MODE_PANEL, get_mode
+from ..core.mode import MODE_COMA, get_mode
 from ..core.work import get_work
 
 B_NAME_CATEGORY = "B-Name"
@@ -58,14 +58,14 @@ class BNAME_PT_pages(Panel):
         work = get_work(context)
         if work is None:
             return
-        is_panel_mode = get_mode(context) == MODE_PANEL
+        is_coma_mode = get_mode(context) == MODE_COMA
 
-        if is_panel_mode:
+        if is_coma_mode:
             box = layout.box()
             box.label(text="コマ編集モード中は紙面操作できません", icon="INFO")
 
         row = layout.row()
-        row.enabled = not is_panel_mode
+        row.enabled = not is_coma_mode
         row.template_list(
             BNAME_UL_pages.bl_idname,
             "",
@@ -76,7 +76,7 @@ class BNAME_PT_pages(Panel):
             rows=6,
         )
         col = row.column(align=True)
-        col.enabled = not is_panel_mode
+        col.enabled = not is_coma_mode
         col.operator("bname.page_add", text="", icon="ADD")
         col.operator("bname.page_remove", text="", icon="REMOVE")
         col.separator()
@@ -89,7 +89,7 @@ class BNAME_PT_pages(Panel):
 
         # 見開き操作
         box = layout.box()
-        box.enabled = not is_panel_mode
+        box.enabled = not is_coma_mode
         box.label(text="見開き")
         row = box.row(align=True)
         row.operator("bname.pages_merge_spread", text="変更", icon="ARROW_LEFTRIGHT")
@@ -100,7 +100,7 @@ class BNAME_PT_pages(Panel):
         if 0 <= idx < len(work.pages):
             entry = work.pages[idx]
             box = layout.box()
-            box.label(text=f"選択: {entry.id}  コマ数: {entry.panel_count}")
+            box.label(text=f"選択: {entry.id}  コマ数: {entry.coma_count}")
             if entry.spread:
                 box.label(text=f"見開き: 間隔 {entry.tombo_gap_mm:.2f}mm")
 

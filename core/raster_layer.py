@@ -30,7 +30,7 @@ SCOPE_ITEMS = (
 PARENT_KIND_ITEMS = (
     ("none", "なし", ""),
     ("page", "ページ", ""),
-    ("panel", "コマ", ""),
+    ("coma", "コマ", ""),
 )
 
 

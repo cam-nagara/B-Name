@@ -6,7 +6,7 @@ register 順序は PointerProperty の前方参照を避けるため、参照先
 階層:
   DisplayItem → WorkInfo
   (Nombre / PaperSettings / SafeAreaOverlay / PageEntry は相互独立)
-  PanelGap + WorkData (他をすべて参照する集約)
+  ComaGap + WorkData (他をすべて参照する集約)
 """
 
 from __future__ import annotations
@@ -18,9 +18,9 @@ from . import (
     image_layer,
     layer_stack,
     mode,
-    panel,
-    panel_border,
-    panel_camera,
+    coma,
+    coma_border,
+    coma_camera,
     paper,
     page,
     raster_layer,
@@ -36,9 +36,9 @@ _MODULES = (
     paper,
     work_info,
     safe_area_overlay,
-    panel_border,
-    panel,
-    panel_camera,
+    coma_border,
+    coma,
+    coma_camera,
     text_entry,
     balloon,
     # ↓ page は text_entry / balloon を参照するため後に register

@@ -12,9 +12,9 @@ import bpy
 from bpy.types import Operator
 
 from ..core.work import get_active_page, get_work
-from ..io import page_io, panel_io
+from ..io import page_io, coma_io
 from ..utils import log, paths
-from . import panel_picker
+from . import coma_picker
 
 _logger = log.get_logger(__name__)
 
@@ -55,24 +55,24 @@ def _resolve_target_from_event(context, event) -> None:
             loc = region_2d_to_location_3d(region, rv3d, (mx, my), (0.0, 0.0, 0.0))
             if loc is None:
                 continue
-            hit = panel_picker.find_panel_at_world_mm(
+            hit = coma_picker.find_coma_at_world_mm(
                 work, geom.m_to_mm(loc.x), geom.m_to_mm(loc.y)
             )
             if hit is None:
                 return
-            page_idx, panel_idx = hit
+            page_idx, coma_idx = hit
             if 0 <= page_idx < len(work.pages):
                 work.active_page_index = page_idx
                 page = work.pages[page_idx]
-                if 0 <= panel_idx < len(page.panels):
-                    page.active_panel_index = panel_idx
+                if 0 <= coma_idx < len(page.comas):
+                    page.active_coma_index = coma_idx
             return
 
 
-class BNAME_OT_panel_to_polygon(Operator):
+class BNAME_OT_coma_to_polygon(Operator):
     """矩形コマを多角形化 (4 頂点を vertices にセット)."""
 
-    bl_idname = "bname.panel_to_polygon"
+    bl_idname = "bname.coma_to_polygon"
     bl_label = "多角形化"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -86,8 +86,8 @@ class BNAME_OT_panel_to_polygon(Operator):
         page = get_active_page(context)
         if (
             page is None
-            or not (0 <= page.active_panel_index < len(page.panels))
-            or page.panels[page.active_panel_index].shape_type != "rect"
+            or not (0 <= page.active_coma_index < len(page.comas))
+            or page.comas[page.active_coma_index].shape_type != "rect"
         ):
             self.report({"WARNING"}, "矩形コマを選択してください")
             return {"CANCELLED"}
@@ -98,9 +98,9 @@ class BNAME_OT_panel_to_polygon(Operator):
         page = get_active_page(context)
         if work is None or page is None:
             return {"CANCELLED"}
-        if not (0 <= page.active_panel_index < len(page.panels)):
+        if not (0 <= page.active_coma_index < len(page.comas)):
             return {"CANCELLED"}
-        entry = page.panels[page.active_panel_index]
+        entry = page.comas[page.active_coma_index]
         if entry.shape_type != "rect":
             self.report({"WARNING"}, "矩形コマにのみ適用可能です")
             return {"CANCELLED"}
@@ -119,20 +119,20 @@ class BNAME_OT_panel_to_polygon(Operator):
         work_dir = Path(work.work_dir) if work.work_dir else None
         if work_dir is not None:
             try:
-                panel_io.save_panel_meta(work_dir, page.id, entry)
+                coma_io.save_coma_meta(work_dir, page.id, entry)
                 page_io.save_page_json(work_dir, page)
             except Exception as exc:  # noqa: BLE001
-                _logger.exception("panel_to_polygon: save failed")
+                _logger.exception("coma_to_polygon: save failed")
                 self.report({"ERROR"}, f"保存失敗: {exc}")
                 return {"CANCELLED"}
         self.report({"INFO"}, "多角形化しました")
         return {"FINISHED"}
 
 
-class BNAME_OT_panel_to_rect(Operator):
+class BNAME_OT_coma_to_rect(Operator):
     """多角形/曲線/フリーフォームのコマを矩形化 (外接矩形で近似)."""
 
-    bl_idname = "bname.panel_to_rect"
+    bl_idname = "bname.coma_to_rect"
     bl_label = "矩形化"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -146,8 +146,8 @@ class BNAME_OT_panel_to_rect(Operator):
         page = get_active_page(context)
         if (
             page is None
-            or not (0 <= page.active_panel_index < len(page.panels))
-            or page.panels[page.active_panel_index].shape_type == "rect"
+            or not (0 <= page.active_coma_index < len(page.comas))
+            or page.comas[page.active_coma_index].shape_type == "rect"
         ):
             self.report({"WARNING"}, "多角形コマを選択してください")
             return {"CANCELLED"}
@@ -158,9 +158,9 @@ class BNAME_OT_panel_to_rect(Operator):
         page = get_active_page(context)
         if work is None or page is None:
             return {"CANCELLED"}
-        if not (0 <= page.active_panel_index < len(page.panels)):
+        if not (0 <= page.active_coma_index < len(page.comas)):
             return {"CANCELLED"}
-        entry = page.panels[page.active_panel_index]
+        entry = page.comas[page.active_coma_index]
         if entry.shape_type == "rect":
             self.report({"WARNING"}, "既に矩形コマです")
             return {"CANCELLED"}
@@ -176,10 +176,10 @@ class BNAME_OT_panel_to_rect(Operator):
         work_dir = Path(work.work_dir) if work.work_dir else None
         if work_dir is not None:
             try:
-                panel_io.save_panel_meta(work_dir, page.id, entry)
+                coma_io.save_coma_meta(work_dir, page.id, entry)
                 page_io.save_page_json(work_dir, page)
             except Exception as exc:  # noqa: BLE001
-                _logger.exception("panel_to_rect: save failed")
+                _logger.exception("coma_to_rect: save failed")
                 self.report({"ERROR"}, f"保存失敗: {exc}")
                 return {"CANCELLED"}
         self.report({"INFO"}, "矩形化しました")
@@ -187,8 +187,8 @@ class BNAME_OT_panel_to_rect(Operator):
 
 
 _CLASSES = (
-    BNAME_OT_panel_to_polygon,
-    BNAME_OT_panel_to_rect,
+    BNAME_OT_coma_to_polygon,
+    BNAME_OT_coma_to_rect,
 )
 
 

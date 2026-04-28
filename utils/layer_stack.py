@@ -13,11 +13,11 @@ from . import gpencil as gp_utils
 from . import log
 from .layer_hierarchy import (
     PAGE_KIND,
-    PANEL_KIND,
+    COMA_KIND,
     entry_center,
     page_stack_key,
-    panel_containing_point,
-    panel_stack_key,
+    coma_containing_point,
+    coma_stack_key,
     split_child_key,
 )
 
@@ -177,15 +177,15 @@ def _iter_gp_node_targets(nodes, *, kind: str, depth: int, parent_key: str, used
                 yield LayerTarget(kind, key, node.name, parent_key, depth)
 
 
-def _panel_parent_key_matches(entry, page, panel_key: str, panel) -> bool:
+def _coma_parent_key_matches(entry, page, coma_key: str, panel) -> bool:
     parent = str(getattr(entry, "parent_key", "") or "")
-    if parent == panel_key:
+    if parent == coma_key:
         return True
     if parent == getattr(panel, "id", ""):
         return True
-    if parent == getattr(panel, "panel_stem", ""):
+    if parent == getattr(panel, "coma_id", ""):
         return True
-    return parent == f"{getattr(page, 'id', '')}:{getattr(panel, 'panel_stem', '')}"
+    return parent == f"{getattr(page, 'id', '')}:{getattr(panel, 'coma_id', '')}"
 
 
 def _collect_raster_targets_for_page(page, panels_by_key: dict[str, object]):
@@ -205,11 +205,11 @@ def _collect_raster_targets_for_page(page, panels_by_key: dict[str, object]):
         if parent_kind == "page" and parent_key in {getattr(page, "id", ""), page_key}:
             page_children.append(LayerTarget("raster", entry.id, label, page_key, 1))
             continue
-        if parent_kind == "panel":
-            for panel_key, panel in panels_by_key.items():
-                if _panel_parent_key_matches(entry, page, panel_key, panel):
-                    panel_children.setdefault(panel_key, []).append(
-                        LayerTarget("raster", entry.id, label, panel_key, 2)
+        if parent_kind == "coma":
+            for coma_key, panel in panels_by_key.items():
+                if _coma_parent_key_matches(entry, page, coma_key, panel):
+                    panel_children.setdefault(coma_key, []).append(
+                        LayerTarget("raster", entry.id, label, coma_key, 2)
                     )
                     break
     return page_children, panel_children
@@ -235,14 +235,14 @@ def _collect_page_layer_targets(
         panels_by_key,
     )
     page_children.extend(raster_page_children)
-    for panel_key, children in raster_panel_children.items():
-        panel_children.setdefault(panel_key, []).extend(children)
+    for coma_key, children in raster_panel_children.items():
+        panel_children.setdefault(coma_key, []).extend(children)
 
     for entry in reversed(list(getattr(page, "balloons", []))):
         bid = _ensure_unique_id(entry, used_balloon, "balloon")
-        panel = panel_containing_point(page, *entry_center(entry))
+        panel = coma_containing_point(page, *entry_center(entry))
         if panel is not None:
-            parent = panel_stack_key(page, panel)
+            parent = coma_stack_key(page, panel)
             depth = 2
         else:
             parent = page_key
@@ -291,9 +291,9 @@ def _collect_page_layer_targets(
         tid = _ensure_unique_id(entry, used_text, "text")
         label = getattr(entry, "body", "") or tid
         center = entry_center(entry)
-        panel = panel_containing_point(page, *center)
+        panel = coma_containing_point(page, *center)
         if panel is not None:
-            parent = panel_stack_key(page, panel)
+            parent = coma_stack_key(page, panel)
             depth = 2
         else:
             parent = page_key
@@ -304,8 +304,8 @@ def _collect_page_layer_targets(
         else:
             page_children.append(target)
 
-    for panel_key in panels_by_key:
-        targets.extend(panel_children.get(panel_key, []))
+    for coma_key in panels_by_key:
+        targets.extend(panel_children.get(coma_key, []))
     if include_page_children:
         targets.extend(page_children)
     return targets
@@ -347,16 +347,16 @@ def collect_targets(context) -> list[LayerTarget]:
             if not bool(getattr(page, "stack_expanded", True)):
                 continue
             panels = sorted(
-                list(getattr(page, "panels", [])),
+                list(getattr(page, "comas", [])),
                 key=lambda p: int(getattr(p, "z_order", 0)),
                 reverse=True,
             )
             panels_by_key: dict[str, object] = {}
             for panel in panels:
-                key = panel_stack_key(page, panel)
+                key = coma_stack_key(page, panel)
                 panels_by_key[key] = panel
-                panel_label = getattr(panel, "title", "") or getattr(panel, "panel_stem", "") or key
-                targets.append(LayerTarget(PANEL_KIND, key, panel_label, page_key, 1))
+                panel_label = getattr(panel, "title", "") or getattr(panel, "coma_id", "") or key
+                targets.append(LayerTarget(COMA_KIND, key, panel_label, page_key, 1))
                 targets.extend(gp_targets_by_parent.get(key, []))
                 targets.extend(
                     _collect_page_layer_targets(
@@ -405,7 +405,7 @@ def _find_insert_index_for_target(stack, target: LayerTarget) -> int:
         parent_idx = -1
         last_child_idx = -1
         for i, item in enumerate(stack):
-            if item.key == target.parent_key and item.kind in {PAGE_KIND, PANEL_KIND, "gp_folder", "balloon_group"}:
+            if item.key == target.parent_key and item.kind in {PAGE_KIND, COMA_KIND, "gp_folder", "balloon_group"}:
                 parent_idx = i
                 last_child_idx = max(last_child_idx, i)
             elif getattr(item, "parent_key", "") == target.parent_key:
@@ -450,7 +450,7 @@ def _ordered_items_by_uid(items, uid_order: list[str] | None):
 def _normalize_tree_order(
     stack,
     page_key_order: list[str] | None = None,
-    panel_key_order_by_page: dict[str, list[str]] | None = None,
+    coma_key_order_by_page: dict[str, list[str]] | None = None,
 ) -> None:
     """ページ/コマを常にツリー構造へ戻す。
 
@@ -487,13 +487,13 @@ def _normalize_tree_order(
         panel_items = [
             item
             for item in stack
-            if item.kind == PANEL_KIND and split_child_key(item.key)[0] == page_key
+            if item.kind == COMA_KIND and split_child_key(item.key)[0] == page_key
         ]
         panel_uid_order = None
-        if panel_key_order_by_page is not None:
+        if coma_key_order_by_page is not None:
             panel_uid_order = [
-                target_uid(PANEL_KIND, key)
-                for key in panel_key_order_by_page.get(page_key, [])
+                target_uid(COMA_KIND, key)
+                for key in coma_key_order_by_page.get(page_key, [])
             ]
             panel_items = _ordered_items_by_uid(panel_items, panel_uid_order)
         for panel_item in panel_items:
@@ -506,7 +506,7 @@ def _normalize_tree_order(
                             if getattr(group_child, "parent_key", "") == child.key:
                                 _append_uid(group_child)
         for child in stack:
-            if getattr(child, "parent_key", "") == page_key and child.kind != PANEL_KIND:
+            if getattr(child, "parent_key", "") == page_key and child.kind != COMA_KIND:
                 _append_uid(child)
                 if child.kind == "balloon_group":
                     for group_child in stack:
@@ -539,7 +539,7 @@ def sync_layer_stack(
     *,
     preserve_active_index: bool = False,
     align_page_order: bool = False,
-    align_panel_order: bool = False,
+    align_coma_order: bool = False,
 ):
     """統合レイヤーリストを実データに同期する。
 
@@ -576,15 +576,15 @@ def sync_layer_stack(
         work = get_work(context)
         if work is not None and getattr(work, "loaded", False):
             page_key_order = [page_stack_key(page) for page in work.pages]
-    panel_key_order_by_page = None
-    if align_panel_order:
-        panel_key_order_by_page = {}
+    coma_key_order_by_page = None
+    if align_coma_order:
+        coma_key_order_by_page = {}
         for target in targets:
-            if target.kind != PANEL_KIND:
+            if target.kind != COMA_KIND:
                 continue
             page_key, _stem = split_child_key(target.key)
-            panel_key_order_by_page.setdefault(page_key, []).append(target.key)
-    _normalize_tree_order(stack, page_key_order, panel_key_order_by_page)
+            coma_key_order_by_page.setdefault(page_key, []).append(target.key)
+    _normalize_tree_order(stack, page_key_order, coma_key_order_by_page)
 
     if preserve_active_index and old_active_uid:
         for i, item in enumerate(stack):
@@ -645,9 +645,9 @@ def _same_move_scope(a, b) -> bool:
     b_kind = getattr(b, "kind", "")
     if a_kind == PAGE_KIND or b_kind == PAGE_KIND:
         return a_kind == b_kind == PAGE_KIND
-    if a_kind == PANEL_KIND or b_kind == PANEL_KIND:
+    if a_kind == COMA_KIND or b_kind == COMA_KIND:
         return (
-            a_kind == b_kind == PANEL_KIND
+            a_kind == b_kind == COMA_KIND
             and split_child_key(getattr(a, "key", ""))[0]
             == split_child_key(getattr(b, "key", ""))[0]
         )
@@ -715,7 +715,7 @@ def _gp_parent_key_from_flat_drop(stack, moved_index: int) -> str:
         return ""
     previous = stack[moved_index - 1]
     previous_kind = getattr(previous, "kind", "")
-    if previous_kind in {PAGE_KIND, PANEL_KIND}:
+    if previous_kind in {PAGE_KIND, COMA_KIND}:
         return str(getattr(previous, "key", "") or "")
     if previous_kind == "gp_folder":
         return str(getattr(previous, "key", "") or "")
@@ -755,12 +755,12 @@ def _apply_gp_folder_drop_hint(context, moved_uid: str) -> bool:
     old_parent_key = str(getattr(item, "parent_key", "") or "")
     kind = getattr(item, "kind", "")
     work = get_work(context)
-    parent_is_page_panel = parent_key and gp_parent.parent_key_exists(work, parent_key)
+    parent_is_page_coma = parent_key and gp_parent.parent_key_exists(work, parent_key)
     parent_is_gp_folder = bool(_find_stack_item(stack, "gp_folder", parent_key)) if parent_key else False
-    if parent_key and not parent_is_page_panel and not parent_is_gp_folder:
+    if parent_key and not parent_is_page_coma and not parent_is_gp_folder:
         return False
     if kind == "gp_folder":
-        if parent_is_page_panel:
+        if parent_is_page_coma:
             return False
         item_key = str(getattr(item, "key", "") or "")
         if parent_key == item_key or _is_stack_folder_descendant(stack, item_key, parent_key):
@@ -773,7 +773,7 @@ def _apply_gp_folder_drop_hint(context, moved_uid: str) -> bool:
         parent = (
             _find_stack_item(stack, "gp_folder", parent_key)
             or _find_stack_item(stack, PAGE_KIND, parent_key)
-            or _find_stack_item(stack, PANEL_KIND, parent_key)
+            or _find_stack_item(stack, COMA_KIND, parent_key)
         )
     item.depth = int(getattr(parent, "depth", -1)) + 1 if parent is not None else 0
     obj = gp_utils.get_master_gpencil()
@@ -846,14 +846,14 @@ def sync_layer_stack_after_data_change(
     context,
     *,
     align_page_order: bool = False,
-    align_panel_order: bool = False,
+    align_coma_order: bool = False,
 ) -> None:
     """Operator で実データを更新した直後に、UIList と既知シグネチャを揃える."""
     try:
         sync_layer_stack(
             context,
             align_page_order=align_page_order,
-            align_panel_order=align_panel_order,
+            align_coma_order=align_coma_order,
         )
         _remember_stack_signature(context)
         tag_view3d_redraw(context)
@@ -903,10 +903,10 @@ def _active_key_from_scene(context) -> tuple[str, str] | None:
         idx = int(getattr(work, "active_page_index", -1))
         if 0 <= idx < len(work.pages):
             return PAGE_KIND, page_stack_key(work.pages[idx])
-    if kind == PANEL_KIND and page is not None:
-        idx = int(getattr(page, "active_panel_index", -1))
-        if 0 <= idx < len(page.panels):
-            return PANEL_KIND, panel_stack_key(page, page.panels[idx])
+    if kind == COMA_KIND and page is not None:
+        idx = int(getattr(page, "active_coma_index", -1))
+        if 0 <= idx < len(page.comas):
+            return COMA_KIND, coma_stack_key(page, page.comas[idx])
     if kind == "gp_folder":
         key = str(getattr(scene, "bname_active_gp_folder_key", "") or "")
         obj = gp_utils.get_master_gpencil()
@@ -1000,8 +1000,8 @@ def gp_parent_keys_for_page(page) -> set[str]:
     return gp_parent.parent_keys_for_page(page)
 
 
-def gp_parent_key_for_panel(page, panel) -> str:
-    return gp_parent.parent_key_for_panel(page, panel)
+def gp_parent_key_for_coma(page, panel) -> str:
+    return gp_parent.parent_key_for_coma(page, panel)
 
 
 def gp_layers_for_parent_keys(context, parent_keys: set[str]) -> list[object]:
@@ -1079,20 +1079,20 @@ def resolve_stack_item(context, item):
             return None
         idx, entry = _find_by_id(work.pages, key)
         return {"kind": kind, "target": entry, "object": None, "index": idx}
-    if kind == PANEL_KIND:
+    if kind == COMA_KIND:
         if work is None:
             return None
         page_id, stem = split_child_key(key)
         page_idx, target_page = _find_by_id(work.pages, page_id)
         if target_page is None:
             return None
-        for panel_idx, panel in enumerate(target_page.panels):
-            if getattr(panel, "panel_stem", "") == stem or getattr(panel, "id", "") == stem:
+        for coma_idx, panel in enumerate(target_page.comas):
+            if getattr(panel, "coma_id", "") == stem or getattr(panel, "id", "") == stem:
                 return {
                     "kind": kind,
                     "target": panel,
                     "object": None,
-                    "index": panel_idx,
+                    "index": coma_idx,
                     "page": target_page,
                     "page_index": page_idx,
                 }
@@ -1258,27 +1258,27 @@ def select_stack_index(context, index: int) -> bool:
 
             set_mode(MODE_PAGE, context)
             scene.bname_overview_mode = True
-            scene.bname_current_panel_stem = ""
-            scene.bname_current_panel_page_id = ""
+            scene.bname_current_coma_id = ""
+            scene.bname_current_coma_page_id = ""
         except Exception:  # noqa: BLE001
             pass
         scene.bname_active_gp_folder_key = ""
         scene.bname_active_layer_kind = PAGE_KIND
         edge_selection.clear_selection(context)
-    elif kind == PANEL_KIND:
+    elif kind == COMA_KIND:
         work = get_work(context)
         page_idx = int(resolved.get("page_index", -1))
-        panel_idx = int(resolved.get("index", -1))
+        coma_idx = int(resolved.get("index", -1))
         target_page = resolved.get("page")
         if (
             work is None
             or target_page is None
             or not (0 <= page_idx < len(work.pages))
-            or not (0 <= panel_idx < len(target_page.panels))
+            or not (0 <= coma_idx < len(target_page.comas))
         ):
             return False
         work.active_page_index = page_idx
-        target_page.active_panel_index = panel_idx
+        target_page.active_coma_index = coma_idx
         try:
             from ..core.mode import MODE_PAGE, set_mode
 
@@ -1287,12 +1287,12 @@ def select_stack_index(context, index: int) -> bool:
         except Exception:  # noqa: BLE001
             pass
         scene.bname_active_gp_folder_key = ""
-        scene.bname_active_layer_kind = PANEL_KIND
+        scene.bname_active_layer_kind = COMA_KIND
         edge_selection.set_selection(
             context,
             "border",
             page_index=page_idx,
-            panel_index=panel_idx,
+            coma_index=coma_idx,
         )
     elif kind == "gp":
         obj = resolved.get("object")
@@ -1445,7 +1445,7 @@ def _restore_active_collection_index(owner, prop_name: str, coll, active_key: st
     setattr(owner, prop_name, 0 if len(coll) > 0 else -1)
 
 
-def _restore_active_page_panel(work, active_page_key: str, active_panel_key: str) -> None:
+def _restore_active_page_coma(work, active_page_key: str, active_coma_key: str) -> None:
     if work is None:
         return
     work.active_page_index = -1
@@ -1456,17 +1456,17 @@ def _restore_active_page_panel(work, active_page_key: str, active_panel_key: str
     if work.active_page_index < 0 and len(work.pages) > 0:
         work.active_page_index = 0
     for page in work.pages:
-        if int(getattr(page, "active_panel_index", -1)) >= len(page.panels):
-            page.active_panel_index = len(page.panels) - 1 if len(page.panels) else -1
-        if not active_panel_key:
+        if int(getattr(page, "active_coma_index", -1)) >= len(page.comas):
+            page.active_coma_index = len(page.comas) - 1 if len(page.comas) else -1
+        if not active_coma_key:
             continue
-        for j, panel in enumerate(page.panels):
-            if panel_stack_key(page, panel) == active_panel_key:
-                page.active_panel_index = j
+        for j, panel in enumerate(page.comas):
+            if coma_stack_key(page, panel) == active_coma_key:
+                page.active_coma_index = j
                 break
 
 
-def _apply_page_panel_orders(context, stack) -> None:
+def _apply_page_coma_orders(context, stack) -> None:
     work = get_work(context)
     if work is None or not getattr(work, "loaded", False):
         return
@@ -1481,14 +1481,14 @@ def _apply_page_panel_orders(context, stack) -> None:
             for i, page in enumerate(work.pages)
         }
     active_page_key = ""
-    active_panel_key = ""
+    active_coma_key = ""
     active_idx = int(getattr(work, "active_page_index", -1))
     if 0 <= active_idx < len(work.pages):
         active_page = work.pages[active_idx]
         active_page_key = page_stack_key(active_page)
-        panel_idx = int(getattr(active_page, "active_panel_index", -1))
-        if 0 <= panel_idx < len(active_page.panels):
-            active_panel_key = panel_stack_key(active_page, active_page.panels[panel_idx])
+        coma_idx = int(getattr(active_page, "active_coma_index", -1))
+        if 0 <= coma_idx < len(active_page.comas):
+            active_coma_key = coma_stack_key(active_page, active_page.comas[coma_idx])
 
     page_keys = [item.key for item in stack if item.kind == PAGE_KIND]
     _reorder_collection(work.pages, page_keys, page_stack_key)
@@ -1511,18 +1511,18 @@ def _apply_page_panel_orders(context, stack) -> None:
 
     for page in work.pages:
         page_key = page_stack_key(page)
-        panel_keys = [
+        coma_keys = [
             item.key
             for item in stack
-            if item.kind == PANEL_KIND and split_child_key(item.key)[0] == page_key
+            if item.kind == COMA_KIND and split_child_key(item.key)[0] == page_key
         ]
-        _reorder_collection(page.panels, panel_keys, lambda panel: panel_stack_key(page, panel))
-        count = len(page.panels)
-        for i, panel in enumerate(page.panels):
+        _reorder_collection(page.comas, coma_keys, lambda panel: coma_stack_key(page, panel))
+        count = len(page.comas)
+        for i, panel in enumerate(page.comas):
             panel.z_order = count - i - 1
-        page.panel_count = count
+        page.coma_count = count
 
-    _restore_active_page_panel(work, active_page_key, active_panel_key)
+    _restore_active_page_coma(work, active_page_key, active_coma_key)
     try:
         if page_grid is None:
             return
@@ -1726,7 +1726,7 @@ def apply_stack_order(context) -> None:
     stack = getattr(context.scene, "bname_layer_stack", None)
     if stack is None:
         return
-    _apply_page_panel_orders(context, stack)
+    _apply_page_coma_orders(context, stack)
     _apply_simple_collection_orders(context, stack)
     gp_obj = gp_utils.get_master_gpencil()
     if gp_obj is not None:
@@ -1759,11 +1759,11 @@ def delete_stack_index(context, index: int) -> bool:
         except Exception:  # noqa: BLE001
             _logger.exception("delete page from layer stack failed")
             return False
-    if kind == PANEL_KIND:
+    if kind == COMA_KIND:
         if not select_stack_index(context, index):
             return False
         try:
-            return "FINISHED" in bpy.ops.bname.panel_remove("EXEC_DEFAULT")
+            return "FINISHED" in bpy.ops.bname.coma_remove("EXEC_DEFAULT")
         except Exception:  # noqa: BLE001
             _logger.exception("delete panel from layer stack failed")
             return False

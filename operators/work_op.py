@@ -9,7 +9,7 @@ from bpy.props import StringProperty
 from bpy.types import Operator
 from bpy_extras.io_utils import ImportHelper, ExportHelper
 
-from ..core.mode import MODE_PAGE, MODE_PANEL, get_mode, set_mode
+from ..core.mode import MODE_PAGE, MODE_COMA, get_mode, set_mode
 from ..core.work import get_work
 from ..io import blend_io, page_io, presets, work_io
 from ..utils import color_space
@@ -43,6 +43,8 @@ def _apply_phase1_defaults(work) -> None:
     info.page_number_start = 1
     if hasattr(info, "page_number_end"):
         info.page_number_end = 1
+    if hasattr(work, "coma_blend_template_path"):
+        work.coma_blend_template_path = ""
     # 作者名が未入力なら OS のユーザー名で初期化 (上書きはしない)
     if not info.author:
         try:
@@ -170,14 +172,14 @@ class BNAME_OT_work_new(Operator, ExportHelper):
             work_io.save_work_json(work_dir, work)
             page_io.save_pages_json(work_dir, work)
 
-            # 最初のページ 0001 を自動生成し、現在のシーンを work.blend として保存.
+            # 最初のページ p0001 を自動生成し、現在のシーンを work.blend として保存.
             # work.blend は作品全体のマスター .blend で、全ページの 2D データ
             # (コマ枠・GP・テキスト・フキダシ等) が 1 つのシーンに載る。
             entry = page_io.register_new_page(work)
             page_io.ensure_page_dir(work_dir, entry.id)
-            from .panel_op import create_basic_frame_panel
+            from .coma_op import create_basic_frame_coma
 
-            create_basic_frame_panel(work, entry, work_dir)
+            create_basic_frame_coma(work, entry, work_dir)
             page_io.save_pages_json(work_dir, work)
 
             # デフォルトシーンの Cube/Light/Camera を削除してから保存
@@ -192,8 +194,8 @@ class BNAME_OT_work_new(Operator, ExportHelper):
 
             # overview 編集モード既定。保存前にモード/stem を確実にセット。
             set_mode(MODE_PAGE, context)
-            context.scene.bname_current_panel_stem = ""
-            context.scene.bname_current_panel_page_id = ""
+            context.scene.bname_current_coma_id = ""
+            context.scene.bname_current_coma_page_id = ""
             context.scene.bname_overview_mode = True
             if hasattr(context.scene, "bname_active_layer_kind"):
                 context.scene.bname_active_layer_kind = "page"
@@ -263,7 +265,7 @@ class BNAME_OT_work_new(Operator, ExportHelper):
         except Exception:  # noqa: BLE001
             _logger.exception("work_new: set active GP failed")
 
-        self.report({"INFO"}, f"作品を作成: {work_dir.name} (page 0001 を初期化)")
+        self.report({"INFO"}, f"作品を作成: {work_dir.name} (page p0001 を初期化)")
         return {"FINISHED"}
 
 
@@ -302,8 +304,8 @@ class BNAME_OT_work_open(Operator, ImportHelper):
             work.work_dir = str(work_dir.resolve())
             work.loaded = True
             set_mode(MODE_PAGE, context)
-            context.scene.bname_current_panel_stem = ""
-            context.scene.bname_current_panel_page_id = ""
+            context.scene.bname_current_coma_id = ""
+            context.scene.bname_current_coma_page_id = ""
             context.scene.bname_overview_mode = True
             if hasattr(context.scene, "bname_active_layer_kind"):
                 context.scene.bname_active_layer_kind = "page"
@@ -382,13 +384,13 @@ class BNAME_OT_work_save(Operator):
                 self.report({"ERROR"}, "作品メタデータの保存に失敗しました")
                 return {"CANCELLED"}
             mode = get_mode(context)
-            if mode != MODE_PANEL:
+            if mode != MODE_COMA:
                 _disable_work_viewport_overlays(context)
 
             # 2) .blend 保存. ユーザーが File > Save As で work_dir 外に保存
             #    していた場合は、そのパスを尊重して save_mainfile する (B-Name の
             #    期待パスへ強制リロケートしない)。work_dir 内 or 未保存なら
-            #    overview モードなら work.blend、panel モードなら panel_NNN.blend
+            #    overview モードなら work.blend、コマ編集モードなら cNN.blend
             #    を期待パスとして save_as_mainfile する。
             cur = blend_io.current_mainfile_path()
             work_dir_resolved = work_dir.resolve()
@@ -413,17 +415,16 @@ class BNAME_OT_work_save(Operator):
                     saved_blend = False
             else:
                 # work_dir 内 or 未保存 → B-Name 期待パスへ save_as
-                if mode == MODE_PANEL:
-                    stem = getattr(context.scene, "bname_current_panel_stem", "")
-                    page_id = getattr(context.scene, "bname_current_panel_page_id", "")
-                    if paths.is_valid_panel_stem(stem) and paths.is_valid_page_id(page_id):
-                        index = int(stem.split("_", 1)[1])
-                        saved_blend = blend_io.save_panel_blend(
-                            work_dir, page_id, index
+                if mode == MODE_COMA:
+                    stem = getattr(context.scene, "bname_current_coma_id", "")
+                    page_id = getattr(context.scene, "bname_current_coma_page_id", "")
+                    if paths.is_valid_coma_id(stem) and paths.is_valid_page_id(page_id):
+                        saved_blend = blend_io.save_coma_blend(
+                            work_dir, page_id, stem
                         )
                         if saved_blend:
                             saved_path = str(
-                                paths.panel_blend_path(work_dir, page_id, index)
+                                paths.coma_blend_path(work_dir, page_id, stem)
                             )
                 else:
                     saved_blend = blend_io.save_work_blend(work_dir)
@@ -470,8 +471,8 @@ class BNAME_OT_work_close(Operator):
         work.loaded = False
         work.work_dir = ""
         set_mode(MODE_PAGE, context)
-        context.scene.bname_current_panel_stem = ""
-        context.scene.bname_current_panel_page_id = ""
+        context.scene.bname_current_coma_id = ""
+        context.scene.bname_current_coma_page_id = ""
         self.report({"INFO"}, "作品を閉じました")
         return {"FINISHED"}
 

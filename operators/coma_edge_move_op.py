@@ -24,8 +24,8 @@ from bpy_extras.view3d_utils import location_3d_to_region_2d, region_2d_to_locat
 from gpu_extras.batch import batch_for_shader
 
 from ..core.work import get_work
-from ..io import page_io, panel_io
-from . import panel_modal_state, view_event_region
+from ..io import page_io, coma_io
+from . import coma_modal_state, view_event_region
 from ..utils import (
     edge_selection,
     detail_popup,
@@ -34,7 +34,7 @@ from ..utils import (
     page_browser,
     page_grid,
     page_range,
-    panel_edge_adjacency,
+    coma_edge_adjacency,
     object_selection,
     polygon_geom,
     viewport_colors,
@@ -112,7 +112,7 @@ def _world_mm_to_region(region, rv3d, x_mm, y_mm) -> tuple[float, float] | None:
     return float(p.x), float(p.y)
 
 
-def _panel_polygon(panel) -> list[tuple[float, float]]:
+def _coma_polygon(panel) -> list[tuple[float, float]]:
     if panel.shape_type == "rect":
         x, y = panel.rect_x_mm, panel.rect_y_mm
         w, h = panel.rect_width_mm, panel.rect_height_mm
@@ -122,7 +122,7 @@ def _panel_polygon(panel) -> list[tuple[float, float]]:
     return []
 
 
-def _set_panel_polygon(panel, poly: list[tuple[float, float]]) -> None:
+def _set_coma_polygon(panel, poly: list[tuple[float, float]]) -> None:
     panel.shape_type = "polygon"
     panel.vertices.clear()
     for x, y in poly:
@@ -178,7 +178,7 @@ MIN_PANEL_AREA_MM2 = 0.01
 
 
 def _snap_drag_line(
-    work, page, panel_idx: int,
+    work, page, coma_idx: int,
     a_new: tuple[float, float], b_new: tuple[float, float],
     tx: float, ty: float, nx: float, ny: float,
 ) -> tuple[tuple[float, float], tuple[float, float]]:
@@ -209,10 +209,10 @@ def _snap_drag_line(
         ((ifr.x, ifr.y2), (ifr.x, ifr.y)),
     ])
     # 同ページの他コマの辺
-    for panel_i2, p2 in enumerate(page.panels):
-        if panel_i2 == panel_idx:
+    for panel_i2, p2 in enumerate(page.comas):
+        if panel_i2 == coma_idx:
             continue
-        poly2 = _panel_polygon(p2)
+        poly2 = _coma_polygon(p2)
         for ei2 in range(len(poly2)):
             targets.append(
                 (poly2[ei2], poly2[(ei2 + 1) % len(poly2)])
@@ -270,7 +270,7 @@ def _build_shifted_edge_polygon(
     return new_poly
 
 
-def _is_valid_panel_polygon(
+def _is_valid_coma_polygon(
     poly: list[tuple[float, float]],
     *,
     reference_poly: list[tuple[float, float]] | None = None,
@@ -291,10 +291,10 @@ def _is_valid_panel_polygon(
 # ---------- 隣接 panel との連動 ----------
 
 
-def _all_panel_edges_world(work) -> list[tuple[int, int, int, tuple[float, float], tuple[float, float]]]:
+def _all_coma_edges_world(work) -> list[tuple[int, int, int, tuple[float, float], tuple[float, float]]]:
     """全ページの全 panel の全 edge を world (mm) 座標で返す.
 
-    返値: [(page_idx, panel_idx, edge_idx, (x1,y1), (x2,y2)), ...]
+    返値: [(page_idx, coma_idx, edge_idx, (x1,y1), (x2,y2)), ...]
     """
     scene = bpy.context.scene
     cols = max(1, int(getattr(scene, "bname_overview_cols", 4)))
@@ -314,8 +314,8 @@ def _all_panel_edges_world(work) -> list[tuple[int, int, int, tuple[float, float
         add_x, add_y = page_grid.page_manual_offset_mm(page)
         ox += add_x
         oy += add_y
-        for panel_i, panel in enumerate(page.panels):
-            poly = _panel_polygon(panel)
+        for panel_i, panel in enumerate(page.comas):
+            poly = _coma_polygon(panel)
             if len(poly) < 2:
                 continue
             for ei in range(len(poly)):
@@ -346,10 +346,10 @@ def _page_offset(work, page_idx: int) -> tuple[float, float]:
 def _gap_for_edge(work, panel, edge: tuple[tuple[float, float], tuple[float, float]]) -> float:
     """edge の方向に応じた gap (mm) を返す (knife_cut の _effective_gap_mm と同じ規則)."""
     a, b = edge
-    pgv = float(getattr(panel, "panel_gap_vertical_mm", -1.0))
-    pgh = float(getattr(panel, "panel_gap_horizontal_mm", -1.0))
-    gap_v = pgv if pgv >= 0.0 else float(work.panel_gap.vertical_mm)
-    gap_h = pgh if pgh >= 0.0 else float(work.panel_gap.horizontal_mm)
+    pgv = float(getattr(panel, "coma_gap_vertical_mm", -1.0))
+    pgh = float(getattr(panel, "coma_gap_horizontal_mm", -1.0))
+    gap_v = pgv if pgv >= 0.0 else float(work.coma_gap.vertical_mm)
+    gap_h = pgh if pgh >= 0.0 else float(work.coma_gap.horizontal_mm)
     dx = b[0] - a[0]
     dy = b[1] - a[1]
     # 辺が水平に近ければ → 上下スキマ (gap_v)、垂直に近ければ → 左右スキマ (gap_h)
@@ -359,15 +359,15 @@ def _gap_for_edge(work, panel, edge: tuple[tuple[float, float], tuple[float, flo
 
 
 def _find_adjacent_edges(
-    work, page_idx: int, panel_idx: int, edge_idx: int,
+    work, page_idx: int, coma_idx: int, edge_idx: int,
 ) -> list[tuple[int, int, int]]:
     """対象 edge と隣接 (= ほぼ平行で gap 距離内、重なる) する全 edge を返す.
 
-    返値: [(page_idx, panel_idx, edge_idx), ...] (自分自身は含まない)
+    返値: [(page_idx, coma_idx, edge_idx), ...] (自分自身は含まない)
     """
     page = work.pages[page_idx]
-    panel = page.panels[panel_idx]
-    poly = _panel_polygon(panel)
+    panel = page.comas[coma_idx]
+    poly = _coma_polygon(panel)
     if len(poly) < 2:
         return []
     pox, poy = _page_offset(work, page_idx)
@@ -383,11 +383,11 @@ def _find_adjacent_edges(
     target_gap = _gap_for_edge(work, panel, (a, b))
 
     adj: list[tuple[int, int, int]] = []
-    for entry in _all_panel_edges_world(work):
+    for entry in _all_coma_edges_world(work):
         pi2, panel_i2, ei2, a2, b2 = entry
         # 同じ panel 内の他 edge は除外 (細い panel の対辺が偶然 gap 距離だと
         # 連動して panel が反転するバグを防ぐ)
-        if (pi2, panel_i2) == (page_idx, panel_idx):
+        if (pi2, panel_i2) == (page_idx, coma_idx):
             continue
         # 平行性: 単位ベクトルの内積が ±1 に近い
         l2 = math.hypot(b2[0] - a2[0], b2[1] - a2[1])
@@ -414,8 +414,8 @@ def _find_adjacent_edges(
     return adj
 
 
-def _find_overlapping_panel_edges(
-    page, panel_idx: int, edge_idx: int,
+def _find_overlapping_coma_edges(
+    page, coma_idx: int, edge_idx: int,
     *,
     max_distance_mm: float = 0.05,
     min_overlap_ratio: float = 0.8,
@@ -427,8 +427,8 @@ def _find_overlapping_panel_edges(
     同じ継ぎ目を共有している場合にだけ反応させたいので、距離 0 近傍かつ
     十分な重なり率を要求する。
     """
-    panel = page.panels[panel_idx]
-    poly = _panel_polygon(panel)
+    panel = page.comas[coma_idx]
+    poly = _coma_polygon(panel)
     if len(poly) < 2:
         return []
     a = poly[edge_idx]
@@ -442,10 +442,10 @@ def _find_overlapping_panel_edges(
     ny = ux
 
     overlaps: list[tuple[int, int]] = []
-    for panel_i2, p2 in enumerate(page.panels):
-        if panel_i2 == panel_idx:
+    for panel_i2, p2 in enumerate(page.comas):
+        if panel_i2 == coma_idx:
             continue
-        poly2 = _panel_polygon(p2)
+        poly2 = _coma_polygon(p2)
         for ei2 in range(len(poly2)):
             a2 = poly2[ei2]
             b2 = poly2[(ei2 + 1) % len(poly2)]
@@ -517,7 +517,7 @@ def _pick_edge_or_vertex(
     """画面 (mx, my) 直下の最寄り辺 or 頂点を返す.
 
     返値: {"type": "edge" or "vertex",
-           "page": pi, "panel": panel_i,
+           "page": pi, "coma": panel_i,
            "edge": ei (edge type only),
            "vertex": vi (vertex type only)}
     """
@@ -525,7 +525,7 @@ def _pick_edge_or_vertex(
     best_dist = float("inf")
 
     # 頂点を優先 (辺より priority 高く判定)
-    for entry in _all_panel_edges_world(work):
+    for entry in _all_coma_edges_world(work):
         pi, panel_i, ei, a, b = entry
         # 各 edge の始点を vertex として
         ap = _world_mm_to_region(region, rv3d, a[0], a[1])
@@ -535,7 +535,7 @@ def _pick_edge_or_vertex(
         if d < VERTEX_PICK_TOLERANCE_PX and d < best_dist:
             best = {
                 "type": "vertex",
-                "page": pi, "panel": panel_i, "vertex": ei,
+                "page": pi, "coma": panel_i, "vertex": ei,
             }
             best_dist = d
 
@@ -543,7 +543,7 @@ def _pick_edge_or_vertex(
         return best
 
     # 辺
-    for entry in _all_panel_edges_world(work):
+    for entry in _all_coma_edges_world(work):
         pi, panel_i, ei, a, b = entry
         ap = _world_mm_to_region(region, rv3d, a[0], a[1])
         bp = _world_mm_to_region(region, rv3d, b[0], b[1])
@@ -553,7 +553,7 @@ def _pick_edge_or_vertex(
         if d < EDGE_PICK_TOLERANCE_PX and d < best_dist:
             best = {
                 "type": "edge",
-                "page": pi, "panel": panel_i, "edge": ei,
+                "page": pi, "coma": panel_i, "edge": ei,
             }
             best_dist = d
     return best
@@ -603,25 +603,25 @@ def _iter_selection_edge_refs(work, selection: dict | None):
     if kind not in {"edge", "border"}:
         return
     page_index = int(selection.get("page", -1))
-    panel_index = int(selection.get("panel", -1))
+    coma_index = int(selection.get("coma", -1))
     if not (0 <= page_index < len(work.pages)):
         return
     page = work.pages[page_index]
     if not page_range.page_in_range(page):
         return
-    if not (0 <= panel_index < len(page.panels)):
+    if not (0 <= coma_index < len(page.comas)):
         return
-    panel = page.panels[panel_index]
-    poly = _panel_polygon(panel)
+    panel = page.comas[coma_index]
+    poly = _coma_polygon(panel)
     if len(poly) < 2:
         return
     if kind == "edge":
         edge_index = int(selection.get("edge", -1))
         if 0 <= edge_index < len(poly):
-            yield page_index, panel_index, edge_index, poly[edge_index], poly[(edge_index + 1) % len(poly)]
+            yield page_index, coma_index, edge_index, poly[edge_index], poly[(edge_index + 1) % len(poly)]
         return
     for edge_index in range(len(poly)):
-        yield page_index, panel_index, edge_index, poly[edge_index], poly[(edge_index + 1) % len(poly)]
+        yield page_index, coma_index, edge_index, poly[edge_index], poly[(edge_index + 1) % len(poly)]
 
 
 def _hit_selection_handle(
@@ -636,7 +636,7 @@ def _hit_selection_handle(
 ) -> dict | None:
     best: dict | None = None
     best_dist = HANDLE_HIT_RADIUS_PX
-    for page_index, panel_index, edge_index, a, b in _iter_selection_edge_refs(work, selection):
+    for page_index, coma_index, edge_index, a, b in _iter_selection_edge_refs(work, selection):
         ox, oy = _page_offset_for_area(context, work, area, page_index)
         edge_a = (a[0] + ox, a[1] + oy)
         edge_b = (b[0] + ox, b[1] + oy)
@@ -649,7 +649,7 @@ def _hit_selection_handle(
                 best_dist = dist
                 best = {
                     "page": page_index,
-                    "panel": panel_index,
+                    "coma": coma_index,
                     "edge": edge_index,
                     "direction": direction,
                 }
@@ -668,7 +668,7 @@ def find_selected_handle_at_event(context, event) -> dict | None:
     selection = {
         "type": "border" if kind == "border" else "edge",
         "page": int(getattr(wm, "bname_edge_select_page", -1)),
-        "panel": int(getattr(wm, "bname_edge_select_panel", -1)),
+        "coma": int(getattr(wm, "bname_edge_select_coma", -1)),
         "edge": int(getattr(wm, "bname_edge_select_edge", -1)),
     }
     if kind not in {"edge", "border"}:
@@ -683,13 +683,13 @@ def find_selected_handle_at_event(context, event) -> dict | None:
 # ---------- Modal Operator ----------
 
 
-class BNAME_OT_panel_edge_move(Operator):
+class BNAME_OT_coma_edge_move(Operator):
     """枠線選択ツール: 辺/頂点を選択 → ドラッグ移動 + 色/太さ編集.
 
     シングルクリックで辺、ダブルクリックで枠線全体を選択する。
     """
 
-    bl_idname = "bname.panel_edge_move"
+    bl_idname = "bname.coma_edge_move"
     bl_label = "枠線選択ツール"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -702,14 +702,14 @@ class BNAME_OT_panel_edge_move(Operator):
         target = _find_view3d(context)
         if target is None:
             return {"PASS_THROUGH"}
-        if panel_modal_state.get_active("edge_move") is not None:
+        if coma_modal_state.get_active("edge_move") is not None:
             return {"FINISHED"}
-        panel_modal_state.finish_active("panel_vertex_edit", context, keep_selection=True)
-        panel_modal_state.finish_active("knife_cut", context, keep_selection=False)
-        panel_modal_state.finish_active("layer_move", context, keep_selection=False)
-        panel_modal_state.finish_active("balloon_tool", context, keep_selection=True)
-        panel_modal_state.finish_active("text_tool", context, keep_selection=True)
-        panel_modal_state.finish_active("effect_line_tool", context, keep_selection=True)
+        coma_modal_state.finish_active("coma_vertex_edit", context, keep_selection=True)
+        coma_modal_state.finish_active("knife_cut", context, keep_selection=False)
+        coma_modal_state.finish_active("layer_move", context, keep_selection=False)
+        coma_modal_state.finish_active("balloon_tool", context, keep_selection=True)
+        coma_modal_state.finish_active("text_tool", context, keep_selection=True)
+        coma_modal_state.finish_active("effect_line_tool", context, keep_selection=True)
         self._area, self._region, self._rv3d = target
         self._work = get_work(context)
         if self._work is None or not self._work.loaded:
@@ -734,8 +734,8 @@ class BNAME_OT_panel_edge_move(Operator):
             _draw_callback, (self,), "WINDOW", "POST_PIXEL"
         )
         context.window_manager.modal_handler_add(self)
-        self._cursor_modal_set = panel_modal_state.set_modal_cursor(context, "CROSSHAIR")
-        panel_modal_state.set_active("edge_move", self, context)
+        self._cursor_modal_set = coma_modal_state.set_modal_cursor(context, "CROSSHAIR")
+        coma_modal_state.set_active("edge_move", self, context)
         self._update_wm_selection(context)
         self._tag_redraw()
         self.report(
@@ -752,13 +752,13 @@ class BNAME_OT_panel_edge_move(Operator):
             return
         t = sel.get("type")
         page_index = int(sel.get("page", -1))
-        panel_index = int(sel.get("panel", -1))
+        coma_index = int(sel.get("coma", -1))
         if t == "edge":
             edge_selection.set_selection(
                 context,
                 "edge",
                 page_index=page_index,
-                panel_index=panel_index,
+                coma_index=coma_index,
                 edge_index=int(sel.get("edge", -1)),
             )
         elif t == "border":
@@ -766,14 +766,14 @@ class BNAME_OT_panel_edge_move(Operator):
                 context,
                 "border",
                 page_index=page_index,
-                panel_index=panel_index,
+                coma_index=coma_index,
             )
         elif t == "vertex":
             edge_selection.set_selection(
                 context,
                 "vertex",
                 page_index=page_index,
-                panel_index=panel_index,
+                coma_index=coma_index,
                 vertex_index=int(sel.get("vertex", -1)),
             )
         else:
@@ -847,7 +847,7 @@ class BNAME_OT_panel_edge_move(Operator):
 
     def _cleanup(self, context=None) -> None:
         if getattr(self, "_cursor_modal_set", False):
-            panel_modal_state.restore_modal_cursor(context)
+            coma_modal_state.restore_modal_cursor(context)
             self._cursor_modal_set = False
         h = getattr(self, "_draw_handler", None)
         if h is not None:
@@ -869,7 +869,7 @@ class BNAME_OT_panel_edge_move(Operator):
             self._update_wm_selection(context)
         except Exception:  # noqa: BLE001
             pass
-        panel_modal_state.clear_active("edge_move", self, context)
+        coma_modal_state.clear_active("edge_move", self, context)
 
     def _push_undo_step(self, message: str) -> None:
         """modal 中の 1 操作を独立した undo step として記録."""
@@ -880,7 +880,7 @@ class BNAME_OT_panel_edge_move(Operator):
 
     def modal(self, context, event):
         if getattr(self, "_externally_finished", False):
-            panel_modal_state.clear_active("edge_move", self, context)
+            coma_modal_state.clear_active("edge_move", self, context)
             return {"FINISHED", "PASS_THROUGH"}
         if getattr(self, "_navigation_drag_passthrough", False):
             if event.type == "LEFTMOUSE" and event.value == "RELEASE":
@@ -905,7 +905,7 @@ class BNAME_OT_panel_edge_move(Operator):
             self.finish_from_external(context, keep_selection=True)
             try:
                 with context.temp_override(area=self._area, region=self._region):
-                    bpy.ops.bname.panel_knife_cut("INVOKE_DEFAULT")
+                    bpy.ops.bname.coma_knife_cut("INVOKE_DEFAULT")
             except Exception:  # noqa: BLE001
                 _logger.exception("edge_move: failed to switch to knife_cut")
             return {"FINISHED"}
@@ -987,7 +987,7 @@ class BNAME_OT_panel_edge_move(Operator):
                     self._selection = {
                         "type": "edge",
                         "page": int(handle_hit["page"]),
-                        "panel": int(handle_hit["panel"]),
+                        "coma": int(handle_hit["coma"]),
                         "edge": int(handle_hit["edge"]),
                     }
                     self._update_wm_selection(context)
@@ -1007,7 +1007,7 @@ class BNAME_OT_panel_edge_move(Operator):
                         object_selection.clear(context)
                 elif hit.get("type") == "edge":
                     page_for_hit = self._work.pages[int(hit["page"])]
-                    panel_for_hit = page_for_hit.panels[int(hit["panel"])]
+                    panel_for_hit = page_for_hit.comas[int(hit["coma"])]
                     if event.ctrl or event.shift:
                         self._selection = hit
                         self._dragging = False
@@ -1017,14 +1017,14 @@ class BNAME_OT_panel_edge_move(Operator):
                         mode = "toggle" if event.ctrl else "add"
                         object_selection.select_key(
                             context,
-                            object_selection.panel_key(page_for_hit, panel_for_hit),
+                            object_selection.coma_key(page_for_hit, panel_for_hit),
                             mode=mode,
                         )
                         self._pending_detail_popup = False
                         self._update_wm_selection(context)
                         self._tag_redraw()
                         return {"RUNNING_MODAL"}
-                    edge_key = (hit["page"], hit["panel"], hit["edge"])
+                    edge_key = (hit["page"], hit["coma"], hit["edge"])
                     is_double = (
                         self._last_press_edge == edge_key
                         and (now - self._last_press_time) < DOUBLE_CLICK_INTERVAL
@@ -1034,7 +1034,7 @@ class BNAME_OT_panel_edge_move(Operator):
                         self._selection = {
                             "type": "border",
                             "page": hit["page"],
-                            "panel": hit["panel"],
+                            "coma": hit["coma"],
                         }
                         self._dragging = False
                         self._last_press_time = 0.0
@@ -1042,7 +1042,7 @@ class BNAME_OT_panel_edge_move(Operator):
                         self._pending_detail_popup = True
                         object_selection.select_key(
                             context,
-                            object_selection.panel_key(page_for_hit, panel_for_hit),
+                            object_selection.coma_key(page_for_hit, panel_for_hit),
                             mode="single",
                         )
                     else:
@@ -1058,13 +1058,13 @@ class BNAME_OT_panel_edge_move(Operator):
                         self._last_press_edge = edge_key
                         object_selection.select_key(
                             context,
-                            object_selection.panel_key(page_for_hit, panel_for_hit),
+                            object_selection.coma_key(page_for_hit, panel_for_hit),
                             mode="single",
                         )
                 else:
                     # vertex
                     page_for_hit = self._work.pages[int(hit["page"])]
-                    panel_for_hit = page_for_hit.panels[int(hit["panel"])]
+                    panel_for_hit = page_for_hit.comas[int(hit["coma"])]
                     self._selection = hit
                     self._dragging = not (event.ctrl or event.shift)
                     self._drag_moved = False
@@ -1076,7 +1076,7 @@ class BNAME_OT_panel_edge_move(Operator):
                     mode = "toggle" if event.ctrl else "add" if event.shift else "single"
                     object_selection.select_key(
                         context,
-                        object_selection.panel_key(page_for_hit, panel_for_hit),
+                        object_selection.coma_key(page_for_hit, panel_for_hit),
                         mode=mode,
                     )
                     self._last_press_time = 0.0
@@ -1131,8 +1131,8 @@ class BNAME_OT_panel_edge_move(Operator):
         if sel is None or sel.get("type") != "edge":
             return None
         page = self._work.pages[sel["page"]]
-        panel = page.panels[sel["panel"]]
-        poly = _panel_polygon(panel)
+        panel = page.comas[sel["coma"]]
+        poly = _coma_polygon(panel)
         if len(poly) < 2:
             return None
         ei = sel["edge"]
@@ -1147,39 +1147,39 @@ class BNAME_OT_panel_edge_move(Operator):
         if sel is None:
             return
         page = self._work.pages[sel["page"]]
-        panel = page.panels[sel["panel"]]
+        panel = page.comas[sel["coma"]]
         # 自分の polygon
-        snapshot = {"poly": _panel_polygon(panel)}
+        snapshot = {"poly": _coma_polygon(panel)}
         # 隣接 (edge 選択時のみ): 対応 edge の vertex index を計算しておく
         if sel["type"] == "edge":
             adj = _find_adjacent_edges(
-                self._work, sel["page"], sel["panel"], sel["edge"]
+                self._work, sel["page"], sel["coma"], sel["edge"]
             )
             adj_states = []
             for pi, panel_i, ei in adj:
-                p = self._work.pages[pi].panels[panel_i]
+                p = self._work.pages[pi].comas[panel_i]
                 adj_states.append(
-                    {"page": pi, "panel": panel_i, "edge": ei, "poly": _panel_polygon(p)}
+                    {"page": pi, "coma": panel_i, "edge": ei, "poly": _coma_polygon(p)}
                 )
             snapshot["adjacent_edges"] = adj_states
         elif sel["type"] == "vertex":
             # 頂点を共有する隣接 panel (位置一致 ± tolerance) を集める
             ox, oy = _page_offset(self._work, sel["page"])
             vi = sel["vertex"]
-            poly = _panel_polygon(panel)
+            poly = _coma_polygon(panel)
             v_world = (poly[vi][0] + ox, poly[vi][1] + oy)
             snapshot["v_world"] = v_world
             snapshot["vertex_adjacent_edges"] = (
-                panel_edge_adjacency.capture_vertex_adjacent_edge_states(
+                coma_edge_adjacency.capture_vertex_adjacent_edge_states(
                     self._work,
                     sel["page"],
-                    sel["panel"],
+                    sel["coma"],
                     vi,
                     poly,
                     page_offset_fn=_page_offset,
-                    panel_polygon_fn=_panel_polygon,
+                    coma_polygon_fn=_coma_polygon,
                     find_adjacent_edges_fn=_find_adjacent_edges,
-                    find_overlapping_edges_fn=_find_overlapping_panel_edges,
+                    find_overlapping_edges_fn=_find_overlapping_coma_edges,
                     adjacency_gap_tolerance_mm=ADJACENCY_GAP_TOLERANCE_MM,
                     adjacency_overlap_ratio=ADJACENCY_OVERLAP_RATIO,
                 )
@@ -1189,15 +1189,15 @@ class BNAME_OT_panel_edge_move(Operator):
                 if not page_range.page_in_range(page2):
                     continue
                 ox2, oy2 = _page_offset(self._work, pi)
-                for panel_i, p in enumerate(page2.panels):
-                    poly2 = _panel_polygon(p)
+                for panel_i, p in enumerate(page2.comas):
+                    poly2 = _coma_polygon(p)
                     for vi2 in range(len(poly2)):
                         wp = (poly2[vi2][0] + ox2, poly2[vi2][1] + oy2)
-                        if (pi, panel_i, vi2) == (sel["page"], sel["panel"], vi):
+                        if (pi, panel_i, vi2) == (sel["page"], sel["coma"], vi):
                             continue
                         if math.hypot(wp[0] - v_world[0], wp[1] - v_world[1]) < ADJACENCY_GAP_TOLERANCE_MM * 5:
                             shared.append({
-                                "page": pi, "panel": panel_i, "vertex": vi2,
+                                "page": pi, "coma": panel_i, "vertex": vi2,
                                 "poly": poly2,
                             })
             snapshot["shared_vertices"] = shared
@@ -1246,13 +1246,13 @@ class BNAME_OT_panel_edge_move(Operator):
             ty = ey / L
             page_for_snap = self._work.pages[sel["page"]]
             a_new_line, b_new_line = _snap_drag_line(
-                self._work, page_for_snap, sel["panel"],
+                self._work, page_for_snap, sel["coma"],
                 a_new_line, b_new_line, tx, ty, nx, ny,
             )
             new_poly = _build_shifted_edge_polygon(
                 orig_poly, ei, a_new_line, b_new_line
             )
-            if new_poly is None or not _is_valid_panel_polygon(
+            if new_poly is None or not _is_valid_coma_polygon(
                 new_poly, reference_poly=orig_poly
             ):
                 return
@@ -1269,18 +1269,18 @@ class BNAME_OT_panel_edge_move(Operator):
                 a2_line = (a2[0] + actual_sx, a2[1] + actual_sy)
                 b2_line = (b2[0] + actual_sx, b2[1] + actual_sy)
                 np2 = _build_shifted_edge_polygon(op2, ei2, a2_line, b2_line)
-                if np2 is None or not _is_valid_panel_polygon(
+                if np2 is None or not _is_valid_coma_polygon(
                     np2, reference_poly=op2
                 ):
                     return
-                adjacent_updates.append((adj_st["page"], adj_st["panel"], np2))
+                adjacent_updates.append((adj_st["page"], adj_st["coma"], np2))
 
             page = self._work.pages[sel["page"]]
-            panel = page.panels[sel["panel"]]
-            _set_panel_polygon(panel, new_poly)
+            panel = page.comas[sel["coma"]]
+            _set_coma_polygon(panel, new_poly)
             for page_i2, panel_i2, poly2 in adjacent_updates:
-                p2 = self._work.pages[page_i2].panels[panel_i2]
-                _set_panel_polygon(p2, poly2)
+                p2 = self._work.pages[page_i2].comas[panel_i2]
+                _set_coma_polygon(p2, poly2)
 
         elif sel["type"] == "vertex":
             orig_poly = self._original_geometry["poly"]
@@ -1288,7 +1288,7 @@ class BNAME_OT_panel_edge_move(Operator):
             dx, dy = _snap_vertex_delta_to_incident_edge(orig_poly, vi, dx, dy)
             new_poly = list(orig_poly)
             new_poly[vi] = (orig_poly[vi][0] + dx, orig_poly[vi][1] + dy)
-            if not _is_valid_panel_polygon(new_poly, reference_poly=orig_poly):
+            if not _is_valid_coma_polygon(new_poly, reference_poly=orig_poly):
                 return
             panel_updates: dict[tuple[int, int], list[tuple[float, float]]] = {}
             updated_vertices: set[tuple[int, int, int]] = set()
@@ -1303,13 +1303,13 @@ class BNAME_OT_panel_edge_move(Operator):
                     new_poly[(selected_edge + 1) % len(new_poly)][0] + sel_ox,
                     new_poly[(selected_edge + 1) % len(new_poly)][1] + sel_oy,
                 )
-                adj_line = panel_edge_adjacency.line_from_projection_params(
+                adj_line = coma_edge_adjacency.line_from_projection_params(
                     sel_a_world, sel_b_world, adj_st["params"]
                 )
                 if adj_line is None:
                     continue
                 page_i2 = adj_st["page"]
-                panel_i2 = adj_st["panel"]
+                panel_i2 = adj_st["coma"]
                 key = (page_i2, panel_i2)
                 base_poly = panel_updates.get(key, adj_st["poly"])
                 ox2, oy2 = _page_offset(self._work, page_i2)
@@ -1318,7 +1318,7 @@ class BNAME_OT_panel_edge_move(Operator):
                 np2 = _build_shifted_edge_polygon(
                     base_poly, adj_st["edge"], a2_local, b2_local
                 )
-                if np2 is None or not _is_valid_panel_polygon(
+                if np2 is None or not _is_valid_coma_polygon(
                     np2, reference_poly=adj_st["poly"]
                 ):
                     continue
@@ -1328,24 +1328,24 @@ class BNAME_OT_panel_edge_move(Operator):
                     (page_i2, panel_i2, (adj_st["edge"] + 1) % len(np2))
                 )
             page = self._work.pages[sel["page"]]
-            panel = page.panels[sel["panel"]]
+            panel = page.comas[sel["coma"]]
             # edge 連動対象外の共有頂点は従来通り同量シフトする。
             for sh in self._original_geometry.get("shared_vertices", []):
-                key = (sh["page"], sh["panel"])
-                vertex_key = (sh["page"], sh["panel"], sh["vertex"])
+                key = (sh["page"], sh["coma"])
+                vertex_key = (sh["page"], sh["coma"], sh["vertex"])
                 if vertex_key in updated_vertices:
                     continue
                 op2 = sh["poly"]
                 vi2 = sh["vertex"]
                 np2 = list(panel_updates.get(key, op2))
                 np2[vi2] = (op2[vi2][0] + dx, op2[vi2][1] + dy)
-                if not _is_valid_panel_polygon(np2, reference_poly=op2):
+                if not _is_valid_coma_polygon(np2, reference_poly=op2):
                     continue
                 panel_updates[key] = np2
-            _set_panel_polygon(panel, new_poly)
+            _set_coma_polygon(panel, new_poly)
             for (page_i2, panel_i2), poly2 in panel_updates.items():
-                p2 = self._work.pages[page_i2].panels[panel_i2]
-                _set_panel_polygon(p2, poly2)
+                p2 = self._work.pages[page_i2].comas[panel_i2]
+                _set_coma_polygon(p2, poly2)
 
     # ---- ハンドルアクション (拡張) ----
     def _do_extend(self, direction: int) -> None:
@@ -1367,8 +1367,8 @@ class BNAME_OT_panel_edge_move(Operator):
         if sel is None or sel.get("type") != "edge":
             return
         page = self._work.pages[sel["page"]]
-        panel = page.panels[sel["panel"]]
-        poly = _panel_polygon(panel)
+        panel = page.comas[sel["coma"]]
+        poly = _coma_polygon(panel)
         if len(poly) < 2:
             return
         ei = sel["edge"]
@@ -1393,7 +1393,7 @@ class BNAME_OT_panel_edge_move(Operator):
 
         # 候補となる「線」のリスト (page-local 座標) と種別を保持。
         # 種別: "bleed" (裁ち落とし枠の **1mm 外側**) / "inner" (基本枠) /
-        #       "panel" (他コマ辺)
+        #       "coma" (他コマ辺)
         # bleed は最初から「1mm 外側位置」を candidate に登録することで、
         # 後段の offset 計算が不要になり、edge が既に bleed 1mm 外側にいる場合の
         # 誤スナップを防ぐ。
@@ -1415,13 +1415,13 @@ class BNAME_OT_panel_edge_move(Operator):
             ((ifr.x, ifr.y2), (ifr.x, ifr.y), "inner"),
         ])
         # 他 panel の edge (同 panel の対辺は拡張先として不適切なので除外)
-        for panel_i2, p2 in enumerate(page.panels):
-            if panel_i2 == sel["panel"]:
+        for panel_i2, p2 in enumerate(page.comas):
+            if panel_i2 == sel["coma"]:
                 continue
-            poly2 = _panel_polygon(p2)
+            poly2 = _coma_polygon(p2)
             for ei2 in range(len(poly2)):
                 candidate_lines.append(
-                    (poly2[ei2], poly2[(ei2 + 1) % len(poly2)], "panel")
+                    (poly2[ei2], poly2[(ei2 + 1) % len(poly2)], "coma")
                 )
 
         # 重なり判定ヘルパ (端点を tangent 軸に投影し edge と被るか)
@@ -1437,8 +1437,8 @@ class BNAME_OT_panel_edge_move(Operator):
             return overlap >= L * ADJACENCY_OVERLAP_RATIO
 
         # コマ間隔 (現拡張軸に応じた値)
-        gap_v = float(self._work.panel_gap.vertical_mm)
-        gap_h = float(self._work.panel_gap.horizontal_mm)
+        gap_v = float(self._work.coma_gap.vertical_mm)
+        gap_h = float(self._work.coma_gap.horizontal_mm)
         target_gap_axis = gap_v if abs(ny) >= abs(nx) else gap_h
 
         OVERLAP_TOL_MM = 0.5  # 拡張候補から除外するしきい値 (snap 後の最小距離)
@@ -1449,16 +1449,16 @@ class BNAME_OT_panel_edge_move(Operator):
         # 「近くに平行な線がある」だけでは発火させず、十分な重なり率を持つ
         # 実際の隣接枠線だけを対象にする。
         has_panel_overlap_opposite = False
-        overlapping_edges = _find_overlapping_panel_edges(
+        overlapping_edges = _find_overlapping_coma_edges(
             page,
-            sel["panel"],
+            sel["coma"],
             ei,
             max_distance_mm=OVERLAP_NEAR_TOL_MM,
             min_overlap_ratio=0.8,
         )
         for panel_i2, _ei2 in overlapping_edges:
-            p2 = page.panels[panel_i2]
-            poly2 = _panel_polygon(p2)
+            p2 = page.comas[panel_i2]
+            poly2 = _coma_polygon(p2)
             if len(poly2) < 3:
                 continue
             cx_avg = sum(v[0] for v in poly2) / len(poly2)
@@ -1484,7 +1484,7 @@ class BNAME_OT_panel_edge_move(Operator):
             a_new_line = (a[0] + sx_ext, a[1] + sy_ext)
             b_new_line = (b[0] + sx_ext, b[1] + sy_ext)
             new_poly = _build_shifted_edge_polygon(poly, ei, a_new_line, b_new_line)
-            if new_poly is None or not _is_valid_panel_polygon(
+            if new_poly is None or not _is_valid_coma_polygon(
                 new_poly, reference_poly=poly
             ):
                 self.report({"WARNING"}, "拡張するとコマ形状が破綻するため中止しました")
@@ -1526,7 +1526,7 @@ class BNAME_OT_panel_edge_move(Operator):
                 test_poly = _build_shifted_edge_polygon(
                     poly, ei, test_a_line, test_b_line
                 )
-                if test_poly is None or not _is_valid_panel_polygon(
+                if test_poly is None or not _is_valid_coma_polygon(
                     test_poly, reference_poly=poly
                 ):
                     continue
@@ -1536,14 +1536,14 @@ class BNAME_OT_panel_edge_move(Operator):
                 kind_label = {
                     "bleed": "裁ち落とし枠の 1mm 外側",
                     "inner": "基本枠",
-                    "panel": "隣接コマ辺にピッタリ",
+                    "coma": "隣接コマ辺にピッタリ",
                 }.get(kind, "拡張先")
                 break
             if new_poly is None:
                 self.report({"WARNING"}, "拡張するとコマ形状が破綻するため中止しました")
                 return
 
-        _set_panel_polygon(panel, new_poly)
+        _set_coma_polygon(panel, new_poly)
         try:
             self._save_changes()
         except Exception:  # noqa: BLE001
@@ -1562,10 +1562,10 @@ class BNAME_OT_panel_edge_move(Operator):
         sel = self._selection
         try:
             page = self._work.pages[sel["page"]]
-            panel = page.panels[sel["panel"]]
+            panel = page.comas[sel["coma"]]
         except (IndexError, KeyError):
             return False
-        current = _panel_polygon(panel)
+        current = _coma_polygon(panel)
         original = self._original_geometry.get("poly", [])
         if len(current) != len(original):
             return True
@@ -1594,8 +1594,8 @@ class BNAME_OT_panel_edge_move(Operator):
         for pi in affected_pages:
             page = work.pages[pi]
             try:
-                for panel in page.panels:
-                    panel_io.save_panel_meta(work_dir, page.id, panel)
+                for panel in page.comas:
+                    coma_io.save_coma_meta(work_dir, page.id, panel)
                 page_io.save_page_json(work_dir, page)
             except Exception:  # noqa: BLE001
                 _logger.exception("edge_move: save page %s failed", page.id)
@@ -1624,8 +1624,8 @@ class _EdgeExtendShim:
         work_dir = Path(work.work_dir)
         page = work.pages[page_index]
         try:
-            for panel in page.panels:
-                panel_io.save_panel_meta(work_dir, page.id, panel)
+            for panel in page.comas:
+                coma_io.save_coma_meta(work_dir, page.id, panel)
             page_io.save_page_json(work_dir, page)
             page_io.save_pages_json(work_dir, work)
         except Exception:  # noqa: BLE001
@@ -1650,39 +1650,39 @@ def extend_selected_handle_at_event(context, event) -> bool:
     if work is None or not getattr(work, "loaded", False):
         return False
     page_index = int(hit["page"])
-    panel_index = int(hit["panel"])
+    coma_index = int(hit["coma"])
     edge_index = int(hit["edge"])
     if not (0 <= page_index < len(work.pages)):
         return False
     page = work.pages[page_index]
-    if not (0 <= panel_index < len(page.panels)):
+    if not (0 <= coma_index < len(page.comas)):
         return False
-    panel = page.panels[panel_index]
+    panel = page.comas[coma_index]
     work.active_page_index = page_index
-    page.active_panel_index = panel_index
+    page.active_coma_index = coma_index
     scene = getattr(context, "scene", None)
     if scene is not None and hasattr(scene, "bname_active_layer_kind"):
-        scene.bname_active_layer_kind = "panel"
+        scene.bname_active_layer_kind = "coma"
     object_selection.select_key(
         context,
-        object_selection.panel_key(page, panel),
+        object_selection.coma_key(page, panel),
         mode="single",
     )
     edge_selection.set_selection(
         context,
         "edge",
         page_index=page_index,
-        panel_index=panel_index,
+        coma_index=coma_index,
         edge_index=edge_index,
     )
     selection = {
         "type": "edge",
         "page": page_index,
-        "panel": panel_index,
+        "coma": coma_index,
         "edge": edge_index,
     }
     shim = _EdgeExtendShim(context, work, selection)
-    BNAME_OT_panel_edge_move._do_extend(shim, int(hit["direction"]))
+    BNAME_OT_coma_edge_move._do_extend(shim, int(hit["direction"]))
     _tag_view3d_redraw(context)
     return True
 
@@ -1690,7 +1690,7 @@ def extend_selected_handle_at_event(context, event) -> bool:
 # ---------- POST_PIXEL 描画 ----------
 
 
-def _draw_callback(op: "BNAME_OT_panel_edge_move") -> None:
+def _draw_callback(op: "BNAME_OT_coma_edge_move") -> None:
     sel = op._selection
     if sel is None:
         return
@@ -1702,8 +1702,8 @@ def _draw_callback(op: "BNAME_OT_panel_edge_move") -> None:
     if sel["type"] == "border":
         # 枠線全体ハイライト (panel の全 edge を強調表示)
         page = work.pages[sel["page"]]
-        panel = page.panels[sel["panel"]]
-        poly = _panel_polygon(panel)
+        panel = page.comas[sel["coma"]]
+        poly = _coma_polygon(panel)
         if len(poly) < 2:
             return
         ox, oy = _page_offset(work, sel["page"])
@@ -1788,8 +1788,8 @@ def _draw_callback(op: "BNAME_OT_panel_edge_move") -> None:
 
     elif sel["type"] == "vertex":
         page = work.pages[sel["page"]]
-        panel = page.panels[sel["panel"]]
-        poly = _panel_polygon(panel)
+        panel = page.comas[sel["coma"]]
+        poly = _coma_polygon(panel)
         if len(poly) <= sel["vertex"]:
             return
         ox, oy = _page_offset(work, sel["page"])
@@ -1855,7 +1855,7 @@ def _draw_square_marker(
 
 
 _CLASSES = (
-    BNAME_OT_panel_edge_move,
+    BNAME_OT_coma_edge_move,
 )
 
 

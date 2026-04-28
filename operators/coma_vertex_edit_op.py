@@ -29,9 +29,9 @@ from bpy_extras.view3d_utils import location_3d_to_region_2d, region_2d_to_locat
 from gpu_extras.batch import batch_for_shader
 
 from ..core.work import get_active_page, get_work
-from ..io import page_io, panel_io
+from ..io import page_io, coma_io
 from ..utils import geom, log, viewport_colors
-from . import panel_modal_state
+from . import coma_modal_state
 
 _logger = log.get_logger(__name__)
 
@@ -85,7 +85,7 @@ def _find_view3d_window(context):
     return area, region, rv3d
 
 
-def _panel_vertices_mm(entry) -> list[tuple[float, float]]:
+def _coma_vertices_mm(entry) -> list[tuple[float, float]]:
     """コマ枠の頂点列を (x_mm, y_mm) の list で返す.
 
     rect: 左下から反時計回り [BL, BR, TR, TL]
@@ -154,7 +154,7 @@ def _collect_snap_lines(work, page, current_entry) -> tuple[list[float], list[fl
     xs.extend([fx, fx + fw])
     ys.extend([fy, fy + fh])
     # 他のコマ
-    for entry in page.panels:
+    for entry in page.comas:
         if entry is current_entry:
             continue
         if entry.shape_type == "rect":
@@ -187,10 +187,10 @@ def _snap_value(value_mm: float, candidates, threshold_mm: float):
 # ---- オペレータ ----
 
 
-class BNAME_OT_panel_edit_vertices(Operator):
+class BNAME_OT_coma_edit_vertices(Operator):
     """選択中コマの頂点・辺をビューポート上でドラッグ編集."""
 
-    bl_idname = "bname.panel_edit_vertices"
+    bl_idname = "bname.coma_edit_vertices"
     bl_label = "コマ枠を編集 (頂点/辺ドラッグ)"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -207,23 +207,23 @@ class BNAME_OT_panel_edit_vertices(Operator):
         )
 
     def invoke(self, context, event):
-        if panel_modal_state.get_active("panel_vertex_edit") is not None:
+        if coma_modal_state.get_active("coma_vertex_edit") is not None:
             return {"FINISHED"}
-        panel_modal_state.finish_all(context, except_tool="panel_vertex_edit")
+        coma_modal_state.finish_all(context, except_tool="coma_vertex_edit")
         # マウス直下のコマへフォーカス (overview 時は全ページ逆引き)
-        from . import panel_edit_op
+        from . import coma_edit_op
 
-        panel_edit_op._resolve_target_from_event(context, event)
+        coma_edit_op._resolve_target_from_event(context, event)
 
         work = get_work(context)
         page = get_active_page(context)
         if work is None or page is None:
             self.report({"WARNING"}, "コマを選択してください")
             return {"CANCELLED"}
-        if not (0 <= page.active_panel_index < len(page.panels)):
+        if not (0 <= page.active_coma_index < len(page.comas)):
             self.report({"WARNING"}, "コマを選択してください")
             return {"CANCELLED"}
-        entry = page.panels[page.active_panel_index]
+        entry = page.comas[page.active_coma_index]
 
         # VIEW_3D の WINDOW リージョンを明示的に探して保持する.
         # N パネルのボタンから invoke すると context.region は UI リージョン
@@ -253,7 +253,7 @@ class BNAME_OT_panel_edit_vertices(Operator):
             _draw_callback, args, "WINDOW", "POST_PIXEL"
         )
         context.window_manager.modal_handler_add(self)
-        panel_modal_state.set_active("panel_vertex_edit", self, context)
+        coma_modal_state.set_active("coma_vertex_edit", self, context)
         self._tag_redraw(context)
         self.report({"INFO"}, "ドラッグで編集 | Enter で確定 | ESC でキャンセル")
         return {"RUNNING_MODAL"}
@@ -288,11 +288,11 @@ class BNAME_OT_panel_edit_vertices(Operator):
 
     def modal(self, context, event):
         if getattr(self, "_externally_finished", False):
-            panel_modal_state.clear_active("panel_vertex_edit", self, context)
+            coma_modal_state.clear_active("coma_vertex_edit", self, context)
             return {"FINISHED", "PASS_THROUGH"}
         try:
             # entry が削除された等の例外ケースで modal が暴走しないよう防御
-            _ = self._entry.panel_stem  # 参照を生かす
+            _ = self._entry.coma_id  # 参照を生かす
         except Exception:  # noqa: BLE001
             self._cleanup(context)
             return {"CANCELLED"}
@@ -363,7 +363,7 @@ class BNAME_OT_panel_edit_vertices(Operator):
             return None
         entry = self._entry
         ox, oy = self._page_offset
-        verts_mm = _panel_vertices_mm(entry)
+        verts_mm = _coma_vertices_mm(entry)
         best = None
         best_dist2 = HANDLE_HIT_PX * HANDLE_HIT_PX
 
@@ -407,7 +407,7 @@ class BNAME_OT_panel_edit_vertices(Operator):
         if pos is None:
             return
         entry = self._entry
-        verts_mm = _panel_vertices_mm(entry)
+        verts_mm = _coma_vertices_mm(entry)
         kind, idx = hit
         self._drag = {
             "kind": kind,
@@ -565,10 +565,10 @@ class BNAME_OT_panel_edit_vertices(Operator):
             entry = self._entry
             work_dir = Path(work.work_dir) if work.work_dir else None
             if work_dir is not None:
-                panel_io.save_panel_meta(work_dir, page.id, entry)
+                coma_io.save_coma_meta(work_dir, page.id, entry)
                 page_io.save_page_json(work_dir, page)
         except Exception as exc:  # noqa: BLE001
-            _logger.exception("panel_edit_vertices: save failed")
+            _logger.exception("coma_edit_vertices: save failed")
             self.report({"ERROR"}, f"保存失敗: {exc}")
         finally:
             self._cleanup(context)
@@ -581,7 +581,7 @@ class BNAME_OT_panel_edit_vertices(Operator):
             except Exception:  # noqa: BLE001
                 pass
             self._draw_handler = None
-        panel_modal_state.clear_active("panel_vertex_edit", self, context)
+        coma_modal_state.clear_active("coma_vertex_edit", self, context)
 
     def finish_from_external(self, context, *, keep_selection: bool) -> None:
         _ = keep_selection
@@ -604,7 +604,7 @@ class BNAME_OT_panel_edit_vertices(Operator):
 # ---- 描画 (POST_PIXEL) ----
 
 
-def _draw_callback(op: "BNAME_OT_panel_edit_vertices") -> None:
+def _draw_callback(op: "BNAME_OT_coma_edit_vertices") -> None:
     """modal 中の頂点/辺ハンドルとスナップガイドを描画."""
     try:
         entry = op._entry
@@ -617,7 +617,7 @@ def _draw_callback(op: "BNAME_OT_panel_edit_vertices") -> None:
     rv3d = context.region_data
     if region is None or rv3d is None:
         return
-    verts_mm = _panel_vertices_mm(entry)
+    verts_mm = _coma_vertices_mm(entry)
     if not verts_mm:
         return
 
@@ -725,7 +725,7 @@ def _draw_snap_line(
 
 # ---- 登録 ----
 
-_CLASSES = (BNAME_OT_panel_edit_vertices,)
+_CLASSES = (BNAME_OT_coma_edit_vertices,)
 
 
 def register() -> None:

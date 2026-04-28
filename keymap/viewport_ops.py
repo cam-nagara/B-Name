@@ -890,7 +890,7 @@ class BNAME_OT_view_layer_pick(Operator):
         x_mm = m_to_mm(world.x)
         y_mm = m_to_mm(world.y)
 
-        for entry in sorted(page.panels, key=lambda p: -p.z_order):
+        for entry in sorted(page.comas, key=lambda p: -p.z_order):
             if entry.shape_type != "rect":
                 continue
             if not (
@@ -898,9 +898,9 @@ class BNAME_OT_view_layer_pick(Operator):
                 and entry.rect_y_mm <= y_mm <= entry.rect_y_mm + entry.rect_height_mm
             ):
                 continue
-            for orig_idx, orig in enumerate(page.panels):
-                if orig.panel_stem == entry.panel_stem:
-                    page.active_panel_index = orig_idx
+            for orig_idx, orig in enumerate(page.comas):
+                if orig.coma_id == entry.coma_id:
+                    page.active_coma_index = orig_idx
                     return {"FINISHED"}
         return {"CANCELLED"}
 

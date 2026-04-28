@@ -19,8 +19,8 @@ def parse_key(key: str) -> tuple[str, str, str]:
     return parts[0], parts[1], parts[2]
 
 
-def panel_key(page, panel) -> str:
-    return make_key("panel", getattr(page, "id", ""), _panel_id(panel))
+def coma_key(page, panel) -> str:
+    return make_key("coma", getattr(page, "id", ""), _coma_id(panel))
 
 
 def balloon_key(page, entry) -> str:
@@ -35,8 +35,8 @@ def effect_key(layer) -> str:
     return make_key("effect", "", str(getattr(layer, "name", "") or ""))
 
 
-def _panel_id(panel) -> str:
-    return str(getattr(panel, "panel_stem", "") or getattr(panel, "id", "") or "")
+def _coma_id(panel) -> str:
+    return str(getattr(panel, "coma_id", "") or getattr(panel, "id", "") or "")
 
 
 def _wm(context):
@@ -117,7 +117,7 @@ def tag_view3d_redraw(context) -> None:
                 pass
 
 
-def selected_panel_refs(context) -> list[tuple[int, object, int, object]]:
+def selected_coma_refs(context) -> list[tuple[int, object, int, object]]:
     refs: list[tuple[int, object, int, object]] = []
     keys = set(get_keys(context))
     if not keys:
@@ -132,18 +132,18 @@ def selected_panel_refs(context) -> list[tuple[int, object, int, object]]:
         return refs
     for page_index, page in enumerate(getattr(work, "pages", []) or []):
         page_id = str(getattr(page, "id", "") or "")
-        for panel_index, panel in enumerate(getattr(page, "panels", []) or []):
-            if make_key("panel", page_id, _panel_id(panel)) in keys:
-                refs.append((page_index, page, panel_index, panel))
+        for coma_index, panel in enumerate(getattr(page, "comas", []) or []):
+            if make_key("coma", page_id, _coma_id(panel)) in keys:
+                refs.append((page_index, page, coma_index, panel))
     return refs
 
 
-def selected_panel_count(context) -> int:
-    return len(selected_panel_refs(context))
+def selected_coma_count(context) -> int:
+    return len(selected_coma_refs(context))
 
 
-def is_panel_selected(context, page, panel) -> bool:
-    return panel_key(page, panel) in set(get_keys(context))
+def is_coma_selected(context, page, panel) -> bool:
+    return coma_key(page, panel) in set(get_keys(context))
 
 
 def is_balloon_selected(context, page, entry) -> bool:

@@ -11,18 +11,18 @@ import gpu
 from gpu_extras.batch import batch_for_shader
 
 from ..utils import image_transparency
-from ..utils import panel_preview
+from ..utils import coma_preview
 from ..utils.geom import mm_to_m
 
 
-def draw_panel_preview(work, page, entry, ox_mm: float = 0.0, oy_mm: float = 0.0) -> bool:
-    """panel_NNN_preview/thumb をコマ形状内へ描画する."""
+def draw_coma_preview(work, page, entry, ox_mm: float = 0.0, oy_mm: float = 0.0) -> bool:
+    """cNN_preview/thumb をコマ形状内へ描画する."""
     if work is None or page is None or not getattr(work, "work_dir", ""):
         return False
-    poly = _panel_polygon_mm(entry)
+    poly = _coma_polygon_mm(entry)
     if len(poly) < 3:
         return False
-    source = panel_preview.panel_preview_source_path(Path(work.work_dir), page.id, entry)
+    source = coma_preview.coma_preview_source_path(Path(work.work_dir), page.id, entry)
     if source is None:
         return False
     source = _display_source_for_panel(source, entry)
@@ -72,7 +72,7 @@ def draw_panel_preview(work, page, entry, ox_mm: float = 0.0, oy_mm: float = 0.0
 
 
 def _display_source_for_panel(source: Path, entry) -> Path:
-    if not image_transparency.panel_background_is_transparent(entry):
+    if not image_transparency.coma_background_is_transparent(entry):
         return source
     from ..io import export_pipeline
 
@@ -103,10 +103,10 @@ def _display_source_for_panel(source: Path, entry) -> Path:
 def _transparent_cache_path(source: Path) -> Path:
     resolved = str(Path(source).resolve())
     digest = hashlib.sha1(resolved.encode("utf-8")).hexdigest()[:16]
-    return Path(tempfile.gettempdir()) / "bname_panel_preview_alpha" / f"{digest}.png"
+    return Path(tempfile.gettempdir()) / "bname_coma_preview_alpha" / f"{digest}.png"
 
 
-def _panel_polygon_mm(entry) -> list[tuple[float, float]]:
+def _coma_polygon_mm(entry) -> list[tuple[float, float]]:
     shape = getattr(entry, "shape_type", "")
     if shape == "rect":
         x = float(getattr(entry, "rect_x_mm", 0.0))

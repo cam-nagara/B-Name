@@ -1,6 +1,6 @@
-"""コマエントリ (PanelEntry) PropertyGroup.
+"""コマエントリ (ComaEntry) PropertyGroup.
 
-page.json のコマリストに対応。panel_NNN.blend の実体本体は Blender API
+page.json のコマリストに対応。cNN.blend の実体本体は Blender API
 側で管理し、ここではメタデータ (形状/Z順序/枠線/白フチ/リンク参照等) を
 保持する。
 
@@ -22,10 +22,10 @@ from bpy.props import (
 )
 
 from ..utils import log
-from .panel_border import (
-    BNamePanelBorder,
-    BNamePanelEdgeStyle,
-    BNamePanelWhiteMargin,
+from .coma_border import (
+    BNameComaBorder,
+    BNameComaEdgeStyle,
+    BNameComaWhiteMargin,
 )
 
 _logger = log.get_logger(__name__)
@@ -48,26 +48,26 @@ def _tag_view3d_redraw(context) -> None:
             area.tag_redraw()
 
 
-def _on_panel_background_color_changed(self, context) -> None:
+def _on_coma_background_color_changed(self, context) -> None:
     try:
-        from ..core.mode import MODE_PANEL, get_mode
-        from ..utils import panel_camera
+        from ..core.mode import MODE_COMA, get_mode
+        from ..utils import coma_camera
 
         scene = getattr(context, "scene", None)
-        if scene is not None and get_mode(context) == MODE_PANEL:
-            stem = str(getattr(scene, "bname_current_panel_stem", "") or "")
-            if stem == str(getattr(self, "panel_stem", "") or ""):
-                panel_camera.sync_world_background_color(context, panel=self)
+        if scene is not None and get_mode(context) == MODE_COMA:
+            stem = str(getattr(scene, "bname_current_coma_id", "") or "")
+            if stem == str(getattr(self, "coma_id", "") or ""):
+                coma_camera.sync_world_background_color(context, panel=self)
     except Exception:  # noqa: BLE001
         pass
     _tag_view3d_redraw(context)
 
 
-def _on_panel_visible_changed(_self, context) -> None:
+def _on_coma_visible_changed(_self, context) -> None:
     _tag_view3d_redraw(context)
 
 
-class BNamePanelVertex(bpy.types.PropertyGroup):
+class BNameComaVertex(bpy.types.PropertyGroup):
     """コマ枠の頂点 (mm)."""
 
     x_mm: FloatProperty(name="X", default=0.0)  # type: ignore[valid-type]
@@ -80,22 +80,22 @@ class BNameLayerRef(bpy.types.PropertyGroup):
     layer_id: StringProperty(name="Layer ID", default="")  # type: ignore[valid-type]
 
 
-class BNamePanelEntry(bpy.types.PropertyGroup):
-    """コマ 1 件分のメタデータ (panel_NNN.json 相当)."""
+class BNameComaEntry(bpy.types.PropertyGroup):
+    """コマ 1 件分のメタデータ (cNN.json 相当)."""
 
     # --- 識別子 ---
     id: StringProperty(  # type: ignore[valid-type]
         name="コマ ID",
-        description="panel_NNN の NNN 部分 (3 桁ゼロパディング)",
+        description="cNN 形式のコマID (2 桁ゼロパディング)",
         default="",
     )
     title: StringProperty(  # type: ignore[valid-type]
         name="表示名",
         default="",
     )
-    panel_stem: StringProperty(  # type: ignore[valid-type]
+    coma_id: StringProperty(  # type: ignore[valid-type]
         name="ファイル stem",
-        description="panel_NNN (ファイル名のベース)",
+        description="cNN (ファイル名のベース)",
         default="",
     )
 
@@ -105,7 +105,7 @@ class BNamePanelEntry(bpy.types.PropertyGroup):
         items=_SHAPE_TYPE_ITEMS,
         default="rect",
     )
-    vertices: CollectionProperty(type=BNamePanelVertex)  # type: ignore[valid-type]
+    vertices: CollectionProperty(type=BNameComaVertex)  # type: ignore[valid-type]
 
     # 矩形ショートカット (shape_type='rect' のときに使用)
     rect_x_mm: FloatProperty(name="X", default=0.0)  # type: ignore[valid-type]
@@ -128,7 +128,7 @@ class BNamePanelEntry(bpy.types.PropertyGroup):
         name="表示",
         description="このコマ枠とプレビューを表示する",
         default=True,
-        update=_on_panel_visible_changed,
+        update=_on_coma_visible_changed,
     )
     background_color: FloatVectorProperty(  # type: ignore[valid-type]
         name="背景色",
@@ -138,23 +138,23 @@ class BNamePanelEntry(bpy.types.PropertyGroup):
         default=(1.0, 1.0, 1.0, 0.0),
         min=0.0,
         max=1.0,
-        update=_on_panel_background_color_changed,
+        update=_on_coma_background_color_changed,
     )
 
     # --- 枠線・白フチ ---
-    border: PointerProperty(type=BNamePanelBorder)  # type: ignore[valid-type]
-    white_margin: PointerProperty(type=BNamePanelWhiteMargin)  # type: ignore[valid-type]
+    border: PointerProperty(type=BNameComaBorder)  # type: ignore[valid-type]
+    white_margin: PointerProperty(type=BNameComaWhiteMargin)  # type: ignore[valid-type]
     # 辺ごと (edge_index) の個別オーバーライド (枠線選択ツールで設定)
-    edge_styles: CollectionProperty(type=BNamePanelEdgeStyle)  # type: ignore[valid-type]
+    edge_styles: CollectionProperty(type=BNameComaEdgeStyle)  # type: ignore[valid-type]
 
     # --- 紐づけ ---
     layer_refs: CollectionProperty(type=BNameLayerRef)  # type: ignore[valid-type]
-    panel_gap_vertical_mm: FloatProperty(  # type: ignore[valid-type]
+    coma_gap_vertical_mm: FloatProperty(  # type: ignore[valid-type]
         name="上下スキマ (個別)",
         default=-1.0,
         description="負値で作品共通ルールを継承",
     )
-    panel_gap_horizontal_mm: FloatProperty(  # type: ignore[valid-type]
+    coma_gap_horizontal_mm: FloatProperty(  # type: ignore[valid-type]
         name="左右スキマ (個別)",
         default=-1.0,
         description="負値で作品共通ルールを継承",
@@ -162,9 +162,9 @@ class BNamePanelEntry(bpy.types.PropertyGroup):
 
 
 _CLASSES = (
-    BNamePanelVertex,
+    BNameComaVertex,
     BNameLayerRef,
-    BNamePanelEntry,
+    BNameComaEntry,
 )
 
 

@@ -1,8 +1,8 @@
 """コマのソリッドカメラサムネイル/高品質プレビュー生成 Operator.
 
-計画書 3.4.3 / 8.8 参照。コマ編集モード終了時に panel_NNN_thumb.png を
+計画書 3.4.3 / 8.8 参照。コマ編集モード終了時に cNN_thumb.png を
 カメラ基準のソリッド表示のコマ領域切り出しで更新。ユーザー手動で
-panel_NNN_preview.png を高解像度ソリッド画像として生成。
+cNN_preview.png を高解像度ソリッド画像として生成。
 """
 
 from __future__ import annotations
@@ -14,15 +14,15 @@ import tempfile
 import bpy
 from bpy.types import Operator
 
-from ..core.mode import MODE_PANEL, get_mode
+from ..core.mode import MODE_COMA, get_mode
 from ..core.work import get_active_page, get_work
 from ..utils import image_transparency, log, paths
 
 _logger = log.get_logger(__name__)
 
 
-def _is_panel_mode(context) -> bool:
-    return get_mode(context) == MODE_PANEL
+def _is_coma_mode(context) -> bool:
+    return get_mode(context) == MODE_COMA
 
 
 def take_area_screenshot(context, out_path: Path) -> bool:
@@ -32,16 +32,16 @@ def take_area_screenshot(context, out_path: Path) -> bool:
     OpenGL/Workbench ソリッド画像を出し、対象コマbboxだけを切る。
     これによりビューポート操作状態に依存せず、紙面座標と一致する。
     """
-    return render_panel_camera_crop(context, out_path, resolution_percentage=100)
+    return render_coma_camera_crop(context, out_path, resolution_percentage=100)
 
 
-def render_panel_camera_crop(context, out_path: Path, *, resolution_percentage: int = 100) -> bool:
-    if not _is_panel_mode(context):
+def render_coma_camera_crop(context, out_path: Path, *, resolution_percentage: int = 100) -> bool:
+    if not _is_coma_mode(context):
         return False
     work = get_work(context)
     if work is None or not getattr(work, "loaded", False):
         return False
-    page, entry = _resolve_panel_entry(context, work)
+    page, entry = _resolve_coma_entry(context, work)
     if page is None or entry is None:
         return False
     if not getattr(work, "work_dir", ""):
@@ -78,13 +78,13 @@ def render_panel_camera_crop(context, out_path: Path, *, resolution_percentage: 
         ),
     )
     try:
-        from ..utils import panel_camera
+        from ..utils import coma_camera
 
-        panel_camera.ensure_panel_camera_scene(
+        coma_camera.ensure_coma_camera_scene(
             context,
             work=work,
             page_id=str(getattr(page, "id", "") or ""),
-            panel_stem=str(getattr(entry, "panel_stem", "") or ""),
+            coma_id=str(getattr(entry, "coma_id", "") or ""),
             generate_references=False,
         )
     except Exception:  # noqa: BLE001
@@ -95,18 +95,18 @@ def render_panel_camera_crop(context, out_path: Path, *, resolution_percentage: 
     bg_state = None
     try:
         from ..io import export_pipeline
-        from ..utils import panel_camera
+        from ..utils import coma_camera
 
         if not export_pipeline.has_pillow():
             return False
-        bg_state = panel_camera.capture_managed_background_visibility(context)
-        panel_camera.set_managed_background_visibility(context, False)
+        bg_state = coma_camera.capture_managed_background_visibility(context)
+        coma_camera.set_managed_background_visibility(context, False)
         with tempfile.TemporaryDirectory() as td:
-            full_path = Path(td) / "panel_full.png"
+            full_path = Path(td) / "coma_full.png"
             scene.render.filepath = str(full_path)
             scene.render.image_settings.file_format = "PNG"
             scene.render.resolution_percentage = max(1, min(100, int(resolution_percentage)))
-            scene.render.film_transparent = image_transparency.panel_background_is_transparent(entry)
+            scene.render.film_transparent = image_transparency.coma_background_is_transparent(entry)
             scene.render.use_border = False
             if hasattr(scene.render, "use_crop_to_border"):
                 scene.render.use_crop_to_border = False
@@ -125,9 +125,9 @@ def render_panel_camera_crop(context, out_path: Path, *, resolution_percentage: 
     finally:
         if bg_state is not None:
             try:
-                from ..utils import panel_camera
+                from ..utils import coma_camera
 
-                panel_camera.restore_background_visibility(bg_state)
+                coma_camera.restore_background_visibility(bg_state)
             except Exception:  # noqa: BLE001
                 pass
         scene.render.filepath = prev_filepath
@@ -174,7 +174,7 @@ def _configure_scene_solid_shading(scene) -> None:
     _set_attr_safe(shading, "color_type", "MATERIAL")
     _set_attr_safe(shading, "show_cavity", False)
     _set_attr_safe(shading, "show_shadows", False)
-    settings = getattr(scene, "bname_panel_camera_settings", None)
+    settings = getattr(scene, "bname_coma_camera_settings", None)
     if settings is not None and bool(getattr(settings, "use_solid_background_color", False)):
         _set_attr_safe(shading, "background_type", "VIEWPORT")
         color = getattr(settings, "solid_background_color", (0.05, 0.05, 0.05))
@@ -210,24 +210,24 @@ def _set_attr_safe(obj, attr: str, value) -> None:
         pass
 
 
-def _resolve_panel_entry(context, work):
+def _resolve_coma_entry(context, work):
     scene = getattr(context, "scene", None)
-    page_id = str(getattr(scene, "bname_current_panel_page_id", "") or "") if scene else ""
-    stem = str(getattr(scene, "bname_current_panel_stem", "") or "") if scene else ""
+    page_id = str(getattr(scene, "bname_current_coma_page_id", "") or "") if scene else ""
+    stem = str(getattr(scene, "bname_current_coma_id", "") or "") if scene else ""
     if page_id and stem:
         for page in getattr(work, "pages", []):
             if str(getattr(page, "id", "") or "") != page_id:
                 continue
-            for entry in getattr(page, "panels", []):
-                if str(getattr(entry, "panel_stem", "") or "") == stem:
+            for entry in getattr(page, "comas", []):
+                if str(getattr(entry, "coma_id", "") or "") == stem:
                     return page, entry
     page = get_active_page(context)
     if page is None:
         return None, None
-    idx = int(getattr(page, "active_panel_index", -1))
-    if not (0 <= idx < len(page.panels)):
+    idx = int(getattr(page, "active_coma_index", -1))
+    if not (0 <= idx < len(page.comas)):
         return None, None
-    return page, page.panels[idx]
+    return page, page.comas[idx]
 
 
 def _resolve_render_output_path(path: Path) -> Path | None:
@@ -243,7 +243,7 @@ def _crop_render_to_panel(source: Path, out_path: Path, work, page, entry) -> bo
     Image = export_pipeline.Image
     if Image is None:
         return False
-    bbox = _panel_bbox_on_camera_page(work, page, entry)
+    bbox = _coma_bbox_on_camera_page(work, page, entry)
     if bbox is None:
         return False
     try:
@@ -265,14 +265,14 @@ def _crop_render_to_panel(source: Path, out_path: Path, work, page, entry) -> bo
     top = max(0, min(image.height - 1, top))
     bottom = max(top + 1, min(image.height, bottom))
     cropped = image.crop((left, top, right, bottom))
-    if image_transparency.panel_background_is_transparent(entry):
+    if image_transparency.coma_background_is_transparent(entry):
         cropped = image_transparency.make_background_transparent(cropped)
     cropped.save(str(out_path))
     return True
 
 
-def _panel_bbox_on_camera_page(work, page, entry) -> tuple[float, float, float, float] | None:
-    bbox = _panel_bbox(entry)
+def _coma_bbox_on_camera_page(work, page, entry) -> tuple[float, float, float, float] | None:
+    bbox = _coma_bbox(entry)
     if bbox is None:
         return None
     page_width = float(getattr(work.paper, "canvas_width_mm", 0.0) or 0.0)
@@ -283,7 +283,7 @@ def _panel_bbox_on_camera_page(work, page, entry) -> tuple[float, float, float, 
     return bbox
 
 
-def _panel_bbox(entry) -> tuple[float, float, float, float] | None:
+def _coma_bbox(entry) -> tuple[float, float, float, float] | None:
     if getattr(entry, "shape_type", "") == "rect":
         x = float(getattr(entry, "rect_x_mm", 0.0))
         y = float(getattr(entry, "rect_y_mm", 0.0))
@@ -300,27 +300,26 @@ def _panel_bbox(entry) -> tuple[float, float, float, float] | None:
     return min(xs), min(ys), max(xs), max(ys)
 
 
-class BNAME_OT_panel_update_thumb(Operator):
+class BNAME_OT_coma_update_thumb(Operator):
     """選択中コマのソリッドカメラサムネを生成."""
 
-    bl_idname = "bname.panel_update_thumb"
+    bl_idname = "bname.coma_update_thumb"
     bl_label = "コマサムネイルを更新"
     bl_options = {"REGISTER"}
 
     @classmethod
     def poll(cls, context):
         page = get_active_page(context)
-        return _is_panel_mode(context) and page is not None and 0 <= page.active_panel_index < len(page.panels)
+        return _is_coma_mode(context) and page is not None and 0 <= page.active_coma_index < len(page.comas)
 
     def execute(self, context):
         work = get_work(context)
         page = get_active_page(context)
         if work is None or page is None:
             return {"CANCELLED"}
-        entry = page.panels[page.active_panel_index]
-        paths.validate_panel_stem(entry.panel_stem)
-        index = int(entry.panel_stem.split("_", 1)[1])
-        out = paths.panel_thumb_path(Path(work.work_dir), page.id, index)
+        entry = page.comas[page.active_coma_index]
+        paths.validate_coma_id(entry.coma_id)
+        out = paths.coma_thumb_path(Path(work.work_dir), page.id, entry.coma_id)
         if take_area_screenshot(context, out):
             self.report({"INFO"}, f"サムネイル保存: {out.name}")
             return {"FINISHED"}
@@ -328,37 +327,36 @@ class BNAME_OT_panel_update_thumb(Operator):
         return {"CANCELLED"}
 
 
-class BNAME_OT_panel_generate_preview(Operator):
+class BNAME_OT_coma_generate_preview(Operator):
     """選択中コマのソリッドカメラ画像から高品質プレビューを生成."""
 
-    bl_idname = "bname.panel_generate_preview"
+    bl_idname = "bname.coma_generate_preview"
     bl_label = "高品質プレビュー生成"
     bl_options = {"REGISTER"}
 
     @classmethod
     def poll(cls, context):
         page = get_active_page(context)
-        return _is_panel_mode(context) and page is not None and 0 <= page.active_panel_index < len(page.panels)
+        return _is_coma_mode(context) and page is not None and 0 <= page.active_coma_index < len(page.comas)
 
     def execute(self, context):
         work = get_work(context)
         page = get_active_page(context)
         if work is None or page is None:
             return {"CANCELLED"}
-        entry = page.panels[page.active_panel_index]
-        paths.validate_panel_stem(entry.panel_stem)
-        index = int(entry.panel_stem.split("_", 1)[1])
-        out = paths.panel_preview_path(Path(work.work_dir), page.id, index)
+        entry = page.comas[page.active_coma_index]
+        paths.validate_coma_id(entry.coma_id)
+        out = paths.coma_preview_path(Path(work.work_dir), page.id, entry.coma_id)
         out.parent.mkdir(parents=True, exist_ok=True)
 
         scene = context.scene
         prev_filepath = scene.render.filepath
         prev_percent = scene.render.resolution_percentage
         try:
-            if not render_panel_camera_crop(context, out, resolution_percentage=100):
+            if not render_coma_camera_crop(context, out, resolution_percentage=100):
                 raise RuntimeError("カメラプレビューの生成に失敗しました")
         except Exception as exc:  # noqa: BLE001
-            _logger.exception("panel_generate_preview failed")
+            _logger.exception("coma_generate_preview failed")
             self.report({"ERROR"}, f"プレビュー生成失敗: {exc}")
             return {"CANCELLED"}
         finally:
@@ -370,8 +368,8 @@ class BNAME_OT_panel_generate_preview(Operator):
 
 
 _CLASSES = (
-    BNAME_OT_panel_update_thumb,
-    BNAME_OT_panel_generate_preview,
+    BNAME_OT_coma_update_thumb,
+    BNAME_OT_coma_generate_preview,
 )
 
 

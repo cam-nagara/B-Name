@@ -13,7 +13,7 @@ _ACTIVE_REFS: dict[str, weakref.ReferenceType | None] = {
     "balloon_tool": None,
     "text_tool": None,
     "effect_line_tool": None,
-    "panel_vertex_edit": None,
+    "coma_vertex_edit": None,
 }
 
 _DEFAULT_KEEP_SELECTION: dict[str, bool] = {
@@ -24,7 +24,7 @@ _DEFAULT_KEEP_SELECTION: dict[str, bool] = {
     "balloon_tool": True,
     "text_tool": True,
     "effect_line_tool": True,
-    "panel_vertex_edit": True,
+    "coma_vertex_edit": True,
 }
 
 

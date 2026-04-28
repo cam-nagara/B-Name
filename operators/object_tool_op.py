@@ -12,11 +12,11 @@ from . import (
     balloon_op,
     effect_line_op,
     layer_move_session,
-    panel_edge_drag_session,
+    coma_edge_drag_session,
     layer_move_op,
-    panel_edge_move_op,
-    panel_modal_state,
-    panel_picker,
+    coma_edge_move_op,
+    coma_modal_state,
+    coma_picker,
     text_op,
     view_event_region,
 )
@@ -33,16 +33,16 @@ def _find_page_by_id(work, page_id: str):
     return -1, None
 
 
-def _panel_identity(panel) -> str:
-    return str(getattr(panel, "panel_stem", "") or getattr(panel, "id", "") or "")
+def _coma_identity(panel) -> str:
+    return str(getattr(panel, "coma_id", "") or getattr(panel, "id", "") or "")
 
 
-def _find_panel_by_key(work, page_id: str, panel_id: str):
+def _find_coma_by_key(work, page_id: str, coma_id: str):
     page_index, page = _find_page_by_id(work, page_id)
     if page is None:
         return -1, None, -1, None
-    for i, panel in enumerate(getattr(page, "panels", []) or []):
-        if _panel_identity(panel) == str(panel_id or ""):
+    for i, panel in enumerate(getattr(page, "comas", []) or []):
+        if _coma_identity(panel) == str(coma_id or ""):
             return page_index, page, i, panel
     return page_index, page, -1, None
 
@@ -142,21 +142,21 @@ class BNAME_OT_object_tool(Operator):
         return bool(work is not None and getattr(work, "loaded", False))
 
     def invoke(self, context, _event):
-        active = panel_modal_state.get_active("object_tool")
+        active = coma_modal_state.get_active("object_tool")
         if active is not None:
             return {"FINISHED"}
-        panel_modal_state.finish_all(context, except_tool="object_tool")
+        coma_modal_state.finish_all(context, except_tool="object_tool")
         self._externally_finished = False
-        self._cursor_modal_set = panel_modal_state.set_modal_cursor(context, "DEFAULT")
+        self._cursor_modal_set = coma_modal_state.set_modal_cursor(context, "DEFAULT")
         self._clear_drag_state()
         context.window_manager.modal_handler_add(self)
-        panel_modal_state.set_active("object_tool", self, context)
+        coma_modal_state.set_active("object_tool", self, context)
         self.report({"INFO"}, "オブジェクトツール: クリックで選択、ドラッグで移動/リサイズ")
         return {"RUNNING_MODAL"}
 
     def modal(self, context, event):
         if getattr(self, "_externally_finished", False):
-            panel_modal_state.clear_active("object_tool", self, context)
+            coma_modal_state.clear_active("object_tool", self, context)
             return {"FINISHED", "PASS_THROUGH"}
         if getattr(self, "_dragging", False):
             return self._modal_dragging(context, event)
@@ -177,7 +177,7 @@ class BNAME_OT_object_tool(Operator):
 
     def _handle_left_press(self, context, event):
         mode = _selection_mode(event)
-        if mode == "single" and panel_edge_move_op.extend_selected_handle_at_event(context, event):
+        if mode == "single" and coma_edge_move_op.extend_selected_handle_at_event(context, event):
             return {"RUNNING_MODAL"}
         hit = self._hit_object(context, event)
         if hit is None:
@@ -193,8 +193,8 @@ class BNAME_OT_object_tool(Operator):
         x_mm, y_mm = self._start_point_for_hit(context, event, hit)
         if x_mm is None or y_mm is None:
             return {"RUNNING_MODAL"}
-        if hit["kind"] in {"panel_edge", "panel_vertex"}:
-            self._start_panel_edge_drag(context, hit, event, x_mm, y_mm)
+        if hit["kind"] in {"coma_edge", "coma_vertex"}:
+            self._start_coma_edge_drag(context, hit, event, x_mm, y_mm)
         else:
             self._start_object_drag(context, hit, x_mm, y_mm)
         return {"RUNNING_MODAL"}
@@ -207,15 +207,15 @@ class BNAME_OT_object_tool(Operator):
         if view is None:
             return None
         area, region, rv3d, mx, my = view
-        edge_hit = panel_edge_move_op._pick_edge_or_vertex(work, region, rv3d, int(mx), int(my))
+        edge_hit = coma_edge_move_op._pick_edge_or_vertex(work, region, rv3d, int(mx), int(my))
         if edge_hit is not None:
             page = work.pages[int(edge_hit["page"])]
-            panel = page.panels[int(edge_hit["panel"])]
-            kind = "panel_vertex" if edge_hit.get("type") == "vertex" else "panel_edge"
+            panel = page.comas[int(edge_hit["coma"])]
+            kind = "coma_vertex" if edge_hit.get("type") == "vertex" else "coma_edge"
             hit = dict(edge_hit)
             hit.update({
                 "kind": kind,
-                "key": object_selection.panel_key(page, panel),
+                "key": object_selection.coma_key(page, panel),
                 "area": area,
                 "region": region,
                 "rv3d": rv3d,
@@ -230,17 +230,17 @@ class BNAME_OT_object_tool(Operator):
         effect_hit = self._hit_effect(context, event)
         if effect_hit is not None:
             return effect_hit
-        panel_hit = panel_picker.find_panel_at_event(context, event)
+        panel_hit = coma_picker.find_coma_at_event(context, event)
         if panel_hit is not None:
-            page_index, panel_index = panel_hit
+            page_index, coma_index = panel_hit
             page = work.pages[page_index]
-            panel = page.panels[panel_index]
+            panel = page.comas[coma_index]
             return {
-                "kind": "panel",
+                "kind": "coma",
                 "page": page_index,
-                "panel": panel_index,
+                "coma": coma_index,
                 "part": "body",
-                "key": object_selection.panel_key(page, panel),
+                "key": object_selection.coma_key(page, panel),
             }
         return None
 
@@ -296,28 +296,28 @@ class BNAME_OT_object_tool(Operator):
             return
         kind = hit["kind"]
         key = str(hit.get("key", "") or "")
-        if kind in {"panel", "panel_edge", "panel_vertex"}:
+        if kind in {"coma", "coma_edge", "coma_vertex"}:
             page_index = int(hit["page"])
-            panel_index = int(hit["panel"])
+            coma_index = int(hit["coma"])
             page = work.pages[page_index]
             work.active_page_index = page_index
-            page.active_panel_index = panel_index
+            page.active_coma_index = coma_index
             if hasattr(context.scene, "bname_active_layer_kind"):
-                context.scene.bname_active_layer_kind = "panel"
-            if kind == "panel_edge":
+                context.scene.bname_active_layer_kind = "coma"
+            if kind == "coma_edge":
                 edge_selection.set_selection(
                     context,
                     "edge",
                     page_index=page_index,
-                    panel_index=panel_index,
+                    coma_index=coma_index,
                     edge_index=int(hit.get("edge", -1)),
                 )
-            elif kind == "panel_vertex":
+            elif kind == "coma_vertex":
                 edge_selection.set_selection(
                     context,
                     "vertex",
                     page_index=page_index,
-                    panel_index=panel_index,
+                    coma_index=coma_index,
                     vertex_index=int(hit.get("vertex", -1)),
                 )
             else:
@@ -325,7 +325,7 @@ class BNAME_OT_object_tool(Operator):
                     context,
                     "border",
                     page_index=page_index,
-                    panel_index=panel_index,
+                    coma_index=coma_index,
                 )
         elif kind == "balloon":
             page_index, page = _find_page_by_id(work, hit.get("page_id", ""))
@@ -355,19 +355,19 @@ class BNAME_OT_object_tool(Operator):
     def _start_point_for_hit(self, context, event, hit: dict) -> tuple[float | None, float | None]:
         if "world" in hit:
             return hit["world"]
-        if hit["kind"] in {"panel", "panel_edge", "panel_vertex"}:
+        if hit["kind"] in {"coma", "coma_edge", "coma_vertex"}:
             view = view_event_region.view3d_window_under_event(context, event)
             if view is None:
                 return None, None
             _area, region, rv3d, mx, my = view
-            return panel_edge_move_op._region_to_world_mm(region, rv3d, mx, my)
+            return coma_edge_move_op._region_to_world_mm(region, rv3d, mx, my)
         return _event_world_xy_mm(context, event)
 
-    def _start_panel_edge_drag(self, context, hit: dict, event, x_mm: float, y_mm: float) -> None:
+    def _start_coma_edge_drag(self, context, hit: dict, event, x_mm: float, y_mm: float) -> None:
         selection = {
-            "type": "vertex" if hit["kind"] == "panel_vertex" else "edge",
+            "type": "vertex" if hit["kind"] == "coma_vertex" else "edge",
             "page": int(hit["page"]),
-            "panel": int(hit["panel"]),
+            "coma": int(hit["coma"]),
         }
         if selection["type"] == "vertex":
             selection["vertex"] = int(hit.get("vertex", -1))
@@ -377,7 +377,7 @@ class BNAME_OT_object_tool(Operator):
         if view is None:
             return
         area, region, rv3d, _mx, _my = view
-        self._edge_drag = panel_edge_drag_session.PanelEdgeDragSession(
+        self._edge_drag = coma_edge_drag_session.ComaEdgeDragSession(
             context,
             get_work(context),
             area,
@@ -387,7 +387,7 @@ class BNAME_OT_object_tool(Operator):
             (float(x_mm), float(y_mm)),
         )
         self._dragging = True
-        self._drag_action = "panel_edge"
+        self._drag_action = "coma_edge"
         self._drag_moved = False
 
     def _try_start_layer_drag(self, context, event) -> bool:
@@ -436,17 +436,17 @@ class BNAME_OT_object_tool(Operator):
             kind, page_id, item_id = object_selection.parse_key(key)
             if action != "move" and key != primary_key:
                 continue
-            if kind == "panel":
-                page_index, page, panel_index, panel = _find_panel_by_key(work, page_id, item_id)
+            if kind == "coma":
+                page_index, page, coma_index, panel = _find_coma_by_key(work, page_id, item_id)
                 if panel is None:
                     continue
-                poly = panel_edge_move_op._panel_polygon(panel)
-                gp_key = layer_stack_utils.gp_parent_key_for_panel(page, panel)
+                poly = coma_edge_move_op._coma_polygon(panel)
+                gp_key = layer_stack_utils.gp_parent_key_for_coma(page, panel)
                 snapshots.append({
-                    "kind": "panel",
+                    "kind": "coma",
                     "page_index": page_index,
                     "page_id": page_id,
-                    "panel_id": item_id,
+                    "coma_id": item_id,
                     "shape": getattr(panel, "shape_type", ""),
                     "rect": (
                         float(getattr(panel, "rect_x_mm", 0.0)),
@@ -514,7 +514,7 @@ class BNAME_OT_object_tool(Operator):
         return {"RUNNING_MODAL"}
 
     def _update_drag(self, context, event) -> None:
-        if self._drag_action == "panel_edge":
+        if self._drag_action == "coma_edge":
             if self._edge_drag is not None and self._edge_drag.apply(event):
                 self._drag_moved = True
             return
@@ -537,11 +537,11 @@ class BNAME_OT_object_tool(Operator):
         for snapshot in self._snapshots:
             kind = snapshot["kind"]
             x, y, w, h = snapshot.get("rect", (0.0, 0.0, 0.0, 0.0))
-            if kind == "panel":
-                _page_index, page, _panel_index, panel = _find_panel_by_key(
+            if kind == "coma":
+                _page_index, page, _coma_index, panel = _find_coma_by_key(
                     work,
                     snapshot["page_id"],
-                    snapshot["panel_id"],
+                    snapshot["coma_id"],
                 )
                 if panel is None or page is None:
                     continue
@@ -589,7 +589,7 @@ class BNAME_OT_object_tool(Operator):
             panel.rect_width_mm = w
             panel.rect_height_mm = h
         else:
-            panel_edge_move_op._set_panel_polygon(
+            coma_edge_move_op._set_coma_polygon(
                 panel,
                 [(x + dx, y + dy) for x, y in snapshot["poly"]],
             )
@@ -609,9 +609,9 @@ class BNAME_OT_object_tool(Operator):
     def _finish_drag(self, context) -> None:
         moved = bool(getattr(self, "_drag_moved", False))
         changed = moved
-        edge_session = self._drag_action == "panel_edge"
+        edge_session = self._drag_action == "coma_edge"
         layer_session = self._drag_action == "layer_move"
-        if self._drag_action == "panel_edge" and self._edge_drag is not None:
+        if self._drag_action == "coma_edge" and self._edge_drag is not None:
             changed = bool(self._edge_drag.finish())
         elif self._drag_action == "layer_move" and self._layer_drag is not None:
             changed = bool(self._layer_drag.finish(context))
@@ -622,19 +622,19 @@ class BNAME_OT_object_tool(Operator):
                 except Exception:  # noqa: BLE001
                     pass
             if not layer_session:
-                layer_stack_utils.sync_layer_stack_after_data_change(context, align_panel_order=True)
+                layer_stack_utils.sync_layer_stack_after_data_change(context, align_coma_order=True)
         elif edge_session and not moved:
             detail_popup.open_active_detail_deferred(context)
-        elif not layer_session and self._drag_action != "panel_edge":
+        elif not layer_session and self._drag_action != "coma_edge":
             detail_popup.open_active_detail_deferred(context)
         self._clear_drag_state()
 
     def _cancel_drag(self, context) -> None:
         if self._drag_action == "layer_move" and self._layer_drag is not None:
             self._layer_drag.cancel(context)
-        elif self._drag_action == "panel_edge" and self._edge_drag is not None:
+        elif self._drag_action == "coma_edge" and self._edge_drag is not None:
             self._edge_drag.cancel()
-        elif self._drag_action != "panel_edge":
+        elif self._drag_action != "coma_edge":
             self._apply_snapshots(context, 0.0, 0.0)
         self._clear_drag_state()
         layer_stack_utils.tag_view3d_redraw(context)
@@ -652,9 +652,9 @@ class BNAME_OT_object_tool(Operator):
 
     def _cleanup(self, context) -> None:
         if getattr(self, "_cursor_modal_set", False):
-            panel_modal_state.restore_modal_cursor(context)
+            coma_modal_state.restore_modal_cursor(context)
             self._cursor_modal_set = False
-        if getattr(self, "_drag_action", "") == "panel_edge" and self._edge_drag is not None:
+        if getattr(self, "_drag_action", "") == "coma_edge" and self._edge_drag is not None:
             self._edge_drag.cancel()
         elif getattr(self, "_drag_action", "") == "layer_move" and self._layer_drag is not None:
             self._layer_drag.cancel(context)
@@ -667,7 +667,7 @@ class BNAME_OT_object_tool(Operator):
         if not keep_selection:
             object_selection.clear(context)
         self._cleanup(context)
-        panel_modal_state.clear_active("object_tool", self, context)
+        coma_modal_state.clear_active("object_tool", self, context)
 
 
 _CLASSES = (BNAME_OT_object_tool,)

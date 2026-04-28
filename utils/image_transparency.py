@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import deque
 
 
-def panel_background_is_transparent(entry, *, epsilon: float = 1e-4) -> bool:
+def coma_background_is_transparent(entry, *, epsilon: float = 1e-4) -> bool:
     bg = getattr(entry, "background_color", None)
     if bg is None or len(bg) < 4:
         return False

@@ -49,7 +49,7 @@ class BNAME_PT_effect_line(Panel):
             box.prop(params, "spacing_distance_mm")
 
         box.prop(params, "length_mm")
-        box.prop(params, "extend_past_panel")
+        box.prop(params, "extend_past_coma")
 
         box = layout.box()
         box.label(text="基準位置 / ギザ")

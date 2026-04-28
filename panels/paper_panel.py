@@ -5,7 +5,7 @@ from __future__ import annotations
 import bpy
 from bpy.types import Panel
 
-from ..core.mode import MODE_PANEL, get_mode
+from ..core.mode import MODE_COMA, get_mode
 from ..core.work import get_work
 
 B_NAME_CATEGORY = "B-Name"
@@ -23,7 +23,7 @@ class BNAME_PT_paper(Panel):
     @classmethod
     def poll(cls, context):
         w = get_work(context)
-        return bool(w and w.loaded and get_mode(context) != MODE_PANEL)
+        return bool(w and w.loaded and get_mode(context) != MODE_COMA)
 
     def draw(self, context):
         layout = self.layout
@@ -113,7 +113,7 @@ class BNAME_PT_paper(Panel):
 
         box = layout.box()
         box.label(text="コマ間隔")
-        g = work.panel_gap
+        g = work.coma_gap
         row = box.row(align=True)
         row.prop(g, "vertical_mm")
         row.prop(g, "horizontal_mm")

@@ -5,10 +5,10 @@ from __future__ import annotations
 import bpy
 from bpy.types import Operator
 
-from ..core.mode import MODE_PANEL, MODE_PAGE, get_mode
+from ..core.mode import MODE_COMA, MODE_PAGE, get_mode
 from ..core.work import get_active_page, get_work
 from ..utils import geom, gp_layer_parenting as gp_parent, layer_stack as layer_stack_utils, page_grid
-from . import panel_modal_state, panel_picker, view_event_region
+from . import coma_modal_state, coma_picker, view_event_region
 
 
 def _move_panel(panel, dx_mm: float, dy_mm: float) -> None:
@@ -43,10 +43,10 @@ def _entry_center(entry) -> tuple[float, float]:
 def _panel_children(page, panel):
     balloons = []
     texts = []
-    target_stem = str(getattr(panel, "panel_stem", "") or "")
+    target_stem = str(getattr(panel, "coma_id", "") or "")
     for balloon in getattr(page, "balloons", []):
-        hit = layer_stack_utils.panel_containing_point(page, *_entry_center(balloon))
-        if hit is not None and str(getattr(hit, "panel_stem", "") or "") == target_stem:
+        hit = layer_stack_utils.coma_containing_point(page, *_entry_center(balloon))
+        if hit is not None and str(getattr(hit, "coma_id", "") or "") == target_stem:
             balloons.append(balloon)
     attached_texts = {
         getattr(text, "id", "")
@@ -57,8 +57,8 @@ def _panel_children(page, panel):
     for text in getattr(page, "texts", []):
         if getattr(text, "id", "") in attached_texts:
             continue
-        hit = layer_stack_utils.panel_containing_point(page, *_entry_center(text))
-        if hit is not None and str(getattr(hit, "panel_stem", "") or "") == target_stem:
+        hit = layer_stack_utils.coma_containing_point(page, *_entry_center(text))
+        if hit is not None and str(getattr(hit, "coma_id", "") or "") == target_stem:
             texts.append(text)
     return balloons, texts
 
@@ -88,14 +88,14 @@ def _point_inside_active_panel(context, x_mm: float, y_mm: float) -> bool:
     page = get_active_page(context)
     if work is None or page is None:
         return True
-    idx = int(getattr(page, "active_panel_index", -1))
-    if not (0 <= idx < len(page.panels)):
+    idx = int(getattr(page, "active_coma_index", -1))
+    if not (0 <= idx < len(page.comas)):
         return True
-    hit = layer_stack_utils.panel_containing_point(page, x_mm, y_mm)
+    hit = layer_stack_utils.coma_containing_point(page, x_mm, y_mm)
     return (
         hit is not None
-        and str(getattr(hit, "panel_stem", "") or "")
-        == str(getattr(page.panels[idx], "panel_stem", "") or "")
+        and str(getattr(hit, "coma_id", "") or "")
+        == str(getattr(page.comas[idx], "coma_id", "") or "")
     )
 
 
@@ -104,8 +104,8 @@ def _move_would_violate_layer_scope(context, page, entry, dx_mm: float, dy_mm: f
     cx, cy = _entry_center(entry)
     nx, ny = cx + dx_mm, cy + dy_mm
     if kind == MODE_PAGE:
-        return layer_stack_utils.panel_containing_point(page, nx, ny) is not None
-    if kind == MODE_PANEL:
+        return layer_stack_utils.coma_containing_point(page, nx, ny) is not None
+    if kind == MODE_COMA:
         return not _point_inside_active_panel(context, nx, ny)
     return False
 
@@ -129,31 +129,31 @@ class BNAME_OT_layer_move_tool(Operator):
         return bool(work and work.loaded and getattr(context.scene, "bname_layer_stack", None) is not None)
 
     def invoke(self, context, event):
-        active = panel_modal_state.get_active("layer_move")
+        active = coma_modal_state.get_active("layer_move")
         if active is not None:
             active.finish_from_external(context, keep_selection=True)
             return {"FINISHED"}
-        panel_modal_state.finish_active("panel_vertex_edit", context, keep_selection=True)
-        panel_modal_state.finish_active("knife_cut", context, keep_selection=False)
-        panel_modal_state.finish_active("edge_move", context, keep_selection=True)
-        panel_modal_state.finish_active("balloon_tool", context, keep_selection=True)
-        panel_modal_state.finish_active("text_tool", context, keep_selection=True)
-        panel_modal_state.finish_active("effect_line_tool", context, keep_selection=True)
+        coma_modal_state.finish_active("coma_vertex_edit", context, keep_selection=True)
+        coma_modal_state.finish_active("knife_cut", context, keep_selection=False)
+        coma_modal_state.finish_active("edge_move", context, keep_selection=True)
+        coma_modal_state.finish_active("balloon_tool", context, keep_selection=True)
+        coma_modal_state.finish_active("text_tool", context, keep_selection=True)
+        coma_modal_state.finish_active("effect_line_tool", context, keep_selection=True)
         self._last_world = None
         self._target = None
         self._snapshots = []
         self._dragging = False
         self._moved = False
         self._externally_finished = False
-        self._cursor_modal_set = panel_modal_state.set_modal_cursor(context, "SCROLL_XY")
+        self._cursor_modal_set = coma_modal_state.set_modal_cursor(context, "SCROLL_XY")
         context.window_manager.modal_handler_add(self)
-        panel_modal_state.set_active("layer_move", self, context)
+        coma_modal_state.set_active("layer_move", self, context)
         self.report({"INFO"}, "レイヤー移動ツール: ビューポート上でドラッグ")
         return {"RUNNING_MODAL"}
 
     def modal(self, context, event):
         if getattr(self, "_externally_finished", False):
-            panel_modal_state.clear_active("layer_move", self, context)
+            coma_modal_state.clear_active("layer_move", self, context)
             return {"FINISHED", "PASS_THROUGH"}
         if (
             event.value == "PRESS"
@@ -164,7 +164,7 @@ class BNAME_OT_layer_move_tool(Operator):
         ):
             self.finish_from_external(context, keep_selection=True)
             try:
-                bpy.ops.bname.panel_knife_cut("INVOKE_DEFAULT")
+                bpy.ops.bname.coma_knife_cut("INVOKE_DEFAULT")
             except Exception:  # noqa: BLE001
                 pass
             return {"FINISHED"}
@@ -177,7 +177,7 @@ class BNAME_OT_layer_move_tool(Operator):
         ):
             self.finish_from_external(context, keep_selection=True)
             try:
-                bpy.ops.bname.panel_edge_move("INVOKE_DEFAULT")
+                bpy.ops.bname.coma_edge_move("INVOKE_DEFAULT")
             except Exception:  # noqa: BLE001
                 pass
             return {"FINISHED"}
@@ -215,12 +215,12 @@ class BNAME_OT_layer_move_tool(Operator):
             self._restore_snapshots(context)
             layer_stack_utils.tag_view3d_redraw(context)
             self._cleanup(context)
-            panel_modal_state.clear_active("layer_move", self, context)
+            coma_modal_state.clear_active("layer_move", self, context)
             return {"CANCELLED"}
         if event.type == "LEFTMOUSE" and event.value == "PRESS":
             if not view_event_region.is_view3d_window_event(context, event):
                 return {"PASS_THROUGH"}
-            coords = panel_picker._event_world_mm(context, event)
+            coords = coma_picker._event_world_mm(context, event)
             if coords is None:
                 return {"PASS_THROUGH"}
             if not self._begin_drag(context, coords):
@@ -244,7 +244,7 @@ class BNAME_OT_layer_move_tool(Operator):
             return {"PASS_THROUGH"}
         if not view_event_region.is_view3d_window_event(context, event):
             return {"RUNNING_MODAL"} if self._dragging else {"PASS_THROUGH"}
-        coords = panel_picker._event_world_mm(context, event)
+        coords = coma_picker._event_world_mm(context, event)
         if coords is None or self._last_world is None or not self._dragging:
             return {"PASS_THROUGH"}
         dx = coords[0] - self._last_world[0]
@@ -281,7 +281,7 @@ class BNAME_OT_layer_move_tool(Operator):
 
     def _cleanup(self, context) -> None:
         if getattr(self, "_cursor_modal_set", False):
-            panel_modal_state.restore_modal_cursor(context)
+            coma_modal_state.restore_modal_cursor(context)
             self._cursor_modal_set = False
 
     def finish_from_external(self, context, *, keep_selection: bool) -> None:
@@ -290,7 +290,7 @@ class BNAME_OT_layer_move_tool(Operator):
             return
         self._externally_finished = True
         self._cleanup(context)
-        panel_modal_state.clear_active("layer_move", self, context)
+        coma_modal_state.clear_active("layer_move", self, context)
 
     def _capture_snapshot(self, context, kind: str, resolved: dict) -> None:
         target = resolved.get("target")
@@ -302,12 +302,12 @@ class BNAME_OT_layer_move_tool(Operator):
                     context, layer_stack_utils.gp_parent_keys_for_page(target)
                 ))
             )
-        elif kind == "panel":
-            self._snapshots.append(("panel", target, _snapshot_panel(target)))
+        elif kind == "coma":
+            self._snapshots.append(("coma", target, _snapshot_panel(target)))
             if page is not None:
                 self._snapshots.append(
                     ("gp_layers", None, layer_stack_utils.capture_gp_layers_for_parent_keys(
-                        context, {layer_stack_utils.gp_parent_key_for_panel(page, target)}
+                        context, {layer_stack_utils.gp_parent_key_for_coma(page, target)}
                     ))
                 )
                 balloons, texts = _panel_children(page, target)
@@ -337,7 +337,7 @@ class BNAME_OT_layer_move_tool(Operator):
         for kind, target, data in self._snapshots:
             if kind == "page":
                 target.offset_x_mm, target.offset_y_mm = data
-            elif kind == "panel":
+            elif kind == "coma":
                 _restore_panel(target, data)
             elif kind in {"balloon", "text", "attached_text", "image"}:
                 target.x_mm, target.y_mm = data
@@ -358,7 +358,7 @@ class BNAME_OT_layer_move_tool(Operator):
                 context, layer_stack_utils.gp_parent_keys_for_page(target), dx_mm, dy_mm
             )
             return True
-        if kind == "panel":
+        if kind == "coma":
             _move_panel(target, dx_mm, dy_mm)
             for child_kind, child, _data in self._snapshots:
                 if child_kind == "balloon":
@@ -368,7 +368,7 @@ class BNAME_OT_layer_move_tool(Operator):
                     child.y_mm += dy_mm
             if page is not None:
                 layer_stack_utils.translate_gp_layers_for_parent_keys(
-                    context, {layer_stack_utils.gp_parent_key_for_panel(page, target)}, dx_mm, dy_mm
+                    context, {layer_stack_utils.gp_parent_key_for_coma(page, target)}, dx_mm, dy_mm
                 )
             return True
         if kind == "balloon" and page is not None:

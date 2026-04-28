@@ -72,7 +72,7 @@ class BNameEffectLineParams(bpy.types.PropertyGroup):
     length_mm: FloatProperty(name="長さ", default=10.0, min=0.1, soft_max=500.0)  # type: ignore[valid-type]
     length_jitter_enabled: BoolProperty(name="長さ乱れ", default=False)  # type: ignore[valid-type]
     length_jitter_amount: FloatProperty(name="長さ乱れ量", default=0.2, min=0.0, max=1.0)  # type: ignore[valid-type]
-    extend_past_panel: BoolProperty(name="コマ外へ延長", default=False)  # type: ignore[valid-type]
+    extend_past_coma: BoolProperty(name="コマ外へ延長", default=False)  # type: ignore[valid-type]
 
     base_position: EnumProperty(  # type: ignore[valid-type]
         name="基準位置",
