@@ -72,7 +72,7 @@ class ClickTarget:
 
 def _world_xy_mm_from_event(context, event) -> Optional[tuple[float, float]]:
     """event から世界座標 mm を返す (View3D 領域外なら None)."""
-    from . import view_event_region
+    from ..operators import view_event_region
     from . import geom
 
     view = view_event_region.view3d_window_under_event(context, event)
