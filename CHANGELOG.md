@@ -3,6 +3,14 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-29 — 新規作品作成/作品クローズ時の page Collection orphan 掃除
+
+### 追加
+- `gp_utils.remove_all_page_gpencils()` を追加。`page_pNNNN` Collection と旧仕様 `page_pNNNN_sketch` GP オブジェクト・データブロック・紙メッシュをまとめて掃除する
+
+### 修正
+- 同一 Blender セッション内で複数回 `work_new` / `work_close` を行うと、前作品の `page_pNNNN` Collection や旧 GP オブジェクトが `B-Name` ルート Collection 配下に残骸として蓄積する問題を修正（`work_new` と `work_close` の冒頭で `remove_all_page_gpencils()` を呼ぶよう変更）
+
 ## 2026-04-29 — レイヤーリストの重複行とクロスページ親変更を修正
 
 ### 修正

@@ -611,6 +611,78 @@ def remove_all_page_papers() -> None:
                 _logger.exception("remove paper mesh failed: %s", name)
 
 
+def remove_all_page_gpencils() -> None:
+    """B-Name の全ページ Collection / GP オブジェクト / 紙メッシュを一括削除する.
+
+    新規作品作成 (``work_new``) や作品クローズ (``work_close``) で、前作品の
+    ``page_pNNNN`` Collection や ``page_pNNNN_sketch`` GP が残らないようにする。
+    master GP (``bname_master_sketch``) と effect GP (``BName_EffectLines``) は
+    作品横断で使い回すため対象外。
+
+    判定は ``page_<page_id>`` (Collection) / ``page_<page_id>_sketch`` (GP) の
+    命名規則に基づく。手動で同名 Collection を作っている場合に巻き込まれる
+    可能性があるため、Collection は ``B-Name`` ルート配下に登録されているもの
+    だけを対象にする。
+    """
+    import re
+
+    page_collection_pattern = re.compile(r"^page_p\d+$")
+    page_gp_pattern = re.compile(r"^page_p\d+_sketch(?:\.\d+)?$")
+    page_gp_data_pattern = re.compile(r"^page_p\d+_sketch_data(?:\.\d+)?$")
+
+    # 1) 旧仕様 page_NNNN_sketch GP オブジェクトを削除
+    for obj in tuple(bpy.data.objects):
+        name = str(getattr(obj, "name", "") or "")
+        if not page_gp_pattern.match(name):
+            continue
+        try:
+            bpy.data.objects.remove(obj, do_unlink=True)
+        except Exception:  # noqa: BLE001
+            _logger.exception("remove page GP object failed: %s", name)
+
+    # 2) 紙メッシュ (page_pNNNN_paper / _paper_data) も併せて掃除
+    remove_all_page_papers()
+
+    # 3) page_pNNNN Collection を削除 (B-Name ルート配下のみ対象)
+    root = bpy.data.collections.get(ROOT_COLLECTION_NAME)
+    candidates: list[object] = []
+    if root is not None:
+        for coll in tuple(root.children):
+            name = str(getattr(coll, "name", "") or "")
+            if page_collection_pattern.match(name):
+                candidates.append(coll)
+    # ROOT_COLLECTION_NAME 配下に居なくても、命名一致する page_pNNNN は
+    # 過去のリンク漏れで scene 直下に残っていることがあるため掃除する。
+    for coll in tuple(bpy.data.collections):
+        name = str(getattr(coll, "name", "") or "")
+        if not page_collection_pattern.match(name):
+            continue
+        if coll not in candidates:
+            candidates.append(coll)
+    for coll in candidates:
+        try:
+            bpy.data.collections.remove(coll)
+        except Exception:  # noqa: BLE001
+            _logger.exception("remove page collection failed: %s", coll.name)
+
+    # 4) 孤児になった GP データブロックを掃除
+    try:
+        blocks = _gp_data_blocks()
+    except RuntimeError:
+        blocks = None
+    if blocks is not None:
+        for data_block in tuple(blocks):
+            name = str(getattr(data_block, "name", "") or "")
+            if not page_gp_data_pattern.match(name):
+                continue
+            if getattr(data_block, "users", 0) != 0:
+                continue
+            try:
+                blocks.remove(data_block)
+            except Exception:  # noqa: BLE001
+                _logger.exception("remove orphan GP data failed: %s", name)
+
+
 def ensure_page_paper(
     scene,
     page_id: str,

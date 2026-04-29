@@ -160,6 +160,11 @@ class BNAME_OT_work_new(Operator, ExportHelper):
             raster_layers.clear()
         if hasattr(context.scene, "bname_active_raster_layer_index"):
             context.scene.bname_active_raster_layer_index = -1
+        # 前作品の page_pNNNN Collection / GP を掃除 (orphan 防止)
+        try:
+            gp_utils.remove_all_page_gpencils()
+        except Exception:  # noqa: BLE001
+            _logger.exception("work_new: orphan page collection cleanup failed")
         work.active_page_index = -1
         work.loaded = False
 
@@ -466,6 +471,10 @@ class BNAME_OT_work_close(Operator):
             raster_layers.clear()
         if hasattr(context.scene, "bname_active_raster_layer_index"):
             context.scene.bname_active_raster_layer_index = -1
+        try:
+            gp_utils.remove_all_page_gpencils()
+        except Exception:  # noqa: BLE001
+            _logger.exception("work_close: page collection cleanup failed")
         work.pages.clear()
         work.active_page_index = -1
         work.loaded = False
