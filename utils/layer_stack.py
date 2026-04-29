@@ -38,7 +38,21 @@ def _place_effect_gp_object(obj) -> None:
     try:
         from .page_grid import GP_Z_LIFT_M
 
+        # 既に正しい位置なら何もしない (draw_handler や UIList draw 等の制限
+        # コンテキストから呼ばれた場合に "Writing to ID classes ... not allowed"
+        # を回避するため)
+        current = obj.location
+        if (
+            abs(float(current[0])) < 1.0e-9
+            and abs(float(current[1])) < 1.0e-9
+            and abs(float(current[2]) - GP_Z_LIFT_M) < 1.0e-9
+        ):
+            return
         obj.location = (0.0, 0.0, GP_Z_LIFT_M)
+    except AttributeError:
+        # draw context での書き込み禁止エラーは無視 (次の通常コンテキスト時に
+        # ensure_effect_gp_object が再実行されて lift される)
+        pass
     except Exception:  # noqa: BLE001
         _logger.exception("effect GP location lift failed")
 
