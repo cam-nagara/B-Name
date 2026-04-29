@@ -167,6 +167,13 @@ def _default_rect_for_parent(context, work, page, parent_key: str, width: float,
 
 
 def _parent_key_for_new_item(context, anchor_uid: str, kind: str) -> str:
+    """新規レイヤー追加時の親キーを、レイヤーリスト上で選択中の行から推定する.
+
+    CSP / Photoshop のレイヤーパネルと同じ感覚にする:
+    - Page / Coma 選択中: そのページ/コマの中に追加 (返り値 = 行の key)
+    - gp_folder 選択中: フォルダの中に追加 (返り値 = フォルダの key)
+    - 他レイヤー選択中: その兄弟として追加 (返り値 = 行の parent_key)
+    """
     stack = getattr(context.scene, "bname_layer_stack", None)
     if stack is None or not anchor_uid:
         return ""
@@ -178,13 +185,18 @@ def _parent_key_for_new_item(context, anchor_uid: str, kind: str) -> str:
     for item in stack:
         if layer_stack_utils.stack_item_uid(item) != anchor_uid:
             continue
+        # Page / Coma 行を選択中: そのコンテナの中へ
         if kind in logical_child_kinds and item.kind in {PAGE_KIND, COMA_KIND}:
             return item.key
         if kind in logical_child_kinds and gp_parent.parent_key_exists(
             work, str(getattr(item, "parent_key", "") or "")
         ):
             return str(getattr(item, "parent_key", "") or "")
-        if kind in {"gp", "gp_folder"} and item.kind in {"gp", "gp_folder"}:
+        # gp_folder 行を選択中: フォルダの中へ
+        if kind in {"gp", "gp_folder"} and item.kind == "gp_folder":
+            return str(getattr(item, "key", "") or "")
+        # 同種レイヤー選択中: 兄弟として
+        if kind in {"gp", "gp_folder"} and item.kind == "gp":
             return str(getattr(item, "parent_key", "") or "")
         if kind in {"effect", "raster", "balloon", "text"} and item.kind in {"effect", "raster", "balloon", "text"}:
             return str(getattr(item, "parent_key", "") or "")
@@ -404,7 +416,15 @@ class BNAME_OT_layer_stack_drag(Operator):
         self._dragged = True
         self._current_index = target_index
         context.scene.bname_active_layer_stack_index = target_index
-        layer_stack_utils.apply_stack_order_if_ui_changed(context, moved_uid=self._moved_uid)
+        # CSP / Photoshop 風に、Y-drag で 1 つ前の行 (= 直前のコンテナ) を親として
+        # 採用する。signature 比較に依存する apply_stack_order_if_ui_changed では
+        # 最初の MOUSEMOVE で previous=None のため reparent が走らないため、
+        # 直接 apply_stack_drop_hint を毎回呼ぶ。
+        if not layer_stack_utils.apply_stack_drop_hint(
+            context, self._moved_uid, nesting_delta=0
+        ):
+            # 親変更が無くても並び替え自体は実データへ反映する。
+            layer_stack_utils.apply_stack_order(context)
         self._apply_nesting_hint(context, event)
         layer_stack_utils.sync_layer_stack(context, preserve_active_index=True)
         self._current_index = self._find_moved_index(context.scene.bname_layer_stack)

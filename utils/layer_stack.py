@@ -388,6 +388,17 @@ def _partition_gp_targets(
     *,
     kind: str = "gp",
 ) -> tuple[list[LayerTarget], dict[str, list[LayerTarget]]]:
+    """``_iter_gp_targets`` を ``gp_targets_by_parent`` (page/coma 親) と
+    ``root_targets`` (それ以外: gp_folder, root レイヤー, gp_folder 配下レイヤー
+    含む) に分配する.
+
+    旧実装は gp_folder 配下のレイヤーから parent_key を stripping していたため、
+    sync_layer_stack 後に「folder 内にあるはずのレイヤーが root に parent_key=''
+    で並ぶ」状態になり、apply_stack_order が actual_parent_group との不一致を
+    検知してフォルダ外へ移動させる破壊的バグを誘発していた。folder 配下は
+    target.parent_key=folder_key を保持したまま root_targets へ入れ、後段の
+    ``_normalize_tree_order`` がフォルダ配下に正しくネストする。
+    """
     root_targets: list[LayerTarget] = []
     targets_by_parent: dict[str, list[LayerTarget]] = {}
     if obj is None:
@@ -396,10 +407,7 @@ def _partition_gp_targets(
         if target.kind == kind and gp_parent.parent_key_exists(work, target.parent_key):
             targets_by_parent.setdefault(target.parent_key, []).append(target)
         else:
-            if target.kind == kind and target.parent_key:
-                root_targets.append(LayerTarget(target.kind, target.key, target.label))
-            else:
-                root_targets.append(target)
+            root_targets.append(target)
     return root_targets, targets_by_parent
 
 
@@ -931,14 +939,9 @@ def _apply_stack_drop_hint(context, moved_uid: str, *, nesting_delta: int = 0) -
             return False
     if kind in {"effect", "raster", "balloon", "text"} and _find_stack_item(stack, "gp_folder", parent_key):
         return False
-    if nesting_delta == 0 and old_parent_key and parent_key:
-        old_page_key, _old_child_key = split_child_key(old_parent_key)
-        new_page_key, _new_child_key = split_child_key(parent_key)
-        if (
-            old_page_key == new_page_key
-            and gp_parent.parent_depth(parent_key) > gp_parent.parent_depth(old_parent_key)
-        ):
-            return False
+    # 旧バージョンでは Y-only ドラッグでの「深く入れる」(depth 増加) を抑止していたが、
+    # CSP / Photoshop のレイヤーパネルでは Y-drag だけでフォルダ/コマに直接入れられるのが
+    # 標準。ここで block すると D&D が「入れたいのに入らない」状態になるため撤廃。
     if parent_key == old_parent_key:
         return False
     item.parent_key = parent_key

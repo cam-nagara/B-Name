@@ -3,6 +3,14 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-29 — レイヤー D&D を CSP / Photoshop 風の挙動に修正
+
+### 修正
+- フォルダ行を選択した状態で「レイヤーを追加」を実行しても、新しいレイヤーがフォルダの兄弟として追加されてしまう問題を修正（`_parent_key_for_new_item` でフォルダ選択時はフォルダの key を返すよう変更）
+- フォルダ配下の GP レイヤーが `_partition_gp_targets` で `parent_key` を strip され、レイヤーリスト sync 後に root へ戻され、続けて `apply_stack_order` がフォルダ外へ追い出してしまう破壊的バグを修正（フォルダ親の場合も `target.parent_key` を保持し、`_normalize_tree_order` でフォルダ配下にネストするよう変更）
+- レイヤーリスト D&D の Y-only ドラッグでは「同一ページ内の `depth` 増加」を block していたため、ページ直下のレイヤーをコマ行直下にドロップしてもコマの子に入らない問題を修正（depth-increase guard を撤廃し、CSP / Photoshop と同じく Y ドラッグでもコンテナの子になれるよう変更）
+- `BNAME_OT_layer_stack_drag` の `_drag_to_event` で `apply_stack_order_if_ui_changed` を使っていたため、最初の MOUSEMOVE で signature が None になり reparent が反映されない問題を修正（`apply_stack_drop_hint` を毎フレーム直接呼ぶよう変更）
+
 ## 2026-04-29 — 新規作品作成/作品クローズ時の page Collection orphan 掃除
 
 ### 追加
