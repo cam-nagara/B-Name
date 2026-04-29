@@ -20,9 +20,12 @@ from bpy.props import (
 )
 
 from ..utils import log
+from .balloon import BNameBalloonEntry
+from .coma import BNameComaEntry
 from .page import BNamePageEntry
 from .paper import BNamePaperSettings
 from .safe_area_overlay import BNameSafeAreaOverlay
+from .text_entry import BNameTextEntry
 from .work_info import BNameNombre, BNameWorkInfo
 
 _logger = log.get_logger(__name__)
@@ -88,6 +91,11 @@ class BNameWorkData(bpy.types.PropertyGroup):
         default=-1,
         min=-1,
     )
+
+    # --- ページ外レイヤー ---
+    shared_balloons: CollectionProperty(type=BNameBalloonEntry)  # type: ignore[valid-type]
+    shared_texts: CollectionProperty(type=BNameTextEntry)  # type: ignore[valid-type]
+    shared_comas: CollectionProperty(type=BNameComaEntry)  # type: ignore[valid-type]
 
 
 # ----- Scene attach ヘルパ -----

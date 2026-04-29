@@ -15,7 +15,7 @@ from typing import Any
 from ..utils import balloon_shapes, color_space
 
 # ファイルフォーマットのバージョン (破壊的変更があったら繰り上げる)
-WORK_SCHEMA_VERSION = 2
+WORK_SCHEMA_VERSION = 3
 PAGES_SCHEMA_VERSION = 1
 PAGE_SCHEMA_VERSION = 1
 COMA_SCHEMA_VERSION = 1
@@ -344,6 +344,64 @@ def raster_layer_from_dict(entry, data: dict[str, Any]) -> None:
     entry.parent_key = str(data.get("parent_key", "") or "")
 
 
+# ---------- ImageLayer ----------
+
+
+def image_layer_to_dict(entry) -> dict[str, Any]:
+    tint = color_space.linear_to_srgb_rgb(tuple(float(c) for c in entry.tint_color[:3]))
+    return {
+        "id": entry.id,
+        "title": entry.title,
+        "filepath": entry.filepath,
+        "xMm": round(float(entry.x_mm), 3),
+        "yMm": round(float(entry.y_mm), 3),
+        "widthMm": round(float(entry.width_mm), 3),
+        "heightMm": round(float(entry.height_mm), 3),
+        "rotationDeg": round(float(entry.rotation_deg), 3),
+        "flipX": bool(entry.flip_x),
+        "flipY": bool(entry.flip_y),
+        "visible": bool(entry.visible),
+        "locked": bool(entry.locked),
+        "opacity": round(float(entry.opacity), 4),
+        "blendMode": entry.blend_mode,
+        "brightness": round(float(entry.brightness), 4),
+        "contrast": round(float(entry.contrast), 4),
+        "binarizeEnabled": bool(entry.binarize_enabled),
+        "binarizeThreshold": round(float(entry.binarize_threshold), 4),
+        "tintColor": color_to_hex((*tint, 1.0)),
+        "tintColorAlpha": round(float(entry.tint_color[3]), 4),
+        "parentKind": getattr(entry, "parent_kind", "none"),
+        "parentKey": getattr(entry, "parent_key", ""),
+    }
+
+
+def image_layer_from_dict(entry, data: dict[str, Any]) -> None:
+    data = data or {}
+    entry.id = str(data.get("id", "") or "")
+    entry.title = str(data.get("title", "") or "")
+    entry.filepath = str(data.get("filepath", "") or "")
+    entry.x_mm = float(data.get("xMm", data.get("x_mm", 0.0)))
+    entry.y_mm = float(data.get("yMm", data.get("y_mm", 0.0)))
+    entry.width_mm = float(data.get("widthMm", data.get("width_mm", 100.0)))
+    entry.height_mm = float(data.get("heightMm", data.get("height_mm", 100.0)))
+    entry.rotation_deg = float(data.get("rotationDeg", data.get("rotation_deg", 0.0)))
+    entry.flip_x = bool(data.get("flipX", data.get("flip_x", False)))
+    entry.flip_y = bool(data.get("flipY", data.get("flip_y", False)))
+    entry.visible = bool(data.get("visible", True))
+    entry.locked = bool(data.get("locked", False))
+    entry.opacity = float(data.get("opacity", 1.0))
+    entry.blend_mode = str(data.get("blendMode", data.get("blend_mode", "normal")) or "normal")
+    entry.brightness = float(data.get("brightness", 0.0))
+    entry.contrast = float(data.get("contrast", 0.0))
+    entry.binarize_enabled = bool(data.get("binarizeEnabled", data.get("binarize_enabled", False)))
+    entry.binarize_threshold = float(data.get("binarizeThreshold", data.get("binarize_threshold", 0.5)))
+    alpha = float(data.get("tintColorAlpha", data.get("tint_color_alpha", 1.0)))
+    tint = hex_to_rgba(str(data.get("tintColor", data.get("tint_color", "#FFFFFF"))), alpha)
+    entry.tint_color = (*color_space.srgb_to_linear_rgb(tint[:3]), tint[3])
+    entry.parent_kind = str(data.get("parentKind", data.get("parent_kind", "none")) or "none")
+    entry.parent_key = str(data.get("parentKey", data.get("parent_key", "")) or "")
+
+
 # ---------- WorkData (root) ----------
 
 
@@ -351,6 +409,7 @@ def work_to_dict(work) -> dict[str, Any]:
     """BNameWorkData → work.json dict."""
     scene = _scene_from_work(work)
     raster_layers = getattr(scene, "bname_raster_layers", None) if scene is not None else None
+    image_layers = getattr(scene, "bname_image_layers", None) if scene is not None else None
     return {
         "schemaVersion": WORK_SCHEMA_VERSION,
         "workInfo": work_info_to_dict(work.work_info),
@@ -362,6 +421,22 @@ def work_to_dict(work) -> dict[str, Any]:
         "raster_layers": [
             raster_layer_to_dict(entry)
             for entry in (raster_layers or [])
+        ],
+        "image_layers": [
+            image_layer_to_dict(entry)
+            for entry in (image_layers or [])
+        ],
+        "shared_balloons": [
+            balloon_entry_to_dict(entry)
+            for entry in getattr(work, "shared_balloons", [])
+        ],
+        "shared_texts": [
+            text_entry_to_dict(entry)
+            for entry in getattr(work, "shared_texts", [])
+        ],
+        "shared_comas": [
+            coma_entry_to_dict(entry)
+            for entry in getattr(work, "shared_comas", [])
         ],
     }
 
@@ -389,6 +464,33 @@ def work_from_dict(work, data: dict[str, Any]) -> None:
             raster_layer_from_dict(entry, item)
         if hasattr(scene, "bname_active_raster_layer_index"):
             scene.bname_active_raster_layer_index = 0 if len(raster_layers) else -1
+    image_layers = getattr(scene, "bname_image_layers", None) if scene is not None else None
+    if image_layers is not None:
+        image_layers.clear()
+        for item in data.get("image_layers", []) or []:
+            entry = image_layers.add()
+            image_layer_from_dict(entry, item)
+        if hasattr(scene, "bname_active_image_layer_index"):
+            scene.bname_active_image_layer_index = 0 if len(image_layers) else -1
+    if hasattr(work, "shared_balloons"):
+        work.shared_balloons.clear()
+        for item in data.get("shared_balloons", data.get("sharedBalloons", [])) or []:
+            entry = work.shared_balloons.add()
+            balloon_entry_from_dict(entry, item)
+            entry.parent_kind = "none"
+            entry.parent_key = ""
+    if hasattr(work, "shared_texts"):
+        work.shared_texts.clear()
+        for item in data.get("shared_texts", data.get("sharedTexts", [])) or []:
+            entry = work.shared_texts.add()
+            text_entry_from_dict(entry, item)
+            entry.parent_kind = "none"
+            entry.parent_key = ""
+    if hasattr(work, "shared_comas"):
+        work.shared_comas.clear()
+        for item in data.get("shared_comas", data.get("sharedComas", [])) or []:
+            entry = work.shared_comas.add()
+            coma_entry_from_dict(entry, item)
 
 
 # ---------- PageEntry / pages.json ----------

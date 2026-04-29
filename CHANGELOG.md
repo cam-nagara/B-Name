@@ -3,6 +3,19 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-30 — ページ外レイヤーの保存スキーマを追加
+
+### 追加
+- `BNameWorkData` に `shared_balloons` / `shared_texts` / `shared_comas` を追加。
+- work.json schemaVersion を 3 に更新し、`shared_balloons` / `shared_texts` /
+  `shared_comas` / `image_layers` を保存・読込できるようにした。
+- `BNameImageLayer` に `parent_kind` / `parent_key` を追加し、画像レイヤーも
+  ページ外・ページ・コマ所属を保持できるようにした。
+
+### テスト
+- `test/blender_shared_layer_schema_check.py` を追加。Blender 5.1.1 実機で
+  shared コレクションと画像レイヤーの work.json round-trip を検証。
+
 ## 2026-04-30 — ビューポート Alt reparent フェーズA検証修正
 
 ### 修正
