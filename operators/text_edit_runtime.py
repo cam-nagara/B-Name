@@ -39,6 +39,8 @@ _IME_CONTROL_TYPES = {
     "LANGUAGE",
     "OSKEY",
 }
+_WM_KEYDOWN = 0x0100
+_WM_SYSKEYDOWN = 0x0104
 _WM_CHAR = 0x0102
 _WM_IME_STARTCOMPOSITION = 0x010D
 _WM_IME_ENDCOMPOSITION = 0x010E
@@ -46,11 +48,19 @@ _WM_IME_COMPOSITION = 0x010F
 _GCS_COMPSTR = 0x0008
 _GCS_RESULTSTR = 0x0800
 _GWL_WNDPROC = -4
+_VK_KANJI = 0x19
+_VK_IME_ON = 0x16
+_VK_IME_OFF = 0x1A
+_VK_OEM_3 = 0xC0
+_LANG_JAPANESE = 0x11
 _IME_CAPTURE_HWND = None
 _IME_CAPTURE_OLD_PROC = None
 _IME_CAPTURE_PROC = None
+_IME_CAPTURE_CONTEXT = None
+_IME_CAPTURE_OLD_CONTEXT = None
 _IME_TEXT_QUEUE: list[str] = []
 _IME_LAST_APPEND = ("", 0.0)
+_IME_LAST_TOGGLE_TIME = 0.0
 _IME_COMPOSITION_TEXT = ""
 _IME_COMPOSITION_ACTIVE = False
 _USER32 = None
@@ -137,6 +147,8 @@ def _ensure_win32_ime_api() -> bool:
         user32.GetActiveWindow.restype = wintypes.HWND
         user32.GetForegroundWindow.argtypes = []
         user32.GetForegroundWindow.restype = wintypes.HWND
+        user32.GetKeyboardLayout.argtypes = [wintypes.DWORD]
+        user32.GetKeyboardLayout.restype = wintypes.HANDLE
         user32.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
         user32.SetWindowLongPtrW.restype = ctypes.c_void_p
         user32.CallWindowProcW.argtypes = [
@@ -151,6 +163,12 @@ def _ensure_win32_ime_api() -> bool:
         imm32.ImmGetContext.restype = wintypes.HANDLE
         imm32.ImmReleaseContext.argtypes = [wintypes.HWND, wintypes.HANDLE]
         imm32.ImmReleaseContext.restype = wintypes.BOOL
+        imm32.ImmCreateContext.argtypes = []
+        imm32.ImmCreateContext.restype = wintypes.HANDLE
+        imm32.ImmDestroyContext.argtypes = [wintypes.HANDLE]
+        imm32.ImmDestroyContext.restype = wintypes.BOOL
+        imm32.ImmAssociateContext.argtypes = [wintypes.HWND, wintypes.HANDLE]
+        imm32.ImmAssociateContext.restype = wintypes.HANDLE
         imm32.ImmGetCompositionStringW.argtypes = [
             wintypes.HANDLE,
             wintypes.DWORD,
@@ -158,6 +176,10 @@ def _ensure_win32_ime_api() -> bool:
             wintypes.DWORD,
         ]
         imm32.ImmGetCompositionStringW.restype = wintypes.LONG
+        imm32.ImmGetOpenStatus.argtypes = [wintypes.HANDLE]
+        imm32.ImmGetOpenStatus.restype = wintypes.BOOL
+        imm32.ImmSetOpenStatus.argtypes = [wintypes.HANDLE, wintypes.BOOL]
+        imm32.ImmSetOpenStatus.restype = wintypes.BOOL
     except Exception:  # noqa: BLE001
         return False
     _USER32 = user32
@@ -179,6 +201,114 @@ def _capture_hwnd_candidates():
             candidates.append(hwnd)
             seen.add(int(hwnd))
     return candidates
+
+
+def _ime_target_hwnds(hwnd: int | None = None) -> list[int]:
+    seen = set()
+    targets = []
+    raw_targets = [hwnd, _IME_CAPTURE_HWND, *_capture_hwnd_candidates()]
+    for raw in raw_targets:
+        value = int(raw or 0)
+        if value and value not in seen:
+            targets.append(value)
+            seen.add(value)
+    return targets
+
+
+def _is_japanese_keyboard_layout() -> bool:
+    if not _ensure_win32_ime_api() or _USER32 is None:
+        return False
+    try:
+        layout = int(_USER32.GetKeyboardLayout(0))
+    except Exception:  # noqa: BLE001
+        return False
+    lang_id = layout & 0xFFFF
+    return (lang_id & 0x03FF) == _LANG_JAPANESE
+
+
+def ime_open_status(hwnd: int | None = None) -> bool | None:
+    """Return the Windows IME open status for Blender's active window."""
+    if not _ensure_win32_ime_api() or _IMM32 is None:
+        return None
+    for target in _ime_target_hwnds(hwnd):
+        himc = _IMM32.ImmGetContext(target)
+        if not himc:
+            continue
+        try:
+            return bool(_IMM32.ImmGetOpenStatus(himc))
+        finally:
+            _IMM32.ImmReleaseContext(target, himc)
+    return None
+
+
+def set_ime_open_status(open_status: bool, hwnd: int | None = None) -> bool:
+    """Set the Windows IME open status for Blender's active window."""
+    if not _ensure_win32_ime_api() or _IMM32 is None:
+        return False
+    for target in _ime_target_hwnds(hwnd):
+        himc = _IMM32.ImmGetContext(target)
+        if not himc:
+            continue
+        try:
+            if _IMM32.ImmSetOpenStatus(himc, bool(open_status)):
+                return True
+        finally:
+            _IMM32.ImmReleaseContext(target, himc)
+    return False
+
+
+def toggle_ime_open_status(hwnd: int | None = None) -> bool:
+    """Toggle the Windows IME open status and remember the toggle time."""
+    global _IME_LAST_TOGGLE_TIME
+    current = ime_open_status(hwnd)
+    if current is None:
+        return False
+    if not set_ime_open_status(not current, hwnd):
+        return False
+    _IME_LAST_TOGGLE_TIME = time.monotonic()
+    return True
+
+
+def _recent_ime_toggle() -> bool:
+    return time.monotonic() - float(_IME_LAST_TOGGLE_TIME) < 0.25
+
+
+def _event_type_is_ime_toggle(event_type: str) -> bool:
+    return event_type in {
+        "ACCENT_GRAVE",
+        "GRLESS",
+        "KANJI",
+        "ZENKAKU_HANKAKU",
+        "HANKAKU_ZENKAKU",
+        "IME_TOGGLE",
+    }
+
+
+def _event_has_text(event) -> bool:
+    for attr in ("unicode", "utf8", "text", "ascii"):
+        if str(getattr(event, attr, "") or ""):
+            return True
+    return False
+
+
+def handle_ime_control_event(event) -> bool:
+    """Handle IME toggle keys that Blender may otherwise consume in modal input."""
+    event_type = str(getattr(event, "type", "") or "")
+    value = str(getattr(event, "value", "") or "")
+    if value not in {"PRESS", "NOTHING"}:
+        return False
+    if bool(getattr(event, "ctrl", False)) or bool(getattr(event, "alt", False)):
+        return False
+    if bool(getattr(event, "oskey", False)):
+        return False
+    if not _event_type_is_ime_toggle(event_type):
+        return False
+    if event_type in {"ACCENT_GRAVE", "GRLESS"}:
+        if _event_has_text(event) or not _is_japanese_keyboard_layout():
+            return False
+    if _recent_ime_toggle():
+        return True
+    return toggle_ime_open_status()
 
 
 def _read_ime_string(hwnd, lparam, flag: int) -> str:
@@ -207,6 +337,65 @@ def _read_ime_string(hwnd, lparam, flag: int) -> str:
         _IMM32.ImmReleaseContext(hwnd, himc)
 
 
+def _ensure_capture_ime_context(hwnd: int) -> bool:
+    global _IME_CAPTURE_CONTEXT, _IME_CAPTURE_OLD_CONTEXT
+    if _IMM32 is None or not hwnd:
+        return False
+    existing = _IMM32.ImmGetContext(hwnd)
+    if existing:
+        _IMM32.ImmReleaseContext(hwnd, existing)
+        return True
+    created = _IMM32.ImmCreateContext()
+    if not created:
+        return False
+    old_context = _IMM32.ImmAssociateContext(hwnd, created)
+    verify = _IMM32.ImmGetContext(hwnd)
+    if not verify:
+        _IMM32.ImmAssociateContext(hwnd, old_context)
+        _IMM32.ImmDestroyContext(created)
+        return False
+    _IMM32.ImmReleaseContext(hwnd, verify)
+    _IME_CAPTURE_CONTEXT = created
+    _IME_CAPTURE_OLD_CONTEXT = old_context
+    return True
+
+
+def _release_capture_ime_context() -> None:
+    global _IME_CAPTURE_CONTEXT, _IME_CAPTURE_OLD_CONTEXT
+    if _IMM32 is None or not _IME_CAPTURE_HWND or not _IME_CAPTURE_CONTEXT:
+        _IME_CAPTURE_CONTEXT = None
+        _IME_CAPTURE_OLD_CONTEXT = None
+        return
+    try:
+        _IMM32.ImmAssociateContext(_IME_CAPTURE_HWND, _IME_CAPTURE_OLD_CONTEXT)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        _IMM32.ImmDestroyContext(_IME_CAPTURE_CONTEXT)
+    except Exception:  # noqa: BLE001
+        pass
+    _IME_CAPTURE_CONTEXT = None
+    _IME_CAPTURE_OLD_CONTEXT = None
+
+
+def _handle_ime_keydown(hwnd: int, vk_code: int, lparam: int) -> bool:
+    global _IME_LAST_TOGGLE_TIME
+    if vk_code == _VK_IME_ON:
+        ok = set_ime_open_status(True, hwnd)
+    elif vk_code == _VK_IME_OFF:
+        ok = set_ime_open_status(False, hwnd)
+    elif vk_code == _VK_KANJI:
+        ok = toggle_ime_open_status(hwnd)
+    elif vk_code == _VK_OEM_3:
+        scan_code = (int(lparam) >> 16) & 0xFF
+        ok = _is_japanese_keyboard_layout() and scan_code == 0x29 and toggle_ime_open_status(hwnd)
+    else:
+        return False
+    if ok:
+        _IME_LAST_TOGGLE_TIME = time.monotonic()
+    return bool(ok)
+
+
 def begin_ime_capture() -> None:
     """Capture Windows IME committed text while inline text editing is active."""
     global _IME_CAPTURE_HWND, _IME_CAPTURE_OLD_PROC, _IME_CAPTURE_PROC
@@ -216,6 +405,7 @@ def begin_ime_capture() -> None:
     if not hwnd_candidates:
         return
     if _IME_CAPTURE_HWND in hwnd_candidates and _IME_CAPTURE_OLD_PROC:
+        _ensure_capture_ime_context(_IME_CAPTURE_HWND)
         return
     end_ime_capture()
 
@@ -229,7 +419,10 @@ def begin_ime_capture() -> None:
 
     def _ime_wnd_proc(hwnd_arg, msg, wparam, lparam):
         try:
-            if msg == _WM_IME_STARTCOMPOSITION:
+            if msg in {_WM_KEYDOWN, _WM_SYSKEYDOWN}:
+                if _handle_ime_keydown(hwnd_arg, int(wparam), int(lparam)):
+                    return 0
+            elif msg == _WM_IME_STARTCOMPOSITION:
                 _begin_ime_composition()
             elif msg == _WM_IME_ENDCOMPOSITION:
                 _end_ime_composition()
@@ -257,12 +450,14 @@ def begin_ime_capture() -> None:
         _IME_CAPTURE_HWND = hwnd
         _IME_CAPTURE_OLD_PROC = old_proc
         _IME_CAPTURE_PROC = callback
+        _ensure_capture_ime_context(hwnd)
         return
 
 
 def end_ime_capture() -> None:
     """Restore the Blender window procedure after inline text editing."""
     global _IME_CAPTURE_HWND, _IME_CAPTURE_OLD_PROC, _IME_CAPTURE_PROC
+    _release_capture_ime_context()
     if _USER32 is not None and _IME_CAPTURE_HWND and _IME_CAPTURE_OLD_PROC:
         try:
             _USER32.SetWindowLongPtrW(_IME_CAPTURE_HWND, _GWL_WNDPROC, _IME_CAPTURE_OLD_PROC)
@@ -473,8 +668,7 @@ def caret_rect(entry, rect: Rect, cursor_index: int) -> Rect:
     x_center = region.x2 - em * 0.5 - col * line_pitch
     y = region.y2 - row * char_pitch
     half_width = min(em * 0.45, max(0.6, region.width * 0.5))
-    x = max(region.x, min(region.x2, x_center)) - half_width
-    x = max(region.x, min(region.x2 - half_width * 2.0, x))
+    x = max(region.x, min(region.x2, x_center))
     y = max(region.y, min(region.y2, y)) - thickness * 0.5
     return Rect(x, y, half_width * 2.0, thickness)
 

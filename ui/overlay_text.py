@@ -73,8 +73,7 @@ def _vertical_caret_rect(entry, rect: Rect) -> Rect:
     y = region.y2 - row * char_pitch
     half_width = min(em * 0.45, max(0.6, region.width * 0.5))
     thickness = max(_TEXT_CARET_MIN_THICKNESS_MM, em * 0.08)
-    x = max(region.x, min(region.x2, x_center)) - half_width
-    x = max(region.x, min(region.x2 - half_width * 2.0, x))
+    x = max(region.x, min(region.x2, x_center))
     y = max(region.y, min(region.y2, y)) - thickness * 0.5
     return Rect(x, y, half_width * 2.0, thickness)
 

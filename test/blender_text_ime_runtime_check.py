@@ -74,6 +74,32 @@ def main() -> None:
         assert text_edit_runtime.text_body(preview) == "ab日本cdef"
         assert text_edit_runtime.caret_rect(preview, text_edit_runtime.text_rect(entry), caret).width > 0
 
+        entry.body = "日本語"
+        entry.writing_mode = "vertical"
+        vertical_rect = text_edit_runtime.text_rect(entry)
+        vertical_region = text_edit_runtime.text_inner_rect(vertical_rect)
+        vertical_em = text_edit_runtime.text_em_mm(entry)
+        vertical_caret = text_edit_runtime.caret_rect(entry, vertical_rect, 0)
+        from bname_dev.typography import layout as text_layout
+        from bname_dev.ui import overlay_text
+
+        layout_result = text_layout.typeset(
+            entry,
+            vertical_region.x,
+            vertical_region.y,
+            vertical_region.width,
+            vertical_region.height,
+        )
+        first_glyph = layout_result.placements[0]
+        expected_x = vertical_region.x2 - vertical_em * 0.5
+        assert abs(vertical_caret.x - expected_x) < 1e-6, (vertical_caret.x, expected_x)
+        assert abs(vertical_caret.x - first_glyph.x_mm) < 1e-6, (vertical_caret.x, first_glyph.x_mm)
+        selection_rect = overlay_text._selection_rects(entry, vertical_rect, 1, 0)[0]
+        assert abs(selection_rect.x - first_glyph.x_mm) < 1e-6, (selection_rect.x, first_glyph.x_mm)
+
+        entry.body = "abcdef"
+        entry.writing_mode = "horizontal"
+
         text_edit_runtime._set_ime_composition_text("語")
         preview, caret, bounds = text_edit_runtime.preview_entry_with_composition(entry, 4, 1)
         assert preview.body == "a語ef"

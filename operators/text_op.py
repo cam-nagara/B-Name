@@ -775,7 +775,13 @@ class BNAME_OT_text_tool(Operator):
             if text_edit_runtime.ime_composition_active():
                 layer_stack_utils.tag_view3d_redraw(context)
             return {"RUNNING_MODAL"}
-        if text_edit_runtime.event_is_ime_control(event) or _event_should_pass_to_ime(event):
+        if text_edit_runtime.event_is_ime_control(event):
+            if text_edit_runtime.handle_ime_control_event(event):
+                layer_stack_utils.tag_view3d_redraw(context)
+                return {"RUNNING_MODAL"}
+            layer_stack_utils.tag_view3d_redraw(context)
+            return {"PASS_THROUGH"}
+        if _event_should_pass_to_ime(event):
             layer_stack_utils.tag_view3d_redraw(context)
             return {"PASS_THROUGH"}
         if view_event_region.modal_navigation_ui_passthrough(self, context, event):

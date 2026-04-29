@@ -91,6 +91,171 @@ def _selection_mode(event) -> str:
     return "single"
 
 
+def hit_object_at_event(context, event) -> dict | None:
+    """Return the selectable B-Name object under a viewport event."""
+    work = get_work(context)
+    if work is None:
+        return None
+    view = view_event_region.view3d_window_under_event(context, event)
+    if view is None:
+        return None
+    area, region, rv3d, mx, my = view
+    edge_hit = coma_edge_move_op._pick_edge_or_vertex(work, region, rv3d, int(mx), int(my))
+    if edge_hit is not None:
+        page = work.pages[int(edge_hit["page"])]
+        panel = page.comas[int(edge_hit["coma"])]
+        kind = "coma_vertex" if edge_hit.get("type") == "vertex" else "coma_edge"
+        hit = dict(edge_hit)
+        hit.update({
+            "kind": kind,
+            "key": object_selection.coma_key(page, panel),
+            "area": area,
+            "region": region,
+            "rv3d": rv3d,
+        })
+        return hit
+    for resolver in (
+        _hit_text_at_event,
+        _hit_balloon_at_event,
+        _hit_effect_at_event,
+        _hit_coma_at_event,
+    ):
+        hit = resolver(context, event)
+        if hit is not None:
+            return hit
+    return None
+
+
+def _hit_text_at_event(context, event) -> dict | None:
+    work, page, lx, ly, hit_index, hit_entry, hit_part, _can_create = (
+        text_op._resolve_text_hit_from_event(context, event)
+    )
+    if work is None or page is None or hit_entry is None or hit_index < 0 or lx is None or ly is None:
+        return None
+    return {
+        "kind": "text",
+        "page_id": getattr(page, "id", ""),
+        "index": hit_index,
+        "part": "move" if hit_part == "body" else hit_part,
+        "key": object_selection.text_key(page, hit_entry),
+        "local": (float(lx), float(ly)),
+    }
+
+
+def _hit_balloon_at_event(context, event) -> dict | None:
+    work, page, lx, ly = balloon_op._resolve_page_from_event(context, event)
+    if work is None or page is None or lx is None or ly is None:
+        return None
+    hit_index, hit_entry, hit_part = balloon_op._hit_balloon_entry(page, lx, ly)
+    if hit_entry is None or hit_index < 0:
+        return None
+    return {
+        "kind": "balloon",
+        "page_id": getattr(page, "id", ""),
+        "index": hit_index,
+        "part": "move" if hit_part == "body" else hit_part,
+        "key": object_selection.balloon_key(page, hit_entry),
+        "local": (float(lx), float(ly)),
+    }
+
+
+def _hit_effect_at_event(context, event) -> dict | None:
+    x_mm, y_mm = _event_world_xy_mm(context, event)
+    if x_mm is None or y_mm is None:
+        return None
+    obj, layer, bounds, part = effect_line_op._hit_effect_layer(context, x_mm, y_mm)
+    if obj is None or layer is None or bounds is None:
+        return None
+    return {
+        "kind": "effect",
+        "layer_name": str(getattr(layer, "name", "") or ""),
+        "part": "move" if part == "body" else part,
+        "key": object_selection.effect_key(layer),
+        "world": (float(x_mm), float(y_mm)),
+    }
+
+
+def _hit_coma_at_event(context, event) -> dict | None:
+    work = get_work(context)
+    panel_hit = coma_picker.find_coma_at_event(context, event)
+    if work is None or panel_hit is None:
+        return None
+    page_index, coma_index = panel_hit
+    page = work.pages[page_index]
+    panel = page.comas[coma_index]
+    return {
+        "kind": "coma",
+        "page": page_index,
+        "coma": coma_index,
+        "part": "body",
+        "key": object_selection.coma_key(page, panel),
+    }
+
+
+def activate_hit(context, hit: dict, *, mode: str) -> None:
+    """Activate a hit object in the same way as the object tool selection path."""
+    work = get_work(context)
+    if work is None:
+        return
+    kind = hit["kind"]
+    key = str(hit.get("key", "") or "")
+    if kind in {"coma", "coma_edge", "coma_vertex"}:
+        page_index = int(hit["page"])
+        coma_index = int(hit["coma"])
+        page = work.pages[page_index]
+        work.active_page_index = page_index
+        page.active_coma_index = coma_index
+        if hasattr(context.scene, "bname_active_layer_kind"):
+            context.scene.bname_active_layer_kind = "coma"
+        if kind == "coma_edge":
+            edge_selection.set_selection(
+                context,
+                "edge",
+                page_index=page_index,
+                coma_index=coma_index,
+                edge_index=int(hit.get("edge", -1)),
+            )
+        elif kind == "coma_vertex":
+            edge_selection.set_selection(
+                context,
+                "vertex",
+                page_index=page_index,
+                coma_index=coma_index,
+                vertex_index=int(hit.get("vertex", -1)),
+            )
+        else:
+            edge_selection.set_selection(
+                context,
+                "border",
+                page_index=page_index,
+                coma_index=coma_index,
+            )
+    elif kind == "balloon":
+        page_index, page = _find_page_by_id(work, hit.get("page_id", ""))
+        if page is not None:
+            balloon_op._select_balloon_index(
+                context,
+                work,
+                page,
+                int(hit.get("index", -1)),
+                mode=mode,
+            )
+            work.active_page_index = page_index
+        edge_selection.clear_selection(context)
+    elif kind == "text":
+        _page_index, page = _find_page_by_id(work, hit.get("page_id", ""))
+        if page is not None:
+            text_op._select_text_index(context, work, page, int(hit.get("index", -1)))
+        edge_selection.clear_selection(context)
+    elif kind == "effect":
+        obj, layer = _find_effect_layer(hit.get("layer_name", ""))
+        if layer is not None:
+            effect_line_op._select_effect_layer(context, obj, layer)
+        edge_selection.clear_selection(context)
+    if kind != "balloon":
+        object_selection.select_key(context, key, mode=mode)
+
+
 def _rect_resize_result(
     action: str,
     x: float,
@@ -208,157 +373,19 @@ class BNAME_OT_object_tool(Operator):
         return {"RUNNING_MODAL"}
 
     def _hit_object(self, context, event) -> dict | None:
-        work = get_work(context)
-        if work is None:
-            return None
-        view = view_event_region.view3d_window_under_event(context, event)
-        if view is None:
-            return None
-        area, region, rv3d, mx, my = view
-        edge_hit = coma_edge_move_op._pick_edge_or_vertex(work, region, rv3d, int(mx), int(my))
-        if edge_hit is not None:
-            page = work.pages[int(edge_hit["page"])]
-            panel = page.comas[int(edge_hit["coma"])]
-            kind = "coma_vertex" if edge_hit.get("type") == "vertex" else "coma_edge"
-            hit = dict(edge_hit)
-            hit.update({
-                "kind": kind,
-                "key": object_selection.coma_key(page, panel),
-                "area": area,
-                "region": region,
-                "rv3d": rv3d,
-            })
-            return hit
-        text_hit = self._hit_text(context, event)
-        if text_hit is not None:
-            return text_hit
-        balloon_hit = self._hit_balloon(context, event)
-        if balloon_hit is not None:
-            return balloon_hit
-        effect_hit = self._hit_effect(context, event)
-        if effect_hit is not None:
-            return effect_hit
-        panel_hit = coma_picker.find_coma_at_event(context, event)
-        if panel_hit is not None:
-            page_index, coma_index = panel_hit
-            page = work.pages[page_index]
-            panel = page.comas[coma_index]
-            return {
-                "kind": "coma",
-                "page": page_index,
-                "coma": coma_index,
-                "part": "body",
-                "key": object_selection.coma_key(page, panel),
-            }
-        return None
+        return hit_object_at_event(context, event)
 
     def _hit_text(self, context, event) -> dict | None:
-        work, page, lx, ly, hit_index, hit_entry, hit_part, _can_create = text_op._resolve_text_hit_from_event(
-            context, event
-        )
-        if work is None or page is None or hit_entry is None or hit_index < 0 or lx is None or ly is None:
-            return None
-        return {
-            "kind": "text",
-            "page_id": getattr(page, "id", ""),
-            "index": hit_index,
-            "part": "move" if hit_part == "body" else hit_part,
-            "key": object_selection.text_key(page, hit_entry),
-            "local": (float(lx), float(ly)),
-        }
+        return _hit_text_at_event(context, event)
 
     def _hit_balloon(self, context, event) -> dict | None:
-        work, page, lx, ly = balloon_op._resolve_page_from_event(context, event)
-        if work is None or page is None or lx is None or ly is None:
-            return None
-        hit_index, hit_entry, hit_part = balloon_op._hit_balloon_entry(page, lx, ly)
-        if hit_entry is None or hit_index < 0:
-            return None
-        return {
-            "kind": "balloon",
-            "page_id": getattr(page, "id", ""),
-            "index": hit_index,
-            "part": "move" if hit_part == "body" else hit_part,
-            "key": object_selection.balloon_key(page, hit_entry),
-            "local": (float(lx), float(ly)),
-        }
+        return _hit_balloon_at_event(context, event)
 
     def _hit_effect(self, context, event) -> dict | None:
-        x_mm, y_mm = _event_world_xy_mm(context, event)
-        if x_mm is None or y_mm is None:
-            return None
-        obj, layer, bounds, part = effect_line_op._hit_effect_layer(context, x_mm, y_mm)
-        if obj is None or layer is None or bounds is None:
-            return None
-        return {
-            "kind": "effect",
-            "layer_name": str(getattr(layer, "name", "") or ""),
-            "part": "move" if part == "body" else part,
-            "key": object_selection.effect_key(layer),
-            "world": (float(x_mm), float(y_mm)),
-        }
+        return _hit_effect_at_event(context, event)
 
     def _activate_hit(self, context, hit: dict, *, mode: str) -> None:
-        work = get_work(context)
-        if work is None:
-            return
-        kind = hit["kind"]
-        key = str(hit.get("key", "") or "")
-        if kind in {"coma", "coma_edge", "coma_vertex"}:
-            page_index = int(hit["page"])
-            coma_index = int(hit["coma"])
-            page = work.pages[page_index]
-            work.active_page_index = page_index
-            page.active_coma_index = coma_index
-            if hasattr(context.scene, "bname_active_layer_kind"):
-                context.scene.bname_active_layer_kind = "coma"
-            if kind == "coma_edge":
-                edge_selection.set_selection(
-                    context,
-                    "edge",
-                    page_index=page_index,
-                    coma_index=coma_index,
-                    edge_index=int(hit.get("edge", -1)),
-                )
-            elif kind == "coma_vertex":
-                edge_selection.set_selection(
-                    context,
-                    "vertex",
-                    page_index=page_index,
-                    coma_index=coma_index,
-                    vertex_index=int(hit.get("vertex", -1)),
-                )
-            else:
-                edge_selection.set_selection(
-                    context,
-                    "border",
-                    page_index=page_index,
-                    coma_index=coma_index,
-                )
-        elif kind == "balloon":
-            page_index, page = _find_page_by_id(work, hit.get("page_id", ""))
-            if page is not None:
-                balloon_op._select_balloon_index(
-                    context,
-                    work,
-                    page,
-                    int(hit.get("index", -1)),
-                    mode=mode,
-                )
-                work.active_page_index = page_index
-            edge_selection.clear_selection(context)
-        elif kind == "text":
-            _page_index, page = _find_page_by_id(work, hit.get("page_id", ""))
-            if page is not None:
-                text_op._select_text_index(context, work, page, int(hit.get("index", -1)))
-            edge_selection.clear_selection(context)
-        elif kind == "effect":
-            obj, layer = _find_effect_layer(hit.get("layer_name", ""))
-            if layer is not None:
-                effect_line_op._select_effect_layer(context, obj, layer)
-            edge_selection.clear_selection(context)
-        if kind != "balloon":
-            object_selection.select_key(context, key, mode=mode)
+        activate_hit(context, hit, mode=mode)
 
     def _start_point_for_hit(self, context, event, hit: dict) -> tuple[float | None, float | None]:
         if "world" in hit:

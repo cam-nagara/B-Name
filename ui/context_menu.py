@@ -21,11 +21,31 @@ def _active_stack_index(context) -> int:
     return int(getattr(context.scene, "bname_active_layer_stack_index", -1))
 
 
+def selection_command_items(context) -> list[dict[str, object]]:
+    item = layer_stack_utils.active_stack_item(context)
+    if item is None:
+        return [{"label": "対象が選択されていません", "enabled": False, "kind": "label"}]
+    active_kind = str(getattr(item, "kind", "") or "")
+    return [
+        {"label": "詳細設定", "enabled": True, "kind": "operator", "operator": "bname.layer_stack_detail"},
+        {"label": "複製", "enabled": True, "kind": "operator", "operator": "bname.layer_stack_duplicate"},
+        {
+            "label": "リンク複製",
+            "enabled": active_kind == "effect",
+            "kind": "operator" if active_kind == "effect" else "label",
+            "operator": "bname.effect_line_create_linked",
+        },
+        {"label": "削除", "enabled": True, "kind": "operator", "operator": "bname.layer_stack_delete"},
+    ]
+
+
 def _draw_selection_commands(layout, context) -> None:
-    enabled = _has_active_stack_item(context)
+    items = selection_command_items(context)
+    if len(items) == 1 and items[0].get("kind") == "label":
+        layout.label(text=str(items[0]["label"]), icon="INFO")
+        return
     active_index = _active_stack_index(context)
     column = layout.column()
-    column.enabled = enabled
     detail_row = column.row()
     detail_row.operator_context = "INVOKE_DEFAULT"
     detail = detail_row.operator("bname.layer_stack_detail", text="詳細設定", icon="PREFERENCES")
@@ -33,7 +53,13 @@ def _draw_selection_commands(layout, context) -> None:
     detail.preserve_edge_selection = True
 
     column.operator("bname.layer_stack_duplicate", text="複製", icon="DUPLICATE")
-    column.operator("bname.effect_line_create_linked", text="リンク複製", icon="LINKED")
+    link_item = next((item for item in items if item.get("operator") == "bname.effect_line_create_linked"), None)
+    if link_item is not None and bool(link_item.get("enabled", False)):
+        column.operator("bname.effect_line_create_linked", text="リンク複製", icon="LINKED")
+    else:
+        link_row = column.row()
+        link_row.enabled = False
+        link_row.label(text="リンク複製", icon="LINKED")
 
     delete_row = column.row()
     delete_row.operator_context = "INVOKE_DEFAULT"
