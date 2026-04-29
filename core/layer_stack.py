@@ -12,6 +12,7 @@ _active_index_update_depth = 0
 
 LAYER_KIND_ITEMS = (
     ("page", "ページ", ""),
+    ("outside_group", "ページ外", ""),
     ("coma", "コマ", ""),
     ("gp", "グリースペンシル", ""),
     ("gp_folder", "フォルダ", ""),

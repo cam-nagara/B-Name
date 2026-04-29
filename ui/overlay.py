@@ -429,6 +429,66 @@ def _draw_balloons(page, ox_mm: float = 0.0, oy_mm: float = 0.0) -> None:
     )
 
 
+class _SharedLayerProxy:
+    def __init__(self, work):
+        self.id = "__outside__"
+        self.balloons = getattr(work, "shared_balloons", [])
+        self.texts = getattr(work, "shared_texts", [])
+        self.active_balloon_index = -1
+        self.active_text_index = -1
+
+
+def _shared_coma_polygon(entry) -> list[tuple[float, float]]:
+    if getattr(entry, "shape_type", "") == "rect":
+        x = float(getattr(entry, "rect_x_mm", 0.0))
+        y = float(getattr(entry, "rect_y_mm", 0.0))
+        w = float(getattr(entry, "rect_width_mm", 0.0))
+        h = float(getattr(entry, "rect_height_mm", 0.0))
+        return [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
+    vertices = getattr(entry, "vertices", [])
+    return [(float(v.x_mm), float(v.y_mm)) for v in vertices]
+
+
+def _draw_shared_layers(work) -> None:
+    """ページ外レイヤーを world mm 座標のまま描画する."""
+    for entry in sorted(
+        list(getattr(work, "shared_comas", [])),
+        key=lambda panel: int(getattr(panel, "z_order", 0)),
+    ):
+        if not getattr(entry, "visible", True):
+            continue
+        poly = _shared_coma_polygon(entry)
+        if len(poly) < 3:
+            continue
+        bg = getattr(entry, "background_color", None)
+        if bg is not None and len(bg) >= 4 and float(bg[3]) > 0.0:
+            _draw_polygon_fill(poly, (float(bg[0]), float(bg[1]), float(bg[2]), float(bg[3])))
+        _draw_polyline_loop(poly, viewport_colors.PAPER_GUIDE, line_width=2.0, width_mm=0.5)
+
+    proxy = _SharedLayerProxy(work)
+    overlay_balloon.draw_balloons(
+        proxy,
+        ox_mm=0.0,
+        oy_mm=0.0,
+        context=bpy.context,
+        draw_rect_outline=_draw_rect_outline,
+        draw_polygon_fill=_draw_polygon_fill,
+        draw_polyline_loop=_draw_polyline_loop,
+        is_entry_visible=lambda entry: bool(getattr(entry, "visible", True)),
+        active=getattr(bpy.context.scene, "bname_active_layer_kind", "") == "balloon",
+    )
+    overlay_text.draw_text_guides(
+        proxy,
+        context=bpy.context,
+        ox_mm=0.0,
+        oy_mm=0.0,
+        active=getattr(bpy.context.scene, "bname_active_layer_kind", "") == "text",
+        entry_visible=lambda entry: bool(getattr(entry, "visible", True)),
+        draw_rect_fill=_draw_rect_fill,
+        draw_rect_outline=_draw_rect_outline,
+    )
+
+
 def _draw_polygon_fill(pts: list[tuple[float, float]], color) -> None:
     if len(pts) < 3:
         return
@@ -974,6 +1034,7 @@ def _draw_page_overlay(
     # 画像レイヤー (アクティブページのみ — 全ページ一覧時は負荷とレイヤーの per-scene 制約で省略)
     if mode == MODE_PAGE and draw_image_layers:
         overlay_image.draw_image_layers(context.scene)
+        _draw_shared_layers(work)
 
     # コマ枠 / フキダシ / テキスト。コマ編集モードでは参照表示として描く。
     if mode in (MODE_PAGE, MODE_COMA) and page is not None:

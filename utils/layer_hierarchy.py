@@ -4,6 +4,8 @@ from __future__ import annotations
 
 PAGE_KIND = "page"
 COMA_KIND = "coma"
+OUTSIDE_KIND = "outside_group"
+OUTSIDE_STACK_KEY = "__outside__"
 
 
 def page_stack_key(page) -> str:
@@ -13,6 +15,10 @@ def page_stack_key(page) -> str:
 def coma_stack_key(page, panel) -> str:
     stem = getattr(panel, "coma_id", "") or getattr(panel, "id", "")
     return f"{page_stack_key(page)}:{stem}"
+
+
+def outside_child_key(child_id: str) -> str:
+    return f"{OUTSIDE_STACK_KEY}:{str(child_id or '')}"
 
 
 def split_child_key(key: str) -> tuple[str, str]:

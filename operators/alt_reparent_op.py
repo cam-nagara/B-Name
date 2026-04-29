@@ -8,8 +8,7 @@
 選択中のレイヤー (アクティブ + ``selected`` フラグ) を一括で reparent する。
 GPU ドロップインジケーターは ``ui/reparent_overlay`` に状態を渡すことで実現。
 
-フェーズ A 範囲: ページ内 / 別ページのコマ・ページへの reparent。balloon/text/coma の
-ページ外昇格はフェーズ B で追加予定 (現状は赤点滅でユーザーに通知)。
+フェーズ A/B 範囲: ページ内 / 別ページのコマ・ページへの reparent と、ページ外への昇格。
 """
 
 from __future__ import annotations
@@ -181,23 +180,15 @@ class BNAME_OT_alt_reparent_out(Operator):
         # 全選択レイヤー共通の「1 段浅い」ターゲットを決定
         # 各レイヤーごとに上位先が違う場合は、最初の候補を採用
         target = None
-        unsupported = False
         for item in candidates:
             t = layer_reparent.shallower_target_for_item(context, item, click_target)
             if t is None:
-                continue
-            if t.kind == "outside":
-                # Phase A 未対応: Phase B で実装予定
-                unsupported = True
                 continue
             if target is None:
                 target = t
                 break
         if target is None:
-            if unsupported:
-                self.report({"INFO"}, "ページ外への昇格はフェーズ B で対応予定")
-            else:
-                self.report({"INFO"}, "これ以上浅い親はありません")
+            self.report({"INFO"}, "これ以上浅い親はありません")
             reparent_overlay.flash_error("page", duration=0.3)
             return {"CANCELLED"}
         changed = layer_reparent.reparent_selected(context, target)
@@ -284,10 +275,6 @@ class BNAME_OT_alt_reparent_drag(Operator):
     def _commit(self, context, event):
         target = layer_reparent.find_target_for_drop(context, event)
         self._cleanup_overlay()
-        if target.kind == "outside":
-            reparent_overlay.flash_error("page", duration=0.3)
-            self.report({"INFO"}, "ドロップ位置にコンテナがありません")
-            return {"CANCELLED"}
         # ドラッグせずに離した場合 (= ほぼクリック扱い) でも、位置をドロップ位置に移動
         new_world_xy = target.world_xy_mm if self._moved else None
         changed = layer_reparent.reparent_selected(

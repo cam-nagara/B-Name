@@ -15,17 +15,20 @@ from . import log
 from .layer_hierarchy import (
     PAGE_KIND,
     COMA_KIND,
+    OUTSIDE_KIND,
+    OUTSIDE_STACK_KEY,
     entry_center,
     page_stack_key,
     coma_containing_point,
     coma_stack_key,
+    outside_child_key,
     split_child_key,
 )
 
 _logger = log.get_logger(__name__)
 
 EFFECT_GP_OBJECT_NAME = "BName_EffectLines"
-PAGE_COMA_CHILD_KINDS = {"gp", "effect", "raster", "balloon", "text"}
+PAGE_COMA_CHILD_KINDS = {"gp", "effect", "raster", "image", "balloon", "text"}
 _sync_scheduled = False
 _sync_should_apply_order = False
 _sync_order_moved_uid = ""
@@ -282,6 +285,112 @@ def _collect_raster_targets_for_page(page, panels_by_key: dict[str, object]):
     return page_children, panel_children
 
 
+def _collect_image_targets_for_page(page, panels_by_key: dict[str, object]):
+    scene = getattr(bpy.context, "scene", None)
+    coll = getattr(scene, "bname_image_layers", None) if scene is not None else None
+    if coll is None:
+        return [], {}
+    page_key = page_stack_key(page)
+    page_children: list[LayerTarget] = []
+    panel_children: dict[str, list[LayerTarget]] = {}
+    for entry in reversed(list(coll)):
+        parent_kind = str(getattr(entry, "parent_kind", "") or "none")
+        parent_key = str(getattr(entry, "parent_key", "") or "")
+        label = getattr(entry, "title", "") or getattr(entry, "id", "") or "画像"
+        if parent_kind == "page" and parent_key in {getattr(page, "id", ""), page_key}:
+            page_children.append(LayerTarget("image", entry.id, label, page_key, 1))
+            continue
+        if parent_kind == "coma":
+            for coma_key, panel in panels_by_key.items():
+                if _coma_parent_key_matches(entry, page, coma_key, panel):
+                    panel_children.setdefault(coma_key, []).append(
+                        LayerTarget("image", entry.id, label, coma_key, 2)
+                    )
+                    break
+    return page_children, panel_children
+
+
+def _retarget_root_subtree_to_outside(targets: list[LayerTarget]) -> list[LayerTarget]:
+    """GP/Effect の root 階層を UI 上の「ページ外」配下へ載せ替える."""
+    folder_keys = {target.key for target in targets if target.kind == "gp_folder"}
+    out: list[LayerTarget] = []
+    for target in targets:
+        parent_key = target.parent_key if target.parent_key in folder_keys else OUTSIDE_STACK_KEY
+        out.append(
+            LayerTarget(
+                target.kind,
+                target.key,
+                target.label,
+                parent_key,
+                int(target.depth) + 1,
+            )
+        )
+    return out
+
+
+def _collect_outside_layer_targets(
+    work,
+    scene,
+    gp_root_targets: list[LayerTarget],
+    effect_root_targets: list[LayerTarget],
+) -> list[LayerTarget]:
+    targets = [LayerTarget(OUTSIDE_KIND, OUTSIDE_STACK_KEY, "(ページ外)")]
+    if work is None:
+        return targets
+
+    for panel in sorted(
+        list(getattr(work, "shared_comas", [])),
+        key=lambda entry: int(getattr(entry, "z_order", 0)),
+        reverse=True,
+    ):
+        stem = str(getattr(panel, "coma_id", "") or getattr(panel, "id", "") or "")
+        if not stem:
+            continue
+        label = str(getattr(panel, "title", "") or stem)
+        targets.append(LayerTarget(COMA_KIND, outside_child_key(stem), label, OUTSIDE_STACK_KEY, 1))
+
+    raster_layers = getattr(scene, "bname_raster_layers", None) if scene is not None else None
+    if raster_layers is not None:
+        used_raster: set[str] = set()
+        for entry in reversed(list(raster_layers)):
+            scope = str(getattr(entry, "scope", "") or "")
+            parent_kind = str(getattr(entry, "parent_kind", "") or "")
+            parent_key = str(getattr(entry, "parent_key", "") or "")
+            if scope != "master" and parent_kind != "none" and parent_key:
+                continue
+            key = _ensure_unique_id(entry, used_raster, "raster")
+            label = getattr(entry, "title", "") or key
+            targets.append(LayerTarget("raster", key, label, OUTSIDE_STACK_KEY, 1))
+
+    image_layers = getattr(scene, "bname_image_layers", None) if scene is not None else None
+    if image_layers is not None:
+        used_image: set[str] = set()
+        for entry in reversed(list(image_layers)):
+            parent_kind = str(getattr(entry, "parent_kind", "") or "none")
+            parent_key = str(getattr(entry, "parent_key", "") or "")
+            if parent_kind != "none" and parent_key:
+                continue
+            key = _ensure_unique_id(entry, used_image, "image")
+            label = getattr(entry, "title", "") or key
+            targets.append(LayerTarget("image", key, label, OUTSIDE_STACK_KEY, 1))
+
+    used_balloon: set[str] = set()
+    for entry in reversed(list(getattr(work, "shared_balloons", []))):
+        bid = _ensure_unique_id(entry, used_balloon, "shared_balloon")
+        label = getattr(entry, "id", "") or bid
+        targets.append(LayerTarget("balloon", outside_child_key(bid), label, OUTSIDE_STACK_KEY, 1))
+
+    used_text: set[str] = set()
+    for entry in reversed(list(getattr(work, "shared_texts", []))):
+        tid = _ensure_unique_id(entry, used_text, "shared_text")
+        label = getattr(entry, "body", "") or tid
+        targets.append(LayerTarget("text", outside_child_key(tid), label, OUTSIDE_STACK_KEY, 1))
+
+    targets.extend(_retarget_root_subtree_to_outside(effect_root_targets))
+    targets.extend(_retarget_root_subtree_to_outside(gp_root_targets))
+    return targets
+
+
 def _collect_page_layer_targets(
     page,
     panels_by_key: dict[str, object],
@@ -303,6 +412,13 @@ def _collect_page_layer_targets(
     )
     page_children.extend(raster_page_children)
     for coma_key, children in raster_panel_children.items():
+        panel_children.setdefault(coma_key, []).extend(children)
+    image_page_children, image_panel_children = _collect_image_targets_for_page(
+        page,
+        panels_by_key,
+    )
+    page_children.extend(image_page_children)
+    for coma_key, children in image_panel_children.items():
         panel_children.setdefault(coma_key, []).extend(children)
 
     for entry in reversed(list(getattr(page, "balloons", []))):
@@ -442,6 +558,14 @@ def collect_targets(context) -> list[LayerTarget]:
     if work is not None and getattr(work, "loaded", False):
         from . import page_range
 
+        targets.extend(
+            _collect_outside_layer_targets(
+                work,
+                scene,
+                gp_root_targets,
+                effect_root_targets,
+            )
+        )
         for page in work.pages:
             if not page_range.page_in_range(page):
                 continue
@@ -482,17 +606,9 @@ def collect_targets(context) -> list[LayerTarget]:
                     targets.append(target)
                     visible_parent_keys.add(target.key)
 
-    targets.extend(effect_root_targets)
-
-    image_layers = getattr(scene, "bname_image_layers", None)
-    if image_layers is not None:
-        used_image: set[str] = set()
-        for entry in reversed(list(image_layers)):
-            key = _ensure_unique_id(entry, used_image, "image")
-            label = getattr(entry, "title", "") or key
-            targets.append(LayerTarget("image", key, label))
-
-    targets.extend(gp_root_targets)
+    elif gp_root_targets or effect_root_targets:
+        targets.extend(effect_root_targets)
+        targets.extend(gp_root_targets)
 
     # 防御: 万一 UID 重複が混入してもスタックには 1 行しか出さない。
     # (per-panel 呼び出しと spatial fallback の組合せで重複が紛れ込むケースの保険)
@@ -516,11 +632,13 @@ def _set_item_from_target(item, target: LayerTarget) -> None:
 
 
 def _find_insert_index_for_target(stack, target: LayerTarget) -> int:
+    if target.kind == OUTSIDE_KIND:
+        return 0
     if target.parent_key:
         parent_idx = -1
         last_child_idx = -1
         for i, item in enumerate(stack):
-            if item.key == target.parent_key and item.kind in {PAGE_KIND, COMA_KIND, "gp_folder", "balloon_group"}:
+            if item.key == target.parent_key and item.kind in {OUTSIDE_KIND, PAGE_KIND, COMA_KIND, "gp_folder", "balloon_group"}:
                 parent_idx = i
                 last_child_idx = max(last_child_idx, i)
             elif getattr(item, "parent_key", "") == target.parent_key:
@@ -606,7 +724,7 @@ def _normalize_tree_order(
                 continue
             _append_uid(child)
             kind = getattr(child, "kind", "")
-            if kind in {COMA_KIND, "balloon_group", "gp_folder"}:
+            if kind in {OUTSIDE_KIND, COMA_KIND, "balloon_group", "gp_folder"}:
                 _append_subtree_in_stack_order(getattr(child, "key", ""))
 
     def _append_page_subtree(page_item) -> None:
@@ -642,6 +760,11 @@ def _normalize_tree_order(
             # 入れる」など、ユーザーが選んだ任意位置を保てる.
             _append_subtree_in_stack_order(page_key)
 
+    outside_item = _find_stack_item(stack, OUTSIDE_KIND, OUTSIDE_STACK_KEY)
+    if outside_item is not None:
+        _append_uid(outside_item)
+        _append_subtree_in_stack_order(OUTSIDE_STACK_KEY)
+
     if page_key_order is not None:
         for page_item in page_items:
             _append_page_subtree(page_item)
@@ -649,7 +772,10 @@ def _normalize_tree_order(
     for item in stack:
         if stack_item_uid(item) in used:
             continue
-        if item.kind == PAGE_KIND:
+        if item.kind == OUTSIDE_KIND:
+            _append_uid(item)
+            _append_subtree_in_stack_order(item.key)
+        elif item.kind == PAGE_KIND:
             _append_page_subtree(item)
         elif not getattr(item, "parent_key", ""):
             _append_uid(item)
@@ -840,6 +966,8 @@ def _target_index_for_stack_move(
 
 def _parent_item_allows_child(parent, child_kind: str) -> bool:
     parent_kind = getattr(parent, "kind", "")
+    if parent_kind == OUTSIDE_KIND:
+        return child_kind in PAGE_COMA_CHILD_KINDS or child_kind in {COMA_KIND, "gp_folder"}
     if parent_kind in {PAGE_KIND, COMA_KIND}:
         return child_kind in PAGE_COMA_CHILD_KINDS
     if parent_kind == "gp_folder":
@@ -851,6 +979,8 @@ def _parent_key_exists_for_child(context, child_kind: str, parent_key: str) -> b
     parent_key = str(parent_key or "")
     if not parent_key:
         return True
+    if parent_key == OUTSIDE_STACK_KEY:
+        return child_kind in PAGE_COMA_CHILD_KINDS or child_kind in {COMA_KIND, "gp_folder"}
     work = get_work(context)
     if child_kind in PAGE_COMA_CHILD_KINDS and gp_parent.parent_key_exists(work, parent_key):
         return True
@@ -891,6 +1021,8 @@ def _is_stack_folder_descendant(stack, ancestor_key: str, candidate_key: str) ->
 
 def _parent_key_one_level_up(stack, parent_key: str) -> str:
     parent = (
+        _find_stack_item(stack, OUTSIDE_KIND, parent_key)
+        or
         _find_stack_item(stack, "gp_folder", parent_key)
         or _find_stack_item(stack, COMA_KIND, parent_key)
         or _find_stack_item(stack, PAGE_KIND, parent_key)
@@ -923,11 +1055,17 @@ def _stack_item_page_key(item) -> str:
     kind = getattr(item, "kind", "")
     key = str(getattr(item, "key", "") or "")
     parent_key = str(getattr(item, "parent_key", "") or "")
+    if key == OUTSIDE_STACK_KEY or parent_key == OUTSIDE_STACK_KEY:
+        return ""
     if kind in {"balloon", "balloon_group", "text"}:
         page_key, _ = split_child_key(key)
+        if page_key == OUTSIDE_STACK_KEY:
+            return ""
         return page_key
     if kind in {"raster", "gp", "gp_folder", "effect"}:
         page_key, _ = split_child_key(parent_key)
+        if page_key == OUTSIDE_STACK_KEY:
+            return ""
         return page_key
     return ""
 
@@ -935,7 +1073,11 @@ def _stack_item_page_key(item) -> str:
 def _parent_key_page(parent_key: str) -> str:
     if not parent_key:
         return ""
+    if parent_key == OUTSIDE_STACK_KEY:
+        return ""
     page_key, _ = split_child_key(parent_key)
+    if page_key == OUTSIDE_STACK_KEY:
+        return ""
     return page_key
 
 
@@ -948,7 +1090,7 @@ def _apply_stack_drop_hint(context, moved_uid: str, *, nesting_delta: int = 0) -
         return False
     item = stack[moved_index]
     kind = getattr(item, "kind", "")
-    if kind not in {"gp", "gp_folder", "effect", "raster", "balloon", "text"}:
+    if kind not in {"gp", "gp_folder", "effect", "raster", "image", "balloon", "text"}:
         return False
     parent_key = _drop_parent_from_nesting_delta(stack, item, moved_index, nesting_delta)
     old_parent_key = str(getattr(item, "parent_key", "") or "")
@@ -977,6 +1119,7 @@ def _apply_stack_drop_hint(context, moved_uid: str, *, nesting_delta: int = 0) -
     if parent_key:
         parent = (
             _find_stack_item(stack, "gp_folder", parent_key)
+            or _find_stack_item(stack, OUTSIDE_KIND, parent_key)
             or _find_stack_item(stack, PAGE_KIND, parent_key)
             or _find_stack_item(stack, COMA_KIND, parent_key)
         )
@@ -1420,6 +1563,10 @@ def resolve_stack_item(context, item):
     work = get_work(context)
     page = get_active_page(context)
 
+    if kind == OUTSIDE_KIND:
+        if work is None:
+            return None
+        return {"kind": kind, "target": work, "object": None, "index": -1}
     if kind == PAGE_KIND:
         if work is None:
             return None
@@ -1429,6 +1576,25 @@ def resolve_stack_item(context, item):
         if work is None:
             return None
         page_id, stem = split_child_key(key)
+        if page_id == OUTSIDE_STACK_KEY:
+            for coma_idx, panel in enumerate(getattr(work, "shared_comas", [])):
+                if getattr(panel, "coma_id", "") == stem or getattr(panel, "id", "") == stem:
+                    return {
+                        "kind": kind,
+                        "target": panel,
+                        "object": None,
+                        "index": coma_idx,
+                        "page": None,
+                        "page_index": -1,
+                    }
+            return {
+                "kind": kind,
+                "target": None,
+                "object": None,
+                "index": -1,
+                "page": None,
+                "page_index": -1,
+            }
         page_idx, target_page = _find_by_id(work.pages, page_id)
         if target_page is None:
             return None
@@ -1487,6 +1653,16 @@ def resolve_stack_item(context, item):
         }
     if kind == "balloon":
         page_id, child_id = split_child_key(key)
+        if page_id == OUTSIDE_STACK_KEY and work is not None:
+            idx, entry = _find_by_id(getattr(work, "shared_balloons", []), child_id or key)
+            return {
+                "kind": kind,
+                "target": entry,
+                "object": None,
+                "index": idx,
+                "page": None,
+                "page_index": -1,
+            }
         target_page = page
         page_idx = int(getattr(work, "active_page_index", -1)) if work is not None else -1
         if page_id and work is not None:
@@ -1521,6 +1697,16 @@ def resolve_stack_item(context, item):
         }
     if kind == "text":
         page_id, child_id = split_child_key(key)
+        if page_id == OUTSIDE_STACK_KEY and work is not None:
+            idx, entry = _find_by_id(getattr(work, "shared_texts", []), child_id or key)
+            return {
+                "kind": kind,
+                "target": entry,
+                "object": None,
+                "index": idx,
+                "page": None,
+                "page_index": -1,
+            }
         target_page = page
         page_idx = int(getattr(work, "active_page_index", -1)) if work is not None else -1
         if page_id and work is not None:
@@ -1687,6 +1873,18 @@ def select_stack_index(context, index: int) -> bool:
         page_idx = int(resolved.get("page_index", -1))
         coma_idx = int(resolved.get("index", -1))
         target_page = resolved.get("page")
+        if target_page is None:
+            scene.bname_active_gp_folder_key = ""
+            scene.bname_active_layer_kind = COMA_KIND
+            edge_selection.clear_selection(context)
+            target = resolved.get("target")
+            if target is not None and hasattr(target, "selected"):
+                try:
+                    target.selected = True
+                except Exception:  # noqa: BLE001
+                    pass
+            tag_view3d_redraw(context)
+            return True
         if (
             work is None
             or target_page is None
@@ -1769,7 +1967,18 @@ def select_stack_index(context, index: int) -> bool:
     elif kind == "balloon":
         target_page = resolved.get("page") or page
         if target_page is None:
-            return False
+            target = resolved.get("target")
+            if target is None:
+                return False
+            try:
+                target.selected = True
+            except Exception:  # noqa: BLE001
+                pass
+            scene.bname_active_gp_folder_key = ""
+            scene.bname_active_layer_kind = "balloon"
+            edge_selection.clear_selection(context)
+            tag_view3d_redraw(context)
+            return True
         work = get_work(context)
         page_idx = int(resolved.get("page_index", -1))
         if work is not None and 0 <= page_idx < len(work.pages):
@@ -1786,7 +1995,18 @@ def select_stack_index(context, index: int) -> bool:
     elif kind == "text":
         target_page = resolved.get("page") or page
         if target_page is None:
-            return False
+            target = resolved.get("target")
+            if target is None:
+                return False
+            try:
+                target.selected = True
+            except Exception:  # noqa: BLE001
+                pass
+            scene.bname_active_gp_folder_key = ""
+            scene.bname_active_layer_kind = "text"
+            edge_selection.clear_selection(context)
+            tag_view3d_redraw(context)
+            return True
         work = get_work(context)
         page_idx = int(resolved.get("page_index", -1))
         if work is not None and 0 <= page_idx < len(work.pages):
@@ -1985,6 +2205,44 @@ def _apply_simple_collection_orders(context, stack) -> None:
     work = get_work(context)
     if work is None:
         return
+
+    shared_balloons = getattr(work, "shared_balloons", None)
+    if shared_balloons is not None:
+        front = [
+            split_child_key(item.key)[1]
+            for item in stack
+            if item.kind == "balloon"
+            and split_child_key(item.key)[0] == OUTSIDE_STACK_KEY
+        ]
+        _reorder_collection(shared_balloons, list(reversed(front)), lambda entry: entry.id)
+
+    shared_texts = getattr(work, "shared_texts", None)
+    if shared_texts is not None:
+        front = [
+            split_child_key(item.key)[1]
+            for item in stack
+            if item.kind == "text"
+            and split_child_key(item.key)[0] == OUTSIDE_STACK_KEY
+        ]
+        _reorder_collection(shared_texts, list(reversed(front)), lambda entry: entry.id)
+
+    shared_comas = getattr(work, "shared_comas", None)
+    if shared_comas is not None:
+        front = [
+            split_child_key(item.key)[1]
+            for item in stack
+            if item.kind == COMA_KIND
+            and split_child_key(item.key)[0] == OUTSIDE_STACK_KEY
+        ]
+        _reorder_collection(
+            shared_comas,
+            list(reversed(front)),
+            lambda entry: str(getattr(entry, "coma_id", "") or getattr(entry, "id", "")),
+        )
+        count = len(shared_comas)
+        for i, panel in enumerate(shared_comas):
+            panel.z_order = count - i - 1
+
     for page in work.pages:
         page_key = page_stack_key(page)
         active_balloon = ""
@@ -2074,10 +2332,15 @@ def _apply_gp_parenting(obj, stack, work) -> None:
         if node is None:
             continue
         desired_parent_key = str(getattr(item, "parent_key", "") or "")
+        ui_parent_key = desired_parent_key
+        if desired_parent_key == OUTSIDE_STACK_KEY:
+            desired_parent_key = ""
         parent_group = _find_gp_group_by_key(groups, desired_parent_key) if desired_parent_key else None
         logical_parent = kind == "gp" and gp_parent.parent_key_exists(work, desired_parent_key)
         if desired_parent_key and parent_group is None and not logical_parent:
             desired_parent_key = ""
+            if ui_parent_key != OUTSIDE_STACK_KEY:
+                ui_parent_key = ""
         native_parent_group = None if logical_parent else parent_group
         native_parent_key = "" if native_parent_group is None else _node_stack_key(native_parent_group)
         actual_parent = getattr(node, "parent_group", None)
@@ -2088,7 +2351,7 @@ def _apply_gp_parenting(obj, stack, work) -> None:
             if desired_parent_key == key or _gp_group_contains_key(node, desired_parent_key):
                 continue
             if actual_parent_key == native_parent_key:
-                item.parent_key = desired_parent_key
+                item.parent_key = ui_parent_key
                 continue
             if not gp_utils.move_group_to_group(gp_data, node, native_parent_group):
                 continue
@@ -2096,11 +2359,11 @@ def _apply_gp_parenting(obj, stack, work) -> None:
         else:
             gp_parent.set_parent_key(node, desired_parent_key if logical_parent else "")
             if actual_parent_key == native_parent_key:
-                item.parent_key = desired_parent_key
+                item.parent_key = ui_parent_key
                 continue
             if not gp_utils.move_layer_to_group(gp_data, node, native_parent_group):
                 continue
-        item.parent_key = desired_parent_key
+        item.parent_key = ui_parent_key
 
 
 def _apply_effect_parenting(obj, stack, work) -> None:
@@ -2115,10 +2378,42 @@ def _apply_effect_parenting(obj, stack, work) -> None:
         if node is None:
             continue
         desired_parent_key = str(getattr(item, "parent_key", "") or "")
+        ui_parent_key = desired_parent_key
+        if desired_parent_key == OUTSIDE_STACK_KEY:
+            desired_parent_key = ""
         if desired_parent_key and not gp_parent.parent_key_exists(work, desired_parent_key):
             desired_parent_key = ""
+            if ui_parent_key != OUTSIDE_STACK_KEY:
+                ui_parent_key = ""
         gp_parent.set_parent_key(node, desired_parent_key)
-        item.parent_key = desired_parent_key
+        item.parent_key = ui_parent_key if ui_parent_key == OUTSIDE_STACK_KEY else desired_parent_key
+
+
+def _apply_image_parenting(context, stack) -> None:
+    scene = getattr(context, "scene", None)
+    coll = getattr(scene, "bname_image_layers", None) if scene is not None else None
+    if coll is None:
+        return
+    work = get_work(context)
+    by_key = {
+        str(getattr(item, "key", "") or ""): str(getattr(item, "parent_key", "") or "")
+        for item in stack
+        if getattr(item, "kind", "") == "image"
+    }
+    for entry in coll:
+        key = str(getattr(entry, "id", "") or "")
+        if key not in by_key:
+            continue
+        parent_key = by_key[key]
+        try:
+            if parent_key == OUTSIDE_STACK_KEY or not parent_key:
+                entry.parent_kind = "none"
+                entry.parent_key = ""
+            elif gp_parent.parent_key_exists(work, parent_key):
+                entry.parent_kind = "coma" if ":" in parent_key else "page"
+                entry.parent_key = parent_key
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _apply_raster_parenting(context, stack) -> None:
@@ -2137,12 +2432,15 @@ def _apply_raster_parenting(context, stack) -> None:
         if key not in by_key:
             continue
         parent_key = by_key[key]
-        if not parent_key or not gp_parent.parent_key_exists(work, parent_key):
-            continue
         try:
-            entry.scope = "page"
-            entry.parent_kind = "coma" if ":" in parent_key else "page"
-            entry.parent_key = parent_key
+            if parent_key == OUTSIDE_STACK_KEY or not parent_key:
+                entry.scope = "master"
+                entry.parent_kind = "none"
+                entry.parent_key = ""
+            elif gp_parent.parent_key_exists(work, parent_key):
+                entry.scope = "page"
+                entry.parent_kind = "coma" if ":" in parent_key else "page"
+                entry.parent_key = parent_key
         except Exception:  # noqa: BLE001
             pass
 
@@ -2260,6 +2558,7 @@ def apply_stack_order(context) -> None:
     if effect_obj is not None:
         _apply_effect_parenting(effect_obj, stack, get_work(context))
         _apply_gp_order(effect_obj, stack, effect=True)
+    _apply_image_parenting(context, stack)
     _apply_raster_parenting(context, stack)
     _apply_balloon_parenting(context, stack)
     _apply_text_parenting(context, stack)
@@ -2279,6 +2578,8 @@ def delete_stack_index(context, index: int) -> bool:
     scene = context.scene
     page = get_active_page(context)
 
+    if kind == OUTSIDE_KIND:
+        return False
     if kind == PAGE_KIND:
         if not select_stack_index(context, index):
             return False
@@ -2288,6 +2589,16 @@ def delete_stack_index(context, index: int) -> bool:
             _logger.exception("delete page from layer stack failed")
             return False
     if kind == COMA_KIND:
+        if resolved.get("page") is None:
+            work = get_work(context)
+            coll = getattr(work, "shared_comas", None) if work is not None else None
+            idx = int(resolved.get("index", -1))
+            if coll is None or not (0 <= idx < len(coll)):
+                return False
+            coll.remove(idx)
+            sync_layer_stack(context)
+            tag_view3d_redraw(context)
+            return True
         if not select_stack_index(context, index):
             return False
         try:
@@ -2324,22 +2635,42 @@ def delete_stack_index(context, index: int) -> bool:
         except Exception:  # noqa: BLE001
             _logger.exception("delete raster from layer stack failed")
             return False
-    elif kind == "balloon" and page is not None:
+    elif kind == "balloon":
         idx = int(resolved.get("index", -1))
-        if not (0 <= idx < len(page.balloons)):
-            return False
-        bid = page.balloons[idx].id
-        for text in page.texts:
-            if text.parent_balloon_id == bid:
-                text.parent_balloon_id = ""
-        page.balloons.remove(idx)
-        page.active_balloon_index = min(idx, len(page.balloons) - 1) if len(page.balloons) else -1
-    elif kind == "text" and page is not None:
+        target_page = resolved.get("page") or page
+        if target_page is None:
+            work = get_work(context)
+            coll = getattr(work, "shared_balloons", None) if work is not None else None
+            if coll is None or not (0 <= idx < len(coll)):
+                return False
+            bid = coll[idx].id
+            for text in getattr(work, "shared_texts", []):
+                if text.parent_balloon_id == bid:
+                    text.parent_balloon_id = ""
+            coll.remove(idx)
+        else:
+            if not (0 <= idx < len(target_page.balloons)):
+                return False
+            bid = target_page.balloons[idx].id
+            for text in target_page.texts:
+                if text.parent_balloon_id == bid:
+                    text.parent_balloon_id = ""
+            target_page.balloons.remove(idx)
+            target_page.active_balloon_index = min(idx, len(target_page.balloons) - 1) if len(target_page.balloons) else -1
+    elif kind == "text":
         idx = int(resolved.get("index", -1))
-        if not (0 <= idx < len(page.texts)):
-            return False
-        page.texts.remove(idx)
-        page.active_text_index = min(idx, len(page.texts) - 1) if len(page.texts) else -1
+        target_page = resolved.get("page") or page
+        if target_page is None:
+            work = get_work(context)
+            coll = getattr(work, "shared_texts", None) if work is not None else None
+            if coll is None or not (0 <= idx < len(coll)):
+                return False
+            coll.remove(idx)
+        else:
+            if not (0 <= idx < len(target_page.texts)):
+                return False
+            target_page.texts.remove(idx)
+            target_page.active_text_index = min(idx, len(target_page.texts) - 1) if len(target_page.texts) else -1
     elif kind == "effect":
         obj = resolved.get("object")
         target = resolved["target"]

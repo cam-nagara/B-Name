@@ -91,6 +91,7 @@ def _indent(row, depth: int) -> None:
 def _kind_icon(kind: str) -> str:
     return {
         "page": "FILE_BLANK",
+        "outside_group": "FILE_FOLDER",
         "coma": "MOD_WIREFRAME",
         "gp": "OUTLINER_OB_GREASEPENCIL",
         "gp_folder": "FILE_FOLDER",
@@ -367,6 +368,10 @@ def _draw_stack_coma_row(row, controls, item, resolved, index: int) -> None:
 
 def _draw_stack_data_row(row, controls, item, resolved, index: int) -> None:
     target = resolved.get("target") if resolved is not None else None
+    if item.kind == "outside_group":
+        _select_icon(row, index, _kind_icon(item.kind))
+        _select_name(row, index, item.label or "(ページ外)")
+        return
     if target is None:
         _draw_type_icon(row, index, _kind_icon(item.kind))
         _select_name(row, index, item.label)
@@ -439,7 +444,9 @@ class BNAME_UL_layer_stack(UIList):
         right.alignment = "RIGHT"
         right.ui_units_x = 3.0
         controls = {}
-        if item.kind == "page":
+        if item.kind == "outside_group":
+            _draw_stack_data_row(left, controls, item, resolved, index)
+        elif item.kind == "page":
             _draw_stack_page_row(left, item, resolved, index, get_work(context))
         elif item.kind == "coma":
             _draw_stack_coma_row(left, controls, item, resolved, index)
