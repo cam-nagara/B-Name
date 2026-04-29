@@ -582,37 +582,51 @@ def _normalize_tree_order(
         page_uid_order = [target_uid(PAGE_KIND, key) for key in page_key_order]
         page_items = _ordered_items_by_uid(page_items, page_uid_order)
 
+    def _append_subtree_in_stack_order(parent_key: str) -> None:
+        """``parent_key`` 直下の子をスタック順で append し、コンテナなら再帰."""
+        for child in stack:
+            uid = stack_item_uid(child)
+            if uid in used:
+                continue
+            if str(getattr(child, "parent_key", "") or "") != parent_key:
+                continue
+            _append_uid(child)
+            kind = getattr(child, "kind", "")
+            if kind in {COMA_KIND, "balloon_group", "gp_folder"}:
+                _append_subtree_in_stack_order(getattr(child, "key", ""))
+
     def _append_page_subtree(page_item) -> None:
         _append_uid(page_item)
         page_key = page_item.key
-        panel_items = [
-            item
-            for item in stack
-            if item.kind == COMA_KIND and split_child_key(item.key)[0] == page_key
-        ]
-        panel_uid_order = None
         if coma_key_order_by_page is not None:
+            # align モード: コマを実データ順に並べ、その後にページ直下子を出す.
+            panel_items = [
+                item
+                for item in stack
+                if item.kind == COMA_KIND and split_child_key(item.key)[0] == page_key
+            ]
             panel_uid_order = [
                 target_uid(COMA_KIND, key)
                 for key in coma_key_order_by_page.get(page_key, [])
             ]
             panel_items = _ordered_items_by_uid(panel_items, panel_uid_order)
-        for panel_item in panel_items:
-            _append_uid(panel_item)
+            for panel_item in panel_items:
+                _append_uid(panel_item)
+                _append_subtree_in_stack_order(panel_item.key)
             for child in stack:
-                if getattr(child, "parent_key", "") == panel_item.key:
+                if (
+                    str(getattr(child, "parent_key", "") or "") == page_key
+                    and child.kind != COMA_KIND
+                ):
                     _append_uid(child)
-                    if child.kind == "balloon_group":
-                        for group_child in stack:
-                            if getattr(group_child, "parent_key", "") == child.key:
-                                _append_uid(group_child)
-        for child in stack:
-            if getattr(child, "parent_key", "") == page_key and child.kind != COMA_KIND:
-                _append_uid(child)
-                if child.kind == "balloon_group":
-                    for group_child in stack:
-                        if getattr(group_child, "parent_key", "") == child.key:
-                            _append_uid(group_child)
+                    kind = getattr(child, "kind", "")
+                    if kind in {"balloon_group", "gp_folder"}:
+                        _append_subtree_in_stack_order(child.key)
+        else:
+            # デフォルト: スタック順を尊重。ページ直下の子(ページ直下 GP, コマ等)
+            # を出現順に append。これにより「ページとその第1コマの間に GP を
+            # 入れる」など、ユーザーが選んだ任意位置を保てる.
+            _append_subtree_in_stack_order(page_key)
 
     if page_key_order is not None:
         for page_item in page_items:

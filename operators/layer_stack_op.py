@@ -347,6 +347,16 @@ class BNAME_OT_layer_stack_drag(Operator):
     _last_nesting_anchor: str
     _current_index: int
     _dragged: bool
+    _mouse_x: float
+    _mouse_y: float
+    _region_ptr: int
+    _drag_label: str
+    _drag_kind: str
+    _click_released: bool
+
+    # GPU draw (ドラッグ中インジケーター+プレビュー)
+    _draw_handle = None  # bpy.types.SpaceView3D draw handler
+    _draw_instance = None  # type: ignore[assignment]
 
     @classmethod
     def poll(cls, context):
@@ -358,6 +368,9 @@ class BNAME_OT_layer_stack_drag(Operator):
         if stack is None or not (0 <= self.index < len(stack)):
             return {"CANCELLED"}
         self._moved_uid = layer_stack_utils.stack_item_uid(stack[self.index])
+        item = stack[self.index]
+        self._drag_label = str(getattr(item, "label", "") or getattr(item, "name", "") or "")
+        self._drag_kind = str(getattr(item, "kind", "") or "")
         self._initial_order = tuple(layer_stack_utils.stack_item_uid(item) for item in stack)
         self._initial_parents = {
             layer_stack_utils.stack_item_uid(item): str(getattr(item, "parent_key", "") or "")
@@ -365,15 +378,26 @@ class BNAME_OT_layer_stack_drag(Operator):
         }
         self._start_y = float(getattr(event, "mouse_region_y", 0.0))
         self._start_x = float(getattr(event, "mouse_region_x", 0.0))
+        self._mouse_x = self._start_x
+        self._mouse_y = self._start_y
         self._row_height = self._estimate_row_height(context)
         self._indent_width = max(18.0, self._row_height * 0.9)
         self._last_nesting_delta = 0
         self._last_nesting_anchor = ""
         self._current_index = self.index
         self._dragged = False
+        # ボタン経由 invoke は RELEASE 時に呼ばれる。マウスが既に離されているか
+        # 判定し、コミット待ち方法 (PRESS or RELEASE) を切り替える。
+        self._click_released = bool(getattr(event, "value", "") == "RELEASE")
+        try:
+            region = getattr(context, "region", None)
+            self._region_ptr = int(region.as_pointer()) if region is not None else 0
+        except Exception:  # noqa: BLE001
+            self._region_ptr = 0
         context.scene.bname_active_layer_stack_index = self.index
         layer_stack_utils.remember_layer_stack_signature(context)
         context.window_manager.modal_handler_add(self)
+        BNAME_OT_layer_stack_drag._start_drawing(self)
         self._tag_ui_redraw(context)
         return {"RUNNING_MODAL"}
 
@@ -383,12 +407,140 @@ class BNAME_OT_layer_stack_drag(Operator):
             self._finish(context, apply_order=True)
             return {"CANCELLED"}
         if event.type == "MOUSEMOVE":
+            try:
+                self._mouse_x = float(getattr(event, "mouse_region_x", self._mouse_x))
+                self._mouse_y = float(getattr(event, "mouse_region_y", self._mouse_y))
+            except Exception:  # noqa: BLE001
+                pass
             self._drag_to_event(context, event)
+            self._tag_ui_redraw(context)
             return {"RUNNING_MODAL"}
-        if event.type == "LEFTMOUSE" and event.value == "RELEASE":
+        # ボタン経由 invoke ではマウスが既に離れているため、次の LEFTMOUSE PRESS
+        # でコミット。ホールド中ドラッグの場合は RELEASE でコミット。両方を
+        # 受けるようにすれば、どちらの起動経路でも 1 回の追加クリックで完了する。
+        if event.type == "LEFTMOUSE" and event.value in {"PRESS", "RELEASE"}:
+            # 起動 invoke の RELEASE と紛らわしいので、起動が PRESS なら同じ
+            # PRESS は無視 (まだホールド中)、RELEASE で commit。
+            if not self._click_released and event.value == "PRESS":
+                return {"RUNNING_MODAL"}
             self._finish(context, apply_order=True)
             return {"FINISHED" if self._dragged else "CANCELLED"}
         return {"RUNNING_MODAL"}
+
+    # ---------- GPU draw (drop indicator + drag preview) ----------
+
+    @classmethod
+    def _start_drawing(cls, instance) -> None:
+        cls._draw_instance = instance
+        if cls._draw_handle is not None:
+            return
+        try:
+            cls._draw_handle = bpy.types.SpaceView3D.draw_handler_add(
+                cls._draw_callback, (), "UI", "POST_PIXEL"
+            )
+        except Exception:  # noqa: BLE001
+            cls._draw_handle = None
+
+    @classmethod
+    def _stop_drawing(cls) -> None:
+        if cls._draw_handle is not None:
+            try:
+                bpy.types.SpaceView3D.draw_handler_remove(cls._draw_handle, "UI")
+            except Exception:  # noqa: BLE001
+                pass
+            cls._draw_handle = None
+        cls._draw_instance = None
+
+    @classmethod
+    def _draw_callback(cls) -> None:
+        instance = cls._draw_instance
+        if instance is None:
+            return
+        try:
+            instance._draw_overlay()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _draw_overlay(self) -> None:
+        """カーソル位置にドロップ位置の横線と、半透明レイヤーカードプレビューを描画."""
+        region = bpy.context.region
+        if region is None or region.type != "UI":
+            return
+        # 起動した region と同じところでだけ描画
+        try:
+            region_ptr = int(region.as_pointer())
+        except Exception:  # noqa: BLE001
+            region_ptr = 0
+        if self._region_ptr and region_ptr and region_ptr != self._region_ptr:
+            return
+
+        import gpu
+        from gpu_extras.batch import batch_for_shader
+
+        try:
+            shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+        except Exception:  # noqa: BLE001
+            return
+
+        my = float(self._mouse_y)
+        mx = float(self._mouse_x)
+        rh = max(16.0, float(self._row_height))
+
+        gpu.state.blend_set("ALPHA")
+
+        # 1) 横線 (ドロップインジケーター)
+        line_color = (0.27, 0.6, 1.0, 0.9)
+        gpu.state.line_width_set(2.5)
+        line_coords = [(0.0, my), (float(region.width), my)]
+        batch = batch_for_shader(shader, "LINES", {"pos": line_coords})
+        shader.bind()
+        shader.uniform_float("color", line_color)
+        batch.draw(shader)
+        gpu.state.line_width_set(1.0)
+
+        # 2) 半透明プレビュー矩形
+        rect_h = rh * 0.85
+        rect_w = min(220.0, max(80.0, float(region.width) - mx - 16.0))
+        x1 = mx + 12.0
+        y1 = my - rect_h * 0.5
+        x2 = x1 + rect_w
+        y2 = y1 + rect_h
+        verts = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
+        indices = [(0, 1, 2), (2, 3, 0)]
+        bg_color = (0.27, 0.6, 1.0, 0.28)
+        batch = batch_for_shader(shader, "TRIS", {"pos": verts}, indices=indices)
+        shader.bind()
+        shader.uniform_float("color", bg_color)
+        batch.draw(shader)
+
+        # 矩形の枠
+        border_color = (0.27, 0.6, 1.0, 0.85)
+        border_coords = [
+            (x1, y1), (x2, y1),
+            (x2, y1), (x2, y2),
+            (x2, y2), (x1, y2),
+            (x1, y2), (x1, y1),
+        ]
+        batch = batch_for_shader(shader, "LINES", {"pos": border_coords})
+        shader.bind()
+        shader.uniform_float("color", border_color)
+        batch.draw(shader)
+
+        gpu.state.blend_set("NONE")
+
+        # 3) ラベル文字
+        try:
+            import blf
+
+            font_id = 0
+            label = self._drag_label[:32]
+            if label:
+                blf.size(font_id, 12)
+                blf.position(font_id, x1 + 8.0, y1 + rect_h * 0.5 - 5.0, 0.0)
+                blf.color(font_id, 1.0, 1.0, 1.0, 0.95)
+                blf.draw(font_id, label)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _estimate_row_height(self, context) -> float:
         scale = 1.0
@@ -497,6 +649,7 @@ class BNAME_OT_layer_stack_drag(Operator):
         layer_stack_utils.apply_stack_order(context)
 
     def _finish(self, context, *, apply_order: bool) -> None:
+        BNAME_OT_layer_stack_drag._stop_drawing()
         if apply_order:
             layer_stack_utils.apply_stack_order(context)
         layer_stack_utils.sync_layer_stack(context, preserve_active_index=True)

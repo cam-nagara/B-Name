@@ -115,9 +115,21 @@ def _select_icon(row, index: int, icon: str) -> None:
 
 
 def _select_name(row, index: int, text: str) -> None:
+    """名前ラベルを描画。クリックすると D&D が始まる (CSP/PS 風の挙動).
+
+    `_draw_drag_handle` の GRIP アイコンに加え、行名の領域全体を
+    ドラッグハンドル化することで、ユーザーが小さい GRIP を狙わなくても
+    レイヤー名をクリックして即ドラッグへ移れるようにする。
+    """
     cell = row.row(align=True)
     cell.alignment = "LEFT"
-    cell.label(text=text or "")
+    cell.operator_context = "INVOKE_DEFAULT"
+    op = cell.operator(
+        "bname.layer_stack_drag",
+        text=text or "",
+        emboss=False,
+    )
+    op.index = index
 
 
 def _select_icon_name(row, index: int, text: str, icon: str) -> None:
@@ -138,12 +150,17 @@ def _visibility_button(row, index: int, hidden: bool) -> None:
 
 
 def _draw_square_label(row, text: str = "", icon: str = "BLANK1") -> None:
+    """1 ui-unit 幅の placeholder ラベル.
+
+    旧実装は ``text`` も ``icon`` も無いケースで `cell.label(text="")` を呼んで
+    いたが、空ラベルは描画幅がオペレーターボタンより僅かに小さくなり、同じ
+    depth の行同士が左右にズレて見える原因になっていた。常に BLANK1 アイコンを
+    指定して `cell.label(text=text, icon=icon)` を通すことで、可視ボタン (例:
+    visibility/expand toggle) と同じ幅を保証する。
+    """
     cell = row.row(align=True)
     cell.ui_units_x = 1.0
-    if icon == "BLANK1" and not text:
-        cell.label(text="")
-    else:
-        cell.label(text=text, icon=icon)
+    cell.label(text=text, icon=icon)
 
 
 def _draw_visibility_slot(row, item, target, index: int) -> None:
