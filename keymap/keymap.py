@@ -410,6 +410,11 @@ class KeymapState:
         # operator 内で event の修飾キーを参照し、object_selection に toggle/add する.
         _add("bname.page_pick_viewport", "LEFTMOUSE", ctrl=True)
         _add("bname.page_pick_viewport", "LEFTMOUSE", shift=True)
+        # Alt+ドラッグ → 選択中レイヤーをドロップ先のコマ/ページへ reparent + 位置追従
+        _add("bname.alt_reparent_drag", "LEFTMOUSE", alt=True)
+        # Alt+Shift+クリック → 選択中レイヤーを 1 段浅い親へ (位置維持)
+        # operator 内でドラッグ判定をしないため、PRESS 即発火扱い.
+        _add("bname.alt_reparent_out", "LEFTMOUSE", alt=True, shift=True)
         # ダブルクリック → コマ編集モードへ (固定)
         _add("bname.enter_coma_mode", "LEFTMOUSE", value="DOUBLE_CLICK")
 

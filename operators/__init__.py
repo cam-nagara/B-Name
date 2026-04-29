@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from . import (
+    alt_reparent_op,
     asset_op,
     balloon_op,
     brush_size_op,
@@ -61,6 +62,7 @@ _MODULES = (
     layer_stack_op,
     layer_move_op,
     object_tool_op,
+    alt_reparent_op,
     asset_op,
     thumbnail_op,
     mode_op,

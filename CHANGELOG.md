@@ -3,6 +3,51 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-30 — ビューポート Alt 系 reparent (フェーズ A)
+
+ビューポート上の Alt+ドラッグ / Alt+クリック / Alt+Shift+クリックで、選択中の
+レイヤーを別のコマ・ページに送れるようにする操作を新設。
+
+### 追加
+- **`utils/layer_reparent.py`** を新設。`ClickTarget` データクラスと、ターゲット
+  解決 / マルチセレクト一括 reparent / balloon・text・image・raster・gp/effect・
+  coma それぞれの個別 reparent を提供。同一ページ内なら parent_kind/parent_key
+  を直接書き換え、別ページなら entry をコレクション間で移送 (子テキストも連動)。
+- **`ui/reparent_overlay.py`** を新設。`SpaceView3D.draw_handler_add` (POST_VIEW)
+  にドロップインジケーター描画を登録。状態 (hover / confirm / error / preview
+  card) を `set_*` / `flash_*` で更新する。
+- **`operators/alt_reparent_op.py`** に 3 つのオペレーターを新設:
+  - `BNAME_OT_alt_reparent_drag`: Alt+LEFTMOUSE で発火。modal でドロップ位置の
+    コマ/ページを実線シアンでハイライトし、半透明プレビューカードをカーソル
+    追従。Release で reparent + 位置追従 (ドラッグなしでクリックすると親変更
+    だけで位置維持)。
+  - `BNAME_OT_alt_reparent_into`: Alt+クリックでクリック位置の最深コンテナへ
+    reparent (位置維持)。
+  - `BNAME_OT_alt_reparent_out`: Alt+Shift+LEFTMOUSE で 1 段浅い親へ reparent
+    (位置維持)。コマ→ページに対応。
+- キーマップに `LEFTMOUSE alt=True` (drag) と `LEFTMOUSE shift=True alt=True`
+  (out) を追加。
+- 計画書 `docs/viewport_reparent_plan_2026-04-29.md` を作成。
+
+### 仕様
+- マルチセレクト中の全レイヤーを一括 reparent (各レイヤーの位置はそれぞれ維持)。
+- クリック位置に複数コマが重なる場合は `z_order` が手前のコマを採用。
+- balloon は子テキスト (`parent_balloon_id`) を一緒に reparent + ページ移動。
+- 別ページへ送るときは、視覚位置 (世界座標) を維持するため entry.x_mm/y_mm を
+  ページオフセット差で補正。
+
+### 実装上の注意
+- Blender の CollectionProperty 要素は `is` 比較で別オブジェクト扱いになるため、
+  `page_stack_key(page)` での文字列比較に統一 (重大バグの修正含む)。
+- layer_stack item.parent_key は collect_targets の heuristic で決まるため、
+  reparent 時は entry.parent_key だけでなく item.parent_key も同時に更新する。
+
+### フェーズ B (別 PR 予定)
+- balloon / text / coma / image / raster の「ページ外」(work 直下) 昇格
+- `BNameWorkData.shared_*` コレクション新設 + 保存スキーマ拡張
+- レイヤーリスト最上位に「(ページ外)」グループを表示
+- Alt+Shift+クリックで page → 外への昇格を有効化
+
 ## 2026-04-29 — Ctrl/Shift マルチセレクト (レイヤーリスト + ビューポート)
 
 ### 追加
