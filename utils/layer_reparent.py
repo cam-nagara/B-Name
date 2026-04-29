@@ -937,6 +937,159 @@ def _move_page_coma_children_to_outside(context, work, src_page, old_parent_key:
         gp_parent.set_parent_key(layer, "")
 
 
+def _entry_parent_matches_coma(
+    entry,
+    page,
+    panel_stem: str,
+    panel_id: str,
+    parent_key: str,
+) -> bool:
+    parent = str(getattr(entry, "parent_key", "") or "")
+    if not parent:
+        return False
+    stem = str(panel_stem or panel_id or "")
+    return parent in {
+        str(parent_key or ""),
+        stem,
+        str(panel_id or ""),
+        f"{getattr(page, 'id', '')}:{stem}",
+    }
+
+
+def _copy_text_to_page(src_text, dst_page, new_parent_key: str, parent_balloon_id: str) -> None:
+    from ..io import schema
+
+    text_id = str(getattr(src_text, "id", "") or "")
+    final_id = _unique_collection_id(dst_page.texts, text_id, "text")
+    new_text = dst_page.texts.add()
+    schema.text_entry_from_dict(new_text, schema.text_entry_to_dict(src_text))
+    new_text.id = final_id
+    new_text.parent_balloon_id = parent_balloon_id
+    new_text.parent_kind = "coma"
+    new_text.parent_key = new_parent_key
+    if parent_balloon_id:
+        return
+    if not _balloon_id_exists(getattr(dst_page, "balloons", []), new_text.parent_balloon_id):
+        new_text.parent_balloon_id = ""
+
+
+def _move_attached_texts_to_page(src_page, dst_page, balloon_id: str, dst_balloon_id: str, new_parent_key: str) -> None:
+    for text_id in [
+        str(getattr(entry, "id", "") or "")
+        for entry in getattr(src_page, "texts", [])
+        if str(getattr(entry, "parent_balloon_id", "") or "") == balloon_id
+    ]:
+        text_idx, src_text = _find_entry_index_by_id(src_page.texts, text_id)
+        if src_text is None:
+            continue
+        _copy_text_to_page(src_text, dst_page, new_parent_key, dst_balloon_id)
+        src_page.texts.remove(text_idx)
+
+
+def _move_coma_balloons_to_page(
+    src_page,
+    dst_page,
+    src_panel_stem: str,
+    src_panel_id: str,
+    old_parent_key: str,
+    new_parent_key: str,
+) -> None:
+    from ..io import schema
+
+    for balloon_id in [
+        str(getattr(entry, "id", "") or "")
+        for entry in getattr(src_page, "balloons", [])
+        if _entry_parent_matches_coma(entry, src_page, src_panel_stem, src_panel_id, old_parent_key)
+    ]:
+        idx, src_entry = _find_entry_index_by_id(src_page.balloons, balloon_id)
+        if src_entry is None:
+            continue
+        final_id = _unique_collection_id(dst_page.balloons, balloon_id, "balloon")
+        new_entry = dst_page.balloons.add()
+        schema.balloon_entry_from_dict(new_entry, schema.balloon_entry_to_dict(src_entry))
+        new_entry.id = final_id
+        new_entry.parent_kind = "coma"
+        new_entry.parent_key = new_parent_key
+        _move_attached_texts_to_page(src_page, dst_page, balloon_id, final_id, new_parent_key)
+        src_page.balloons.remove(idx)
+
+
+def _move_coma_texts_to_page(
+    src_page,
+    dst_page,
+    src_panel_stem: str,
+    src_panel_id: str,
+    old_parent_key: str,
+    new_parent_key: str,
+) -> None:
+    for text_id in [
+        str(getattr(entry, "id", "") or "")
+        for entry in getattr(src_page, "texts", [])
+        if _entry_parent_matches_coma(entry, src_page, src_panel_stem, src_panel_id, old_parent_key)
+    ]:
+        idx, src_entry = _find_entry_index_by_id(src_page.texts, text_id)
+        if src_entry is None:
+            continue
+        _copy_text_to_page(src_entry, dst_page, new_parent_key, "")
+        src_page.texts.remove(idx)
+
+
+def _retarget_coma_scene_layers_to_page(
+    context,
+    src_page,
+    src_panel_stem: str,
+    src_panel_id: str,
+    old_parent_key: str,
+    new_parent_key: str,
+) -> None:
+    scene = getattr(context, "scene", None)
+    for entry in getattr(scene, "bname_raster_layers", []) or []:
+        if _entry_parent_matches_coma(entry, src_page, src_panel_stem, src_panel_id, old_parent_key):
+            entry.scope = "page"
+            entry.parent_kind = "coma"
+            entry.parent_key = new_parent_key
+    for entry in getattr(scene, "bname_image_layers", []) or []:
+        if _entry_parent_matches_coma(entry, src_page, src_panel_stem, src_panel_id, old_parent_key):
+            entry.parent_kind = "coma"
+            entry.parent_key = new_parent_key
+
+
+def _move_page_coma_children_to_page(
+    context,
+    src_page,
+    dst_page,
+    src_panel_stem: str,
+    src_panel_id: str,
+    old_parent_key: str,
+    new_parent_key: str,
+) -> None:
+    """コマを別ページへ送るとき、直下の主要レイヤーも新しいコマへ移す."""
+    _move_coma_balloons_to_page(
+        src_page,
+        dst_page,
+        src_panel_stem,
+        src_panel_id,
+        old_parent_key,
+        new_parent_key,
+    )
+    _move_coma_texts_to_page(
+        src_page,
+        dst_page,
+        src_panel_stem,
+        src_panel_id,
+        old_parent_key,
+        new_parent_key,
+    )
+    _retarget_coma_scene_layers_to_page(
+        context,
+        src_page,
+        src_panel_stem,
+        src_panel_id,
+        old_parent_key,
+        new_parent_key,
+    )
+
+
 def _reparent_coma(context, item, target: ClickTarget) -> bool:
     """コマを別ページまたはページ外へ送る. 同一ページ内なら no-op."""
     if target.kind not in {"page", "outside"} or (target.kind == "page" and target.page is None):
@@ -995,9 +1148,11 @@ def _reparent_coma(context, item, target: ClickTarget) -> bool:
             break
     if coma_index < 0:
         return False
+    old_parent_key = coma_stack_key(src_page, src_entry)
+    src_panel_stem = str(getattr(src_entry, "coma_id", "") or getattr(src_entry, "id", "") or "")
+    src_panel_id = str(getattr(src_entry, "id", "") or "")
     if target.kind == "outside":
         final_stem = _unique_collection_id(work.shared_comas, coma_id, "shared_coma", id_attr="coma_id")
-        old_parent_key = coma_stack_key(src_page, src_entry)
         new_entry = work.shared_comas.add()
         schema.coma_entry_from_dict(new_entry, schema.coma_entry_to_dict(src_entry))
         new_entry.coma_id = final_stem
@@ -1020,6 +1175,7 @@ def _reparent_coma(context, item, target: ClickTarget) -> bool:
 
     # 既存 BNAME_OT_coma_move_to_page をそのまま活用するため、active_coma を一時設定して invoke
     # ただし direct API がないので、operator を呼ぶ
+    target_page_before = {coma_stack_key(target.page, panel) for panel in getattr(target.page, "comas", [])}
     work.active_page_index = src_page_idx
     src_page.active_coma_index = coma_index
     try:
@@ -1030,7 +1186,32 @@ def _reparent_coma(context, item, target: ClickTarget) -> bool:
     except Exception:  # noqa: BLE001
         _logger.exception("coma_move_to_page failed during reparent")
         return False
-    return "FINISHED" in ret
+    if "FINISHED" not in ret:
+        return False
+    moved_panel = None
+    for panel in getattr(target.page, "comas", []):
+        key = coma_stack_key(target.page, panel)
+        if key not in target_page_before:
+            moved_panel = panel
+            break
+    if moved_panel is None and len(getattr(target.page, "comas", [])):
+        moved_panel = target.page.comas[-1]
+    if moved_panel is not None:
+        new_parent_key = coma_stack_key(target.page, moved_panel)
+        _move_page_coma_children_to_page(
+            context,
+            src_page,
+            target.page,
+            src_panel_stem,
+            src_panel_id,
+            old_parent_key,
+            new_parent_key,
+        )
+        try:
+            item.parent_key = page_stack_key(target.page)
+        except Exception:  # noqa: BLE001
+            pass
+    return True
 
 
 # ---------- 子要素連動 ----------

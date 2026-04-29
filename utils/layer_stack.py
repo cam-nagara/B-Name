@@ -968,7 +968,9 @@ def _parent_item_allows_child(parent, child_kind: str) -> bool:
     parent_kind = getattr(parent, "kind", "")
     if parent_kind == OUTSIDE_KIND:
         return child_kind in PAGE_COMA_CHILD_KINDS or child_kind in {COMA_KIND, "gp_folder"}
-    if parent_kind in {PAGE_KIND, COMA_KIND}:
+    if parent_kind == PAGE_KIND:
+        return child_kind in PAGE_COMA_CHILD_KINDS or child_kind == COMA_KIND
+    if parent_kind == COMA_KIND:
         return child_kind in PAGE_COMA_CHILD_KINDS
     if parent_kind == "gp_folder":
         return child_kind in {"gp", "gp_folder"}
@@ -981,6 +983,8 @@ def _parent_key_exists_for_child(context, child_kind: str, parent_key: str) -> b
         return True
     if parent_key == OUTSIDE_STACK_KEY:
         return child_kind in PAGE_COMA_CHILD_KINDS or child_kind in {COMA_KIND, "gp_folder"}
+    if child_kind == COMA_KIND:
+        return ":" not in parent_key and gp_parent.parent_key_exists(get_work(context), parent_key)
     work = get_work(context)
     if child_kind in PAGE_COMA_CHILD_KINDS and gp_parent.parent_key_exists(work, parent_key):
         return True
@@ -1090,15 +1094,27 @@ def _apply_stack_drop_hint(context, moved_uid: str, *, nesting_delta: int = 0) -
         return False
     item = stack[moved_index]
     kind = getattr(item, "kind", "")
-    if kind not in {"gp", "gp_folder", "effect", "raster", "image", "balloon", "text"}:
+    if kind not in {COMA_KIND, "gp", "gp_folder", "effect", "raster", "image", "balloon", "text"}:
         return False
     parent_key = _drop_parent_from_nesting_delta(stack, item, moved_index, nesting_delta)
     old_parent_key = str(getattr(item, "parent_key", "") or "")
     if parent_key and not _parent_key_exists_for_child(context, kind, parent_key):
         return False
-    # ページ間 D&D は保存データ整合性が崩れる (balloon/text は page.balloons/texts
-    # にバインドされ、raster/gp/effect の座標も元ページの world 系に固定) ため
-    # 拒否する。ページ非依存 (root → page) や (page → root) は許可。
+    if kind != "gp_folder":
+        try:
+            from . import layer_stack_dnd
+
+            if (
+                layer_stack_dnd.child_can_use_semantic_parent(kind)
+                and layer_stack_dnd.is_semantic_parent_key(context, parent_key)
+            ):
+                return layer_stack_dnd.apply_semantic_parent_drop(context, item, parent_key)
+        except Exception:  # noqa: BLE001
+            _logger.exception("semantic layer stack D&D parent drop failed")
+            return False
+    # ここから下は gp_folder など、実コレクション移送を伴わない従来の親キー更新。
+    # page/coma/outside への意味的な D&D は上で layer_reparent に委譲済み。
+    # フォールバック経路ではページをまたぐ単純 parent_key 書き換えを拒否する。
     entry_page = _stack_item_page_key(item)
     target_page = _parent_key_page(parent_key)
     if entry_page and target_page and entry_page != target_page:
