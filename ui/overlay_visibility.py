@@ -15,6 +15,9 @@ def coma_visible(panel) -> bool:
 
 
 def entry_in_visible_coma(page, entry) -> bool:
+    # エントリ自身が「表示=False」なら描画しない (balloon / text で使用)
+    if not bool(getattr(entry, "visible", True)):
+        return False
     try:
         panel = coma_containing_point(page, *entry_center(entry))
     except Exception:  # noqa: BLE001

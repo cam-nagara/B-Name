@@ -75,6 +75,17 @@ class BNameTextStyleSpan(bpy.types.PropertyGroup):
     font_italic: BoolProperty(name="斜体", default=False)  # type: ignore[valid-type]
 
 
+def _on_text_visible_changed(_self, context) -> None:
+    try:
+        screen = getattr(context, "screen", None) if context is not None else None
+        if screen is not None:
+            for area in screen.areas:
+                if area.type == "VIEW_3D":
+                    area.tag_redraw()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class BNameTextEntry(bpy.types.PropertyGroup):
     """1 つのテキストオブジェクト.
 
@@ -84,6 +95,11 @@ class BNameTextEntry(bpy.types.PropertyGroup):
     """
 
     id: StringProperty(name="ID", default="")  # type: ignore[valid-type]
+    visible: BoolProperty(  # type: ignore[valid-type]
+        name="表示",
+        default=True,
+        update=_on_text_visible_changed,
+    )
     body: StringProperty(name="本文", default="", options={"TEXTEDIT_UPDATE"})  # type: ignore[valid-type]
 
     # ページローカル座標 (mm). overlay 描画時にページ grid offset を加算する。

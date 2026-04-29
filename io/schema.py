@@ -636,6 +636,7 @@ def coma_entry_from_dict(entry, data: dict[str, Any]) -> None:
 def balloon_entry_to_dict(entry) -> dict[str, Any]:
     return {
         "id": entry.id,
+        "visible": bool(getattr(entry, "visible", True)),
         "shape": balloon_shapes.normalize_shape(entry.shape),
         "customPresetName": entry.custom_preset_name,
         "xMm": round(entry.x_mm, 3),
@@ -685,6 +686,7 @@ def balloon_entry_to_dict(entry) -> dict[str, Any]:
 def balloon_entry_from_dict(entry, data: dict[str, Any]) -> None:
     data = data or {}
     entry.id = data.get("id", entry.id)
+    entry.visible = bool(data.get("visible", True))
     entry.shape = balloon_shapes.normalize_shape(data.get("shape", entry.shape))
     entry.custom_preset_name = data.get("customPresetName", "")
     entry.x_mm = float(data.get("xMm", 0.0))
@@ -744,6 +746,7 @@ def text_entry_to_dict(entry) -> dict[str, Any]:
     )
     return {
         "id": entry.id,
+        "visible": bool(getattr(entry, "visible", True)),
         "body": entry.body,
         "speakerType": entry.speaker_type,
         "speakerName": entry.speaker_name,
@@ -795,6 +798,7 @@ def text_entry_from_dict(entry, data: dict[str, Any]) -> None:
 
     data = data or {}
     entry.id = data.get("id", entry.id)
+    entry.visible = bool(data.get("visible", True))
     entry.body = data.get("body", "")
     entry.speaker_type = data.get("speakerType", "normal")
     entry.speaker_name = data.get("speakerName", "")

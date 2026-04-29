@@ -938,6 +938,8 @@ class BNAME_OT_layer_stack_toggle_visibility(Operator):
             target.visible = not bool(target.visible)
         elif item.kind in {"image", "raster"} and hasattr(target, "visible"):
             target.visible = not bool(target.visible)
+        elif item.kind in {"balloon", "text"} and hasattr(target, "visible"):
+            target.visible = not bool(target.visible)
         elif item.kind in {"gp", "gp_folder", "effect"} and hasattr(target, "hide"):
             target.hide = not bool(target.hide)
         else:

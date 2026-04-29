@@ -101,10 +101,26 @@ class BNameBalloonShapeParams(bpy.types.PropertyGroup):
     )
 
 
+def _on_balloon_visible_changed(_self, context) -> None:
+    try:
+        screen = getattr(context, "screen", None) if context is not None else None
+        if screen is not None:
+            for area in screen.areas:
+                if area.type == "VIEW_3D":
+                    area.tag_redraw()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class BNameBalloonEntry(bpy.types.PropertyGroup):
     """フキダシ 1 件."""
 
     id: StringProperty(name="ID", default="")  # type: ignore[valid-type]
+    visible: BoolProperty(  # type: ignore[valid-type]
+        name="表示",
+        default=True,
+        update=_on_balloon_visible_changed,
+    )
     shape: EnumProperty(name="形状", items=_SHAPE_ITEMS, default="rect")  # type: ignore[valid-type]
     custom_preset_name: StringProperty(  # type: ignore[valid-type]
         name="カスタム形状名",

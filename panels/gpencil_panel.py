@@ -170,6 +170,8 @@ def _draw_visibility_slot(row, item, target, index: int) -> None:
         _visibility_button(row, index, not bool(target.visible))
     elif item.kind in {"image", "raster"} and hasattr(target, "visible"):
         _visibility_button(row, index, not bool(target.visible))
+    elif item.kind in {"balloon", "text"} and hasattr(target, "visible"):
+        _visibility_button(row, index, not bool(target.visible))
     elif item.kind in {"gp", "gp_folder", "effect"} and hasattr(target, "hide"):
         _visibility_button(row, index, _gp_hidden(target))
     else:
