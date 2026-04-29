@@ -314,20 +314,6 @@ def descendant_folder_keys(work, root_key: str) -> set[str]:
     return {key for key in out if key}
 
 
-def _stack_key_for_entry(work, kind: str, entry) -> str:
-    entry_id = str(getattr(entry, "id", "") or "")
-    if kind in {"image", "raster"}:
-        return entry_id
-    parent_kind = str(getattr(entry, "parent_kind", "") or "")
-    parent_key = str(getattr(entry, "parent_key", "") or "")
-    if parent_kind == "none" or not parent_key:
-        return outside_child_key(entry_id)
-    page_key, _child = split_child_key(parent_key)
-    if page_key:
-        return f"{page_key}:{entry_id}"
-    return entry_id
-
-
 def _iter_folder_member_entries(context, folder_keys: set[str]):
     scene = getattr(context, "scene", None)
     work = get_work(context)
@@ -352,6 +338,47 @@ def _iter_folder_member_entries(context, folder_keys: set[str]):
                 yield "text", entry
 
 
+def _folder_member_move_specs(context, folder_keys: set[str]):
+    scene = getattr(context, "scene", None)
+    work = get_work(context)
+    for entry in getattr(scene, "bname_image_layers", []) or []:
+        if str(getattr(entry, "folder_key", "") or "") in folder_keys:
+            yield "image", str(getattr(entry, "id", "") or "")
+    for entry in getattr(scene, "bname_raster_layers", []) or []:
+        if str(getattr(entry, "folder_key", "") or "") in folder_keys:
+            yield "raster", str(getattr(entry, "id", "") or "")
+
+    shared_balloon_ids = {
+        str(getattr(entry, "id", "") or "")
+        for entry in getattr(work, "shared_balloons", []) or []
+        if str(getattr(entry, "folder_key", "") or "") in folder_keys
+    }
+    for balloon_id in shared_balloon_ids:
+        yield "balloon", outside_child_key(balloon_id)
+    for entry in getattr(work, "shared_texts", []) or []:
+        if str(getattr(entry, "folder_key", "") or "") not in folder_keys:
+            continue
+        if str(getattr(entry, "parent_balloon_id", "") or "") in shared_balloon_ids:
+            continue
+        yield "text", outside_child_key(str(getattr(entry, "id", "") or ""))
+
+    for page in getattr(work, "pages", []):
+        page_key_value = page_stack_key(page)
+        page_balloon_ids = {
+            str(getattr(entry, "id", "") or "")
+            for entry in getattr(page, "balloons", [])
+            if str(getattr(entry, "folder_key", "") or "") in folder_keys
+        }
+        for balloon_id in page_balloon_ids:
+            yield "balloon", f"{page_key_value}:{balloon_id}"
+        for entry in getattr(page, "texts", []):
+            if str(getattr(entry, "folder_key", "") or "") not in folder_keys:
+                continue
+            if str(getattr(entry, "parent_balloon_id", "") or "") in page_balloon_ids:
+                continue
+            yield "text", f"{page_key_value}:{str(getattr(entry, 'id', '') or '')}"
+
+
 def reparent_folder_descendants(context, root_folder_key: str) -> int:
     work = get_work(context)
     if work is None:
@@ -365,8 +392,9 @@ def reparent_folder_descendants(context, root_folder_key: str) -> int:
         return 0
     if not layer_stack_dnd.is_semantic_parent_key(context, semantic_parent):
         return 0
-    for kind, entry in list(_iter_folder_member_entries(context, folder_keys)):
-        stack_key = _stack_key_for_entry(work, kind, entry)
+    for kind, stack_key in list(_folder_member_move_specs(context, folder_keys)):
+        if not stack_key:
+            continue
         item = SimpleNamespace(kind=kind, key=stack_key, parent_key=semantic_parent)
         if layer_stack_dnd.apply_semantic_parent_drop(context, item, semantic_parent):
             changed += 1

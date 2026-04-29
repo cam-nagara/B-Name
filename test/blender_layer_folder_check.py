@@ -131,7 +131,7 @@ def main() -> None:
         from bname_dev.io import schema
         from bname_dev.utils import layer_folder as layer_folder_utils
         from bname_dev.utils import layer_stack as layer_stack_utils
-        from bname_dev.utils.layer_hierarchy import COMA_KIND, coma_stack_key, page_stack_key
+        from bname_dev.utils.layer_hierarchy import COMA_KIND, OUTSIDE_STACK_KEY, coma_stack_key, page_stack_key
 
         context = bpy.context
         work = context.scene.bname_work
@@ -281,6 +281,58 @@ def main() -> None:
         schema.page_from_dict(page2, page_data)
         assert next(entry for entry in page2.balloons if entry.id == "folder_balloon").folder_key == folder_id
         assert next(entry for entry in page2.texts if entry.id == "folder_text").folder_key == folder_id
+
+        move_folder_id = "folder_attached_move"
+        move_folder = work.layer_folders.add()
+        move_folder.id = move_folder_id
+        move_folder.title = "親子移動"
+        move_folder.parent_key = page1_key
+        move_folder.expanded = True
+        attached_balloon = _add_balloon(page1, "attached_move_balloon", page1_key)
+        attached_text = _add_text(page1, "attached_move_text", page1_key)
+        attached_text.parent_balloon_id = attached_balloon.id
+        assert layer_folder_utils.assign_item_to_folder(
+            context,
+            SimpleNamespace(kind="balloon", key=f"{page1_key}:{attached_balloon.id}"),
+            move_folder_id,
+        )
+        assert layer_folder_utils.assign_item_to_folder(
+            context,
+            SimpleNamespace(kind="text", key=f"{page1_key}:{attached_text.id}"),
+            move_folder_id,
+        )
+        assert layer_folder_utils.set_folder_parent(context, move_folder_id, OUTSIDE_STACK_KEY)
+        assert not any(entry.id == "attached_move_balloon" for entry in page1.balloons)
+        assert not any(entry.id == "attached_move_text" for entry in page1.texts)
+        shared_attached_balloon = next(entry for entry in work.shared_balloons if entry.id == "attached_move_balloon")
+        shared_attached_texts = [
+            entry for entry in work.shared_texts
+            if entry.parent_balloon_id == shared_attached_balloon.id
+        ]
+        assert len(shared_attached_texts) == 1
+        assert shared_attached_texts[0].id == "attached_move_text"
+        assert shared_attached_texts[0].folder_key == move_folder_id
+
+        delete_folder_id = "folder_delete_preserve"
+        delete_folder = work.layer_folders.add()
+        delete_folder.id = delete_folder_id
+        delete_folder.title = "削除保持"
+        delete_folder.parent_key = page2_key
+        child_delete_folder_id = "folder_delete_child"
+        child_delete_folder = work.layer_folders.add()
+        child_delete_folder.id = child_delete_folder_id
+        child_delete_folder.title = "削除時の子"
+        child_delete_folder.parent_key = delete_folder_id
+        delete_image = _add_image(context, "delete_folder_image", page2_key)
+        delete_image.folder_key = delete_folder_id
+        child_delete_image = _add_image(context, "delete_child_folder_image", page2_key)
+        child_delete_image.folder_key = child_delete_folder_id
+        assert layer_folder_utils.remove_folder_preserve_children(work, delete_folder_id)
+        restored_child_delete_folder = layer_folder_utils.find_folder(work, child_delete_folder_id)
+        assert delete_image.folder_key == ""
+        assert restored_child_delete_folder is not None
+        assert restored_child_delete_folder.parent_key == page2_key
+        assert child_delete_image.folder_key == child_delete_folder_id
 
         print("BNAME_LAYER_FOLDER_OK")
     finally:
