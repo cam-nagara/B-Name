@@ -10,11 +10,14 @@ from bpy.types import Menu, Operator
 from bpy_extras.io_utils import ImportHelper
 
 from ..utils import layer_stack as layer_stack_utils
+from ..utils import layer_folder as layer_folder_utils
 from ..utils.layer_hierarchy import (
     PAGE_KIND,
     COMA_KIND,
+    OUTSIDE_STACK_KEY,
     page_stack_key,
     coma_stack_key,
+    outside_child_key,
     split_child_key,
 )
 
@@ -29,6 +32,7 @@ _ADD_KIND_ITEMS = (
     ("text", "テキスト", ""),
     ("effect", "効果線", ""),
     ("gp_folder", "フォルダ", ""),
+    ("layer_folder", "汎用フォルダ", ""),
 )
 
 _ADD_KIND_ICONS = {
@@ -42,6 +46,7 @@ _ADD_KIND_ICONS = {
     "text": "FONT_DATA",
     "effect": "STROKE",
     "gp_folder": "FILE_FOLDER",
+    "layer_folder": "FILE_FOLDER",
 }
 
 
@@ -60,11 +65,19 @@ def _active_stack_uid(context) -> str:
     return layer_stack_utils.stack_item_uid(item) if item is not None else ""
 
 
-def _page_key_for_item(item) -> str:
+def _page_key_for_item(item, context=None) -> str:
     if item is None:
         return ""
     if item.kind == PAGE_KIND:
         return item.key
+    if item.kind == "layer_folder":
+        from ..core.work import get_work
+
+        semantic_parent = layer_folder_utils.semantic_parent_key_for_folder(get_work(context or bpy.context), item.key)
+        if semantic_parent == OUTSIDE_STACK_KEY:
+            return ""
+        page_key, _child = split_child_key(semantic_parent)
+        return page_key
     if item.kind in {COMA_KIND, "balloon_group", "balloon", "text"}:
         page_key, _child = split_child_key(item.key)
         return page_key
@@ -82,7 +95,7 @@ def _placement_anchor_uid(context, kind: str) -> str:
     if item is None:
         return ""
     if kind == PAGE_KIND:
-        page_key = _page_key_for_item(item)
+        page_key = _page_key_for_item(item, context)
         return layer_stack_utils.target_uid(PAGE_KIND, page_key) if page_key else ""
     if kind == COMA_KIND:
         if item.kind == COMA_KIND:
@@ -127,7 +140,7 @@ def _active_or_anchor_page(context, anchor_uid: str):
             if layer_stack_utils.stack_item_uid(item) == anchor_uid:
                 anchor = item
                 break
-    page_key = _page_key_for_item(anchor)
+    page_key = _page_key_for_item(anchor, context)
     if page_key:
         page, page_idx = _find_page(context, page_key)
         if page is not None:
@@ -181,10 +194,14 @@ def _parent_key_for_new_item(context, anchor_uid: str, kind: str) -> str:
     from ..utils import gp_layer_parenting as gp_parent
 
     work = get_work(context)
-    logical_child_kinds = {"gp", "effect", "raster", "balloon", "text"}
+    logical_child_kinds = {"gp", "effect", "raster", "image", "balloon", "text"}
     for item in stack:
         if layer_stack_utils.stack_item_uid(item) != anchor_uid:
             continue
+        folder_key = _folder_key_for_anchor_item(context, item)
+        if kind in {"image", "raster", "balloon", "text"} and folder_key:
+            semantic_parent = layer_folder_utils.semantic_parent_key_for_folder(work, folder_key)
+            return "" if semantic_parent == OUTSIDE_STACK_KEY else semantic_parent
         # Page / Coma 行を選択中: そのコンテナの中へ
         if kind in logical_child_kinds and item.kind in {PAGE_KIND, COMA_KIND}:
             return item.key
@@ -204,6 +221,41 @@ def _parent_key_for_new_item(context, anchor_uid: str, kind: str) -> str:
             return str(getattr(item, "parent_key", "") or "")
         return ""
     return ""
+
+
+def _folder_key_for_anchor_item(context, item) -> str:
+    if item is None:
+        return ""
+    if item.kind == "layer_folder":
+        return str(getattr(item, "key", "") or "")
+    parent_key = str(getattr(item, "parent_key", "") or "")
+    if parent_key and layer_folder_utils.is_folder_key(context, parent_key):
+        return parent_key
+    return ""
+
+
+def _folder_key_for_anchor(context, anchor_uid: str) -> str:
+    stack = getattr(context.scene, "bname_layer_stack", None)
+    if stack is None or not anchor_uid:
+        return ""
+    for item in stack:
+        if layer_stack_utils.stack_item_uid(item) == anchor_uid:
+            return _folder_key_for_anchor_item(context, item)
+    return ""
+
+
+def _parent_key_for_new_layer_folder(context, anchor_uid: str) -> str:
+    stack = getattr(context.scene, "bname_layer_stack", None)
+    if stack is None or not anchor_uid:
+        return OUTSIDE_STACK_KEY
+    for item in stack:
+        if layer_stack_utils.stack_item_uid(item) != anchor_uid:
+            continue
+        if item.kind in {"outside_group", PAGE_KIND, COMA_KIND, "layer_folder"}:
+            return str(getattr(item, "key", "") or OUTSIDE_STACK_KEY)
+        parent_key = str(getattr(item, "parent_key", "") or "")
+        return parent_key or OUTSIDE_STACK_KEY
+    return OUTSIDE_STACK_KEY
 
 
 def _place_new_item(context, new_uid: str, anchor_uid: str) -> bool:
@@ -245,12 +297,22 @@ def _unique_name(existing: set[str], base: str) -> str:
         i += 1
 
 
+def _unique_shared_id(coll, prefix: str) -> str:
+    used = {str(getattr(entry, "id", "") or "") for entry in coll or []}
+    i = 1
+    while True:
+        candidate = f"{prefix}_{i:04d}"
+        if candidate not in used:
+            return candidate
+        i += 1
+
+
 def _copy_image_entry(src, dst) -> None:
     for attr in (
         "title", "filepath", "x_mm", "y_mm", "width_mm", "height_mm",
         "rotation_deg", "flip_x", "flip_y", "visible", "locked", "opacity",
         "blend_mode", "brightness", "contrast", "binarize_enabled",
-        "binarize_threshold", "tint_color",
+        "binarize_threshold", "tint_color", "parent_kind", "parent_key", "folder_key",
     ):
         try:
             setattr(dst, attr, getattr(src, attr))
@@ -607,7 +669,7 @@ class BNAME_OT_layer_stack_add(Operator, ImportHelper):
         if self.kind == "gp":
             return self._add_gp_layer(context, anchor_uid)
         if self.kind == "image":
-            return self._add_image(context)
+            return self._add_image(context, anchor_uid)
         if self.kind == "raster":
             return self._add_raster(context, anchor_uid)
         if self.kind == "balloon":
@@ -618,6 +680,8 @@ class BNAME_OT_layer_stack_add(Operator, ImportHelper):
             return self._add_effect(context, anchor_uid)
         if self.kind == "gp_folder":
             return self._add_gp_folder(context, anchor_uid)
+        if self.kind == "layer_folder":
+            return self._add_layer_folder(context, anchor_uid)
         return ""
 
     def _add_page(self, context) -> str:
@@ -705,7 +769,26 @@ class BNAME_OT_layer_stack_add(Operator, ImportHelper):
         layer_stack_utils.sync_layer_stack_after_data_change(context)
         return layer_stack_utils.target_uid("gp_folder", layer_stack_utils._node_stack_key(group))
 
-    def _add_image(self, context) -> str:
+    def _add_layer_folder(self, context, anchor_uid: str) -> str:
+        from ..core.work import get_work
+
+        work = get_work(context)
+        folders = getattr(work, "layer_folders", None) if work is not None else None
+        if folders is None:
+            self.report({"ERROR"}, "作品データが未初期化です")
+            return ""
+        entry = folders.add()
+        entry.id = layer_folder_utils.ensure_unique_folder_id(work)
+        entry.title = "フォルダ"
+        entry.parent_key = _parent_key_for_new_layer_folder(context, anchor_uid)
+        entry.expanded = True
+        context.scene.bname_active_layer_kind = "layer_folder"
+        if hasattr(context.scene, "bname_active_layer_folder_key"):
+            context.scene.bname_active_layer_folder_key = entry.id
+        layer_stack_utils.sync_layer_stack_after_data_change(context)
+        return layer_stack_utils.target_uid("layer_folder", entry.id)
+
+    def _add_image(self, context, anchor_uid: str) -> str:
         path = Path(self.filepath)
         if not path.is_file():
             self.report({"ERROR"}, f"ファイルが見つかりません: {path}")
@@ -722,6 +805,13 @@ class BNAME_OT_layer_stack_add(Operator, ImportHelper):
         entry.id = f"image_{i:04d}"
         entry.title = path.stem
         entry.filepath = str(path)
+        parent_key = _parent_key_for_new_item(context, anchor_uid, "image")
+        if parent_key:
+            entry.parent_kind = "coma" if ":" in parent_key else "page"
+            entry.parent_key = parent_key
+        folder_key = _folder_key_for_anchor(context, anchor_uid)
+        if folder_key:
+            entry.folder_key = folder_key
         try:
             img = bpy.data.images.load(str(path), check_existing=True)
             entry.width_mm = max(1.0, img.size[0] / 6.0)
@@ -751,10 +841,20 @@ class BNAME_OT_layer_stack_add(Operator, ImportHelper):
         for entry in coll:
             if getattr(entry, "id", "") not in before:
                 parent_key = _parent_key_for_new_item(context, anchor_uid, "raster")
+                folder_key = _folder_key_for_anchor(context, anchor_uid)
                 if parent_key:
                     entry.scope = "page"
                     entry.parent_kind = "coma" if ":" in parent_key else "page"
                     entry.parent_key = parent_key
+                elif folder_key and layer_folder_utils.semantic_parent_key_for_folder(
+                    getattr(context.scene, "bname_work", None),
+                    folder_key,
+                ) == OUTSIDE_STACK_KEY:
+                    entry.scope = "master"
+                    entry.parent_kind = "none"
+                    entry.parent_key = ""
+                if folder_key:
+                    entry.folder_key = folder_key
                 return layer_stack_utils.target_uid("raster", entry.id)
         idx = int(getattr(context.scene, "bname_active_raster_layer_index", -1))
         if 0 <= idx < len(coll):
@@ -765,6 +865,23 @@ class BNAME_OT_layer_stack_add(Operator, ImportHelper):
         from .balloon_op import _allocate_balloon_id, _creation_violates_layer_scope
 
         work, page = _active_or_anchor_page(context, anchor_uid)
+        folder_key = _folder_key_for_anchor(context, anchor_uid)
+        folder_parent = layer_folder_utils.semantic_parent_key_for_folder(work, folder_key) if folder_key else ""
+        if work is not None and folder_key and folder_parent == OUTSIDE_STACK_KEY:
+            entry = work.shared_balloons.add()
+            entry.id = _unique_shared_id(work.shared_balloons, "shared_balloon")
+            entry.shape = "rect"
+            entry.x_mm = 10.0
+            entry.y_mm = 10.0
+            entry.width_mm = 40.0
+            entry.height_mm = 20.0
+            entry.rounded_corner_enabled = True
+            entry.parent_kind = "none"
+            entry.parent_key = ""
+            entry.folder_key = folder_key
+            context.scene.bname_active_layer_kind = "balloon"
+            layer_stack_utils.sync_layer_stack_after_data_change(context)
+            return layer_stack_utils.target_uid("balloon", outside_child_key(entry.id))
         if work is None or page is None:
             self.report({"ERROR"}, "ページが選択されていません")
             return ""
@@ -784,6 +901,8 @@ class BNAME_OT_layer_stack_add(Operator, ImportHelper):
         entry.rounded_corner_enabled = True
         entry.parent_kind = "coma" if ":" in parent_key else "page"
         entry.parent_key = parent_key or page_stack_key(page)
+        if folder_key:
+            entry.folder_key = folder_key
         page.active_balloon_index = len(page.balloons) - 1
         context.scene.bname_active_layer_kind = "balloon"
         layer_stack_utils.sync_layer_stack_after_data_change(context)
@@ -793,6 +912,22 @@ class BNAME_OT_layer_stack_add(Operator, ImportHelper):
         from .text_op import _create_text_entry, _creation_blocked
 
         work, page = _active_or_anchor_page(context, anchor_uid)
+        folder_key = _folder_key_for_anchor(context, anchor_uid)
+        folder_parent = layer_folder_utils.semantic_parent_key_for_folder(work, folder_key) if folder_key else ""
+        if work is not None and folder_key and folder_parent == OUTSIDE_STACK_KEY:
+            entry = work.shared_texts.add()
+            entry.id = _unique_shared_id(work.shared_texts, "shared_text")
+            entry.body = "テキスト"
+            entry.x_mm = 10.0
+            entry.y_mm = 10.0
+            entry.width_mm = 30.0
+            entry.height_mm = 15.0
+            entry.parent_kind = "none"
+            entry.parent_key = ""
+            entry.folder_key = folder_key
+            context.scene.bname_active_layer_kind = "text"
+            layer_stack_utils.sync_layer_stack_after_data_change(context)
+            return layer_stack_utils.target_uid("text", outside_child_key(entry.id))
         if work is None or page is None:
             self.report({"ERROR"}, "ページが選択されていません")
             return ""
@@ -815,6 +950,8 @@ class BNAME_OT_layer_stack_add(Operator, ImportHelper):
         if parent_key:
             entry.parent_kind = "coma" if ":" in parent_key else "page"
             entry.parent_key = parent_key
+        if folder_key:
+            entry.folder_key = folder_key
         return layer_stack_utils.target_uid("text", f"{page_stack_key(page)}:{entry.id}")
 
     def _add_effect(self, context, anchor_uid: str) -> str:
@@ -874,6 +1011,8 @@ class BNAME_OT_layer_stack_duplicate(Operator):
             return self._duplicate_gp_layer(context, item)
         if item.kind == "gp_folder":
             return self._duplicate_gp_folder(context, item)
+        if item.kind == "layer_folder":
+            return self._duplicate_layer_folder(context, item)
         if item.kind == "image":
             return self._duplicate_image(context, item)
         if item.kind == "balloon":
@@ -937,6 +1076,28 @@ class BNAME_OT_layer_stack_duplicate(Operator):
             gp_utils.move_group_to_group(obj.data, group, parent)
         context.scene.bname_active_layer_kind = "gp_folder"
         context.scene.bname_active_gp_folder_key = layer_stack_utils._node_stack_key(group)
+        return True
+
+    def _duplicate_layer_folder(self, context, item) -> bool:
+        from ..core.work import get_work
+
+        work = get_work(context)
+        resolved = layer_stack_utils.resolve_stack_item(context, item)
+        src = resolved.get("target") if resolved is not None else None
+        folders = getattr(work, "layer_folders", None) if work is not None else None
+        if src is None or folders is None:
+            return False
+        dst = folders.add()
+        dst.id = layer_folder_utils.ensure_unique_folder_id(work)
+        dst.title = _unique_name(
+            {str(getattr(folder, "title", "") or "") for folder in folders if folder is not dst},
+            f"{getattr(src, 'title', '') or 'フォルダ'} 複製",
+        )
+        dst.parent_key = str(getattr(src, "parent_key", "") or OUTSIDE_STACK_KEY)
+        dst.expanded = bool(getattr(src, "expanded", True))
+        context.scene.bname_active_layer_kind = "layer_folder"
+        if hasattr(context.scene, "bname_active_layer_folder_key"):
+            context.scene.bname_active_layer_folder_key = dst.id
         return True
 
     def _duplicate_image(self, context, item) -> bool:
@@ -1063,6 +1224,10 @@ class BNAME_OT_layer_stack_toggle_expanded(Operator):
         elif item.kind == "gp_folder" and hasattr(target, "is_expanded"):
             was_expanded = bool(target.is_expanded)
             target.is_expanded = not was_expanded
+            active_will_be_hidden = active_will_be_hidden and was_expanded
+        elif item.kind == "layer_folder" and hasattr(target, "expanded"):
+            was_expanded = bool(target.expanded)
+            target.expanded = not was_expanded
             active_will_be_hidden = active_will_be_hidden and was_expanded
         else:
             return {"CANCELLED"}

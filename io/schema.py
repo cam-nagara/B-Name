@@ -15,7 +15,7 @@ from typing import Any
 from ..utils import balloon_shapes, color_space
 
 # ファイルフォーマットのバージョン (破壊的変更があったら繰り上げる)
-WORK_SCHEMA_VERSION = 3
+WORK_SCHEMA_VERSION = 4
 PAGES_SCHEMA_VERSION = 1
 PAGE_SCHEMA_VERSION = 1
 COMA_SCHEMA_VERSION = 1
@@ -321,6 +321,7 @@ def raster_layer_to_dict(entry) -> dict[str, Any]:
         "scope": entry.scope,
         "parent_kind": entry.parent_kind,
         "parent_key": entry.parent_key,
+        "folderKey": getattr(entry, "folder_key", ""),
     }
 
 
@@ -342,6 +343,8 @@ def raster_layer_from_dict(entry, data: dict[str, Any]) -> None:
     entry.scope = data.get("scope", "page")
     entry.parent_kind = data.get("parent_kind", "page")
     entry.parent_key = str(data.get("parent_key", "") or "")
+    if hasattr(entry, "folder_key"):
+        entry.folder_key = str(data.get("folderKey", data.get("folder_key", "")) or "")
 
 
 # ---------- ImageLayer ----------
@@ -372,6 +375,7 @@ def image_layer_to_dict(entry) -> dict[str, Any]:
         "tintColorAlpha": round(float(entry.tint_color[3]), 4),
         "parentKind": getattr(entry, "parent_kind", "none"),
         "parentKey": getattr(entry, "parent_key", ""),
+        "folderKey": getattr(entry, "folder_key", ""),
     }
 
 
@@ -400,6 +404,28 @@ def image_layer_from_dict(entry, data: dict[str, Any]) -> None:
     entry.tint_color = (*color_space.srgb_to_linear_rgb(tint[:3]), tint[3])
     entry.parent_kind = str(data.get("parentKind", data.get("parent_kind", "none")) or "none")
     entry.parent_key = str(data.get("parentKey", data.get("parent_key", "")) or "")
+    if hasattr(entry, "folder_key"):
+        entry.folder_key = str(data.get("folderKey", data.get("folder_key", "")) or "")
+
+
+# ---------- LayerFolder ----------
+
+
+def layer_folder_to_dict(entry) -> dict[str, Any]:
+    return {
+        "id": str(getattr(entry, "id", "") or ""),
+        "title": str(getattr(entry, "title", "") or ""),
+        "parentKey": str(getattr(entry, "parent_key", "") or ""),
+        "expanded": bool(getattr(entry, "expanded", True)),
+    }
+
+
+def layer_folder_from_dict(entry, data: dict[str, Any]) -> None:
+    data = data or {}
+    entry.id = str(data.get("id", "") or "")
+    entry.title = str(data.get("title", "") or "フォルダ")
+    entry.parent_key = str(data.get("parentKey", data.get("parent_key", "")) or "")
+    entry.expanded = bool(data.get("expanded", True))
 
 
 # ---------- WorkData (root) ----------
@@ -437,6 +463,10 @@ def work_to_dict(work) -> dict[str, Any]:
         "shared_comas": [
             coma_entry_to_dict(entry)
             for entry in getattr(work, "shared_comas", [])
+        ],
+        "layer_folders": [
+            layer_folder_to_dict(entry)
+            for entry in getattr(work, "layer_folders", [])
         ],
     }
 
@@ -491,6 +521,11 @@ def work_from_dict(work, data: dict[str, Any]) -> None:
         for item in data.get("shared_comas", data.get("sharedComas", [])) or []:
             entry = work.shared_comas.add()
             coma_entry_from_dict(entry, item)
+    if hasattr(work, "layer_folders"):
+        work.layer_folders.clear()
+        for item in data.get("layer_folders", data.get("layerFolders", [])) or []:
+            entry = work.layer_folders.add()
+            layer_folder_from_dict(entry, item)
 
 
 # ---------- PageEntry / pages.json ----------
@@ -758,6 +793,7 @@ def balloon_entry_to_dict(entry) -> dict[str, Any]:
         "mergeGroupId": getattr(entry, "merge_group_id", ""),
         "parentKind": getattr(entry, "parent_kind", "page"),
         "parentKey": getattr(entry, "parent_key", ""),
+        "folderKey": getattr(entry, "folder_key", ""),
         "tails": [
             {
                 "type": t.type,
@@ -808,6 +844,8 @@ def balloon_entry_from_dict(entry, data: dict[str, Any]) -> None:
     entry.merge_group_id = data.get("mergeGroupId", "")
     entry.parent_kind = data.get("parentKind", data.get("parent_kind", "page"))
     entry.parent_key = str(data.get("parentKey", data.get("parent_key", "")) or "")
+    if hasattr(entry, "folder_key"):
+        entry.folder_key = str(data.get("folderKey", data.get("folder_key", "")) or "")
     entry.tails.clear()
     for td in data.get("tails", []):
         tail = entry.tails.add()
@@ -870,6 +908,7 @@ def text_entry_to_dict(entry) -> dict[str, Any]:
         "parentBalloonId": entry.parent_balloon_id,
         "parentKind": getattr(entry, "parent_kind", "page"),
         "parentKey": getattr(entry, "parent_key", ""),
+        "folderKey": getattr(entry, "folder_key", ""),
         "fontSpans": [
             {
                 "start": int(start),
@@ -928,6 +967,8 @@ def text_entry_from_dict(entry, data: dict[str, Any]) -> None:
     entry.parent_balloon_id = data.get("parentBalloonId", "")
     entry.parent_kind = data.get("parentKind", data.get("parent_kind", "page"))
     entry.parent_key = str(data.get("parentKey", data.get("parent_key", "")) or "")
+    if hasattr(entry, "folder_key"):
+        entry.folder_key = str(data.get("folderKey", data.get("folder_key", "")) or "")
     entry.font_spans.clear()
     for item in data.get("fontSpans", []):
         span = entry.font_spans.add()

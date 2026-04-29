@@ -22,6 +22,7 @@ from bpy.props import (
 from ..utils import log
 from .balloon import BNameBalloonEntry
 from .coma import BNameComaEntry
+from .layer_folder import BNameLayerFolder
 from .page import BNamePageEntry
 from .paper import BNamePaperSettings
 from .safe_area_overlay import BNameSafeAreaOverlay
@@ -96,6 +97,7 @@ class BNameWorkData(bpy.types.PropertyGroup):
     shared_balloons: CollectionProperty(type=BNameBalloonEntry)  # type: ignore[valid-type]
     shared_texts: CollectionProperty(type=BNameTextEntry)  # type: ignore[valid-type]
     shared_comas: CollectionProperty(type=BNameComaEntry)  # type: ignore[valid-type]
+    layer_folders: CollectionProperty(type=BNameLayerFolder)  # type: ignore[valid-type]
 
 
 # ----- Scene attach ヘルパ -----

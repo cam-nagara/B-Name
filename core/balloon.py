@@ -148,6 +148,7 @@ class BNameBalloonEntry(bpy.types.PropertyGroup):
     merge_group_id: StringProperty(name="結合フォルダ ID", default="")  # type: ignore[valid-type]
     parent_kind: StringProperty(name="親種別", default="page")  # type: ignore[valid-type]
     parent_key: StringProperty(name="親キー", default="")  # type: ignore[valid-type]
+    folder_key: StringProperty(name="レイヤーフォルダ", default="")  # type: ignore[valid-type]
     selected: BoolProperty(name="選択", default=False, options={"SKIP_SAVE"})  # type: ignore[valid-type]
 
     # 反転 / 不透明度 (Meldex flipH/flipV/opacity 相当)

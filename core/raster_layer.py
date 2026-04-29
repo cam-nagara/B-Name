@@ -95,6 +95,7 @@ class BNameRasterLayer(bpy.types.PropertyGroup):
         default="page",
     )
     parent_key: StringProperty(name="親キー", default="")  # type: ignore[valid-type]
+    folder_key: StringProperty(name="レイヤーフォルダ", default="")  # type: ignore[valid-type]
 
 
 _CLASSES = (BNameRasterLayer,)

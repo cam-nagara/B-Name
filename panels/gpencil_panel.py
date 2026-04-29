@@ -95,6 +95,7 @@ def _kind_icon(kind: str) -> str:
         "coma": "MOD_WIREFRAME",
         "gp": "OUTLINER_OB_GREASEPENCIL",
         "gp_folder": "FILE_FOLDER",
+        "layer_folder": "FILE_FOLDER",
         "image": "IMAGE_DATA",
         "raster": "BRUSH_DATA",
         "balloon_group": "FILE_FOLDER",
@@ -228,6 +229,17 @@ def _draw_hierarchy_slot(row, item, target, index: int) -> None:
         op.index = index
     elif item.kind == "gp_folder":
         expanded = bool(getattr(target, "is_expanded", True))
+        cell = row.row(align=True)
+        cell.ui_units_x = 1.0
+        op = cell.operator(
+            "bname.layer_stack_toggle_expanded",
+            text="",
+            emboss=False,
+            icon="DISCLOSURE_TRI_DOWN" if expanded else "DISCLOSURE_TRI_RIGHT",
+        )
+        op.index = index
+    elif item.kind == "layer_folder":
+        expanded = bool(getattr(target, "expanded", True))
         cell = row.row(align=True)
         cell.ui_units_x = 1.0
         op = cell.operator(
@@ -376,7 +388,10 @@ def _draw_stack_data_row(row, controls, item, resolved, index: int) -> None:
         _draw_type_icon(row, index, _kind_icon(item.kind))
         _select_name(row, index, item.label)
         return
-    if item.kind == "image":
+    if item.kind == "layer_folder":
+        _draw_type_icon(row, index, "FILE_FOLDER")
+        _select_name(row, index, getattr(target, "title", "") or item.label)
+    elif item.kind == "image":
         _draw_type_icon(row, index, "IMAGE_DATA")
         _select_name(row, index, getattr(target, "title", "") or item.label)
         controls["aux"] = "lock"

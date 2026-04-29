@@ -11,6 +11,7 @@ from ..core.work import get_active_page, get_work
 from . import gp_layer_parenting as gp_parent
 from . import edge_selection
 from . import gpencil as gp_utils
+from . import layer_folder as layer_folder_utils
 from . import log
 from .layer_hierarchy import (
     PAGE_KIND,
@@ -29,6 +30,7 @@ _logger = log.get_logger(__name__)
 
 EFFECT_GP_OBJECT_NAME = "BName_EffectLines"
 PAGE_COMA_CHILD_KINDS = {"gp", "effect", "raster", "image", "balloon", "text"}
+LAYER_FOLDER_KIND = layer_folder_utils.LAYER_FOLDER_KIND
 _sync_scheduled = False
 _sync_should_apply_order = False
 _sync_order_moved_uid = ""
@@ -512,6 +514,80 @@ def _collect_page_layer_targets(
     return targets
 
 
+def _collect_layer_folder_targets(work) -> list[LayerTarget]:
+    if work is None:
+        return []
+    depths = layer_folder_utils.folder_depths(work)
+    targets: list[LayerTarget] = []
+    for folder in reversed(list(getattr(work, "layer_folders", []))):
+        key = layer_folder_utils.folder_key(folder)
+        if not key or key not in depths:
+            continue
+        if layer_folder_utils.folder_has_collapsed_ancestor(work, key):
+            continue
+        parent_key = layer_folder_utils.folder_parent_key(folder)
+        if not _layer_folder_parent_visible(work, parent_key):
+            continue
+        label = str(getattr(folder, "title", "") or key)
+        targets.append(LayerTarget(LAYER_FOLDER_KIND, key, label, parent_key, depths[key]))
+    return targets
+
+
+def _layer_folder_parent_visible(work, parent_key: str) -> bool:
+    return _layer_folder_parent_visible_impl(work, parent_key, set())
+
+
+def _layer_folder_parent_visible_impl(work, parent_key: str, seen: set[str]) -> bool:
+    parent_key = str(parent_key or "") or OUTSIDE_STACK_KEY
+    if parent_key == OUTSIDE_STACK_KEY:
+        return True
+    if parent_key in seen:
+        return False
+    seen.add(parent_key)
+    parent_folder = layer_folder_utils.find_folder(work, parent_key)
+    if parent_folder is not None:
+        return (
+            bool(getattr(parent_folder, "expanded", True))
+            and not layer_folder_utils.folder_has_collapsed_ancestor(work, parent_key)
+            and _layer_folder_parent_visible_impl(work, layer_folder_utils.folder_parent_key(parent_folder), seen)
+        )
+    page_key, _child = split_child_key(parent_key)
+    for page in getattr(work, "pages", []):
+        if page_stack_key(page) == page_key:
+            return bool(getattr(page, "stack_expanded", True))
+    return False
+
+
+def _retarget_targets_to_layer_folders(context, targets: list[LayerTarget]) -> list[LayerTarget]:
+    work = get_work(context)
+    if work is None:
+        return targets
+    depths = layer_folder_utils.folder_depths(work)
+    if not depths:
+        return targets
+    out: list[LayerTarget] = []
+    for target in targets:
+        if target.kind not in layer_folder_utils.FOLDER_CHILD_KINDS:
+            out.append(target)
+            continue
+        folder_key = layer_folder_utils.target_folder_key(context, target.kind, target.key)
+        if folder_key not in depths:
+            out.append(target)
+            continue
+        if not layer_folder_utils.folder_children_visible(work, folder_key):
+            continue
+        out.append(
+            LayerTarget(
+                target.kind,
+                target.key,
+                target.label,
+                folder_key,
+                depths[folder_key] + 1,
+            )
+        )
+    return out
+
+
 def _partition_gp_targets(
     obj,
     work,
@@ -610,6 +686,10 @@ def collect_targets(context) -> list[LayerTarget]:
         targets.extend(effect_root_targets)
         targets.extend(gp_root_targets)
 
+    if work is not None and getattr(work, "loaded", False):
+        targets.extend(_collect_layer_folder_targets(work))
+        targets = _retarget_targets_to_layer_folders(context, targets)
+
     # 防御: 万一 UID 重複が混入してもスタックには 1 行しか出さない。
     # (per-panel 呼び出しと spatial fallback の組合せで重複が紛れ込むケースの保険)
     seen: set[str] = set()
@@ -638,7 +718,7 @@ def _find_insert_index_for_target(stack, target: LayerTarget) -> int:
         parent_idx = -1
         last_child_idx = -1
         for i, item in enumerate(stack):
-            if item.key == target.parent_key and item.kind in {OUTSIDE_KIND, PAGE_KIND, COMA_KIND, "gp_folder", "balloon_group"}:
+            if item.key == target.parent_key and item.kind in {OUTSIDE_KIND, PAGE_KIND, COMA_KIND, "gp_folder", "balloon_group", LAYER_FOLDER_KIND}:
                 parent_idx = i
                 last_child_idx = max(last_child_idx, i)
             elif getattr(item, "parent_key", "") == target.parent_key:
@@ -724,7 +804,7 @@ def _normalize_tree_order(
                 continue
             _append_uid(child)
             kind = getattr(child, "kind", "")
-            if kind in {OUTSIDE_KIND, COMA_KIND, "balloon_group", "gp_folder"}:
+            if kind in {OUTSIDE_KIND, COMA_KIND, "balloon_group", "gp_folder", LAYER_FOLDER_KIND}:
                 _append_subtree_in_stack_order(getattr(child, "key", ""))
 
     def _append_page_subtree(page_item) -> None:
@@ -752,7 +832,7 @@ def _normalize_tree_order(
                 ):
                     _append_uid(child)
                     kind = getattr(child, "kind", "")
-                    if kind in {"balloon_group", "gp_folder"}:
+                    if kind in {"balloon_group", "gp_folder", LAYER_FOLDER_KIND}:
                         _append_subtree_in_stack_order(child.key)
         else:
             # デフォルト: スタック順を尊重。ページ直下の子(ページ直下 GP, コマ等)
@@ -913,6 +993,12 @@ def _same_move_scope(a, b) -> bool:
             and str(getattr(a, "parent_key", "") or "")
             == str(getattr(b, "parent_key", "") or "")
         )
+    if a_kind == LAYER_FOLDER_KIND or b_kind == LAYER_FOLDER_KIND:
+        return (
+            a_kind == b_kind == LAYER_FOLDER_KIND
+            and str(getattr(a, "parent_key", "") or "")
+            == str(getattr(b, "parent_key", "") or "")
+        )
     return (
         a_kind == b_kind
         and str(getattr(a, "parent_key", "") or "")
@@ -967,13 +1053,15 @@ def _target_index_for_stack_move(
 def _parent_item_allows_child(parent, child_kind: str) -> bool:
     parent_kind = getattr(parent, "kind", "")
     if parent_kind == OUTSIDE_KIND:
-        return child_kind in PAGE_COMA_CHILD_KINDS or child_kind in {COMA_KIND, "gp_folder"}
+        return child_kind in PAGE_COMA_CHILD_KINDS or child_kind in {COMA_KIND, "gp_folder", LAYER_FOLDER_KIND}
     if parent_kind == PAGE_KIND:
-        return child_kind in PAGE_COMA_CHILD_KINDS or child_kind == COMA_KIND
+        return child_kind in PAGE_COMA_CHILD_KINDS or child_kind in {COMA_KIND, LAYER_FOLDER_KIND}
     if parent_kind == COMA_KIND:
-        return child_kind in PAGE_COMA_CHILD_KINDS
+        return child_kind in PAGE_COMA_CHILD_KINDS or child_kind == LAYER_FOLDER_KIND
     if parent_kind == "gp_folder":
         return child_kind in {"gp", "gp_folder"}
+    if parent_kind == LAYER_FOLDER_KIND:
+        return child_kind in layer_folder_utils.FOLDER_CONTAINER_CHILD_KINDS
     return False
 
 
@@ -982,10 +1070,14 @@ def _parent_key_exists_for_child(context, child_kind: str, parent_key: str) -> b
     if not parent_key:
         return True
     if parent_key == OUTSIDE_STACK_KEY:
-        return child_kind in PAGE_COMA_CHILD_KINDS or child_kind in {COMA_KIND, "gp_folder"}
+        return child_kind in PAGE_COMA_CHILD_KINDS or child_kind in {COMA_KIND, "gp_folder", LAYER_FOLDER_KIND}
+    if layer_folder_utils.is_folder_key(context, parent_key):
+        return child_kind in layer_folder_utils.FOLDER_CONTAINER_CHILD_KINDS
     if child_kind == COMA_KIND:
         return ":" not in parent_key and gp_parent.parent_key_exists(get_work(context), parent_key)
     work = get_work(context)
+    if child_kind == LAYER_FOLDER_KIND and gp_parent.parent_key_exists(work, parent_key):
+        return True
     if child_kind in PAGE_COMA_CHILD_KINDS and gp_parent.parent_key_exists(work, parent_key):
         return True
     if child_kind in {"gp", "gp_folder"}:
@@ -1026,6 +1118,7 @@ def _is_stack_folder_descendant(stack, ancestor_key: str, candidate_key: str) ->
 def _parent_key_one_level_up(stack, parent_key: str) -> str:
     parent = (
         _find_stack_item(stack, OUTSIDE_KIND, parent_key)
+        or _find_stack_item(stack, LAYER_FOLDER_KIND, parent_key)
         or
         _find_stack_item(stack, "gp_folder", parent_key)
         or _find_stack_item(stack, COMA_KIND, parent_key)
@@ -1049,7 +1142,7 @@ def _drop_parent_from_nesting_delta(stack, item, moved_index: int, nesting_delta
     return _parent_key_from_flat_drop(stack, moved_index, getattr(item, "kind", ""))
 
 
-def _stack_item_page_key(item) -> str:
+def _stack_item_page_key(item, context=None) -> str:
     """スタック行が属するページキーを返す。ページ非依存なら "" を返す.
 
     - balloon / text / balloon_group: 行 key が ``page_id:child_id`` 形式
@@ -1070,6 +1163,13 @@ def _stack_item_page_key(item) -> str:
         page_key, _ = split_child_key(parent_key)
         if page_key == OUTSIDE_STACK_KEY:
             return ""
+        return page_key
+    if kind == LAYER_FOLDER_KIND:
+        work = get_work(context or bpy.context)
+        semantic_parent = layer_folder_utils.semantic_parent_key_for_folder(work, key)
+        if semantic_parent == OUTSIDE_STACK_KEY:
+            return ""
+        page_key, _ = split_child_key(semantic_parent)
         return page_key
     return ""
 
@@ -1094,12 +1194,38 @@ def _apply_stack_drop_hint(context, moved_uid: str, *, nesting_delta: int = 0) -
         return False
     item = stack[moved_index]
     kind = getattr(item, "kind", "")
-    if kind not in {COMA_KIND, "gp", "gp_folder", "effect", "raster", "image", "balloon", "text"}:
+    if kind not in {COMA_KIND, "gp", "gp_folder", "effect", "raster", "image", "balloon", "text", LAYER_FOLDER_KIND}:
         return False
     parent_key = _drop_parent_from_nesting_delta(stack, item, moved_index, nesting_delta)
     old_parent_key = str(getattr(item, "parent_key", "") or "")
     if parent_key and not _parent_key_exists_for_child(context, kind, parent_key):
         return False
+    if layer_folder_utils.is_folder_key(context, parent_key):
+        if kind == LAYER_FOLDER_KIND:
+            changed = layer_folder_utils.set_folder_parent(context, str(getattr(item, "key", "") or ""), parent_key)
+            if changed:
+                item.parent_key = parent_key
+                parent = _find_stack_item(stack, LAYER_FOLDER_KIND, parent_key)
+                item.depth = int(getattr(parent, "depth", -1)) + 1 if parent is not None else int(getattr(item, "depth", 0))
+            return changed
+        if layer_folder_utils.is_folder_child_kind(kind):
+            return layer_folder_utils.assign_item_to_folder(context, item, parent_key)
+        return False
+    if kind == LAYER_FOLDER_KIND:
+        changed = layer_folder_utils.set_folder_parent(
+            context,
+            str(getattr(item, "key", "") or ""),
+            parent_key or OUTSIDE_STACK_KEY,
+        )
+        if changed:
+            item.parent_key = parent_key or OUTSIDE_STACK_KEY
+            parent = (
+                _find_stack_item(stack, OUTSIDE_KIND, item.parent_key)
+                or _find_stack_item(stack, PAGE_KIND, item.parent_key)
+                or _find_stack_item(stack, COMA_KIND, item.parent_key)
+            )
+            item.depth = int(getattr(parent, "depth", -1)) + 1 if parent is not None else 0
+        return changed
     if kind != "gp_folder":
         try:
             from . import layer_stack_dnd
@@ -1108,14 +1234,21 @@ def _apply_stack_drop_hint(context, moved_uid: str, *, nesting_delta: int = 0) -
                 layer_stack_dnd.child_can_use_semantic_parent(kind)
                 and layer_stack_dnd.is_semantic_parent_key(context, parent_key)
             ):
-                return layer_stack_dnd.apply_semantic_parent_drop(context, item, parent_key)
+                old_folder_key = old_parent_key if layer_folder_utils.is_folder_key(context, old_parent_key) else ""
+                folder_changed = False
+                if old_folder_key and layer_folder_utils.is_folder_child_kind(kind):
+                    folder_changed = layer_folder_utils.set_item_folder_key(context, item, "")
+                changed = layer_stack_dnd.apply_semantic_parent_drop(context, item, parent_key)
+                if old_folder_key and not changed and not folder_changed:
+                    layer_folder_utils.set_item_folder_key(context, item, old_folder_key)
+                return bool(changed or folder_changed)
         except Exception:  # noqa: BLE001
             _logger.exception("semantic layer stack D&D parent drop failed")
             return False
     # ここから下は gp_folder など、実コレクション移送を伴わない従来の親キー更新。
     # page/coma/outside への意味的な D&D は上で layer_reparent に委譲済み。
     # フォールバック経路ではページをまたぐ単純 parent_key 書き換えを拒否する。
-    entry_page = _stack_item_page_key(item)
+    entry_page = _stack_item_page_key(item, context)
     target_page = _parent_key_page(parent_key)
     if entry_page and target_page and entry_page != target_page:
         return False
@@ -1135,6 +1268,7 @@ def _apply_stack_drop_hint(context, moved_uid: str, *, nesting_delta: int = 0) -
     if parent_key:
         parent = (
             _find_stack_item(stack, "gp_folder", parent_key)
+            or _find_stack_item(stack, LAYER_FOLDER_KIND, parent_key)
             or _find_stack_item(stack, OUTSIDE_KIND, parent_key)
             or _find_stack_item(stack, PAGE_KIND, parent_key)
             or _find_stack_item(stack, COMA_KIND, parent_key)
@@ -1290,6 +1424,10 @@ def _active_key_from_scene(context) -> tuple[str, str] | None:
             key = _node_stack_key(group)
             scene.bname_active_gp_folder_key = key
             return "gp_folder", key
+    if kind == LAYER_FOLDER_KIND:
+        key = str(getattr(scene, "bname_active_layer_folder_key", "") or "")
+        if layer_folder_utils.is_folder_key(context, key):
+            return LAYER_FOLDER_KIND, key
     if kind == "image":
         coll = getattr(scene, "bname_image_layers", None)
         idx = int(getattr(scene, "bname_active_image_layer_index", -1))
@@ -1636,6 +1774,13 @@ def resolve_stack_item(context, item):
         groups = getattr(getattr(obj, "data", None), "layer_groups", None)
         target = _find_gp_group_by_key(groups, key)
         return {"kind": kind, "target": target, "object": obj, "index": -1}
+    if kind == LAYER_FOLDER_KIND:
+        if work is None:
+            return None
+        for idx, folder in enumerate(getattr(work, "layer_folders", [])):
+            if layer_folder_utils.folder_key(folder) == key:
+                return {"kind": kind, "target": folder, "object": None, "index": idx}
+        return {"kind": kind, "target": None, "object": None, "index": -1}
     if kind == "image":
         coll = getattr(scene, "bname_image_layers", None)
         if coll is None:
@@ -1943,6 +2088,20 @@ def select_stack_index(context, index: int) -> bool:
         scene.bname_active_gp_folder_key = item.key
         scene.bname_active_layer_kind = "gp_folder"
         edge_selection.clear_selection(context)
+    elif kind == LAYER_FOLDER_KIND:
+        folder_key = str(getattr(item, "key", "") or "")
+        if hasattr(scene, "bname_active_layer_folder_key"):
+            scene.bname_active_layer_folder_key = folder_key
+        scene.bname_active_gp_folder_key = ""
+        scene.bname_active_layer_kind = LAYER_FOLDER_KIND
+        work = get_work(context)
+        semantic_parent = layer_folder_utils.semantic_parent_key_for_folder(work, folder_key)
+        if work is not None and semantic_parent and semantic_parent != OUTSIDE_STACK_KEY:
+            page_key, _child = split_child_key(semantic_parent)
+            idx, _page = _find_by_id(getattr(work, "pages", []), page_key)
+            if 0 <= idx < len(work.pages):
+                work.active_page_index = idx
+        edge_selection.clear_selection(context)
     elif kind == "image":
         scene.bname_active_image_layer_index = int(resolved.get("index", -1))
         scene.bname_active_gp_folder_key = ""
@@ -2221,6 +2380,11 @@ def _apply_simple_collection_orders(context, stack) -> None:
     work = get_work(context)
     if work is None:
         return
+
+    layer_folders = getattr(work, "layer_folders", None)
+    if layer_folders is not None:
+        front = [item.key for item in stack if item.kind == LAYER_FOLDER_KIND]
+        _reorder_collection(layer_folders, list(reversed(front)), lambda entry: entry.id)
 
     shared_balloons = getattr(work, "shared_balloons", None)
     if shared_balloons is not None:
@@ -2634,6 +2798,12 @@ def delete_stack_index(context, index: int) -> bool:
         if not gp_utils.remove_layer_group_preserve_children(obj.data, resolved["target"]):
             return False
         scene.bname_active_gp_folder_key = ""
+    elif kind == LAYER_FOLDER_KIND:
+        work = get_work(context)
+        if work is None or not layer_folder_utils.remove_folder_preserve_children(work, item.key):
+            return False
+        if hasattr(scene, "bname_active_layer_folder_key"):
+            scene.bname_active_layer_folder_key = ""
     elif kind == "image":
         coll = getattr(scene, "bname_image_layers", None)
         idx = int(resolved.get("index", -1))

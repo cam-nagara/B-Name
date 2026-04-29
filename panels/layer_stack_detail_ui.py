@@ -401,6 +401,14 @@ def _draw_effect_selected_settings(box, context, obj, active_layer) -> None:
     box.operator("bname.effect_line_generate", text="効果線を追加", icon="STROKE")
 
 
+def _draw_layer_folder_selected_settings(box, entry) -> None:
+    settings = box.column(align=True)
+    settings.label(text=f"選択中: {getattr(entry, 'title', '') or getattr(entry, 'id', '')} (汎用フォルダ)", icon="FILE_FOLDER")
+    settings.prop(entry, "title", text="名前")
+    settings.prop(entry, "expanded", text="展開")
+    settings.label(text=f"親: {getattr(entry, 'parent_key', '') or 'ページ外'}")
+
+
 def _draw_page_selected_settings(box, context, entry) -> None:
     settings = box.column(align=True)
     settings.label(
@@ -461,6 +469,8 @@ def draw_stack_item_detail(layout, context, item, resolved) -> bool:
         _draw_text_selected_settings(box, context, target)
     elif kind == "effect":
         _draw_effect_selected_settings(box, context, obj, target)
+    elif kind == "layer_folder":
+        _draw_layer_folder_selected_settings(box, target)
     elif kind == "gp_folder":
         box.label(text=f"選択中: {target.name} (フォルダ)", icon="FILE_FOLDER")
         box.prop(target, "name", text="名前")

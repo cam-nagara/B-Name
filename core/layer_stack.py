@@ -16,6 +16,7 @@ LAYER_KIND_ITEMS = (
     ("coma", "コマ", ""),
     ("gp", "グリースペンシル", ""),
     ("gp_folder", "フォルダ", ""),
+    ("layer_folder", "汎用フォルダ", ""),
     ("image", "画像", ""),
     ("raster", "ラスター", ""),
     ("balloon_group", "フキダシフォルダ", ""),
@@ -29,6 +30,7 @@ ACTIVE_LAYER_KIND_ITEMS = (
     ("coma", "コマ", ""),
     ("gp", "グリースペンシル", ""),
     ("gp_folder", "フォルダ", ""),
+    ("layer_folder", "汎用フォルダ", ""),
     ("image", "画像", ""),
     ("raster", "ラスター", ""),
     ("balloon", "フキダシ", ""),
@@ -114,6 +116,7 @@ def register() -> None:
         default="gp",
     )
     bpy.types.Scene.bname_active_gp_folder_key = StringProperty(default="")
+    bpy.types.Scene.bname_active_layer_folder_key = StringProperty(default="")
     bpy.types.Scene.bname_active_effect_layer_name = StringProperty(default="")
     _logger.debug("layer_stack registered")
 
@@ -121,6 +124,7 @@ def register() -> None:
 def unregister() -> None:
     for attr in (
         "bname_active_effect_layer_name",
+        "bname_active_layer_folder_key",
         "bname_active_gp_folder_key",
         "bname_active_layer_kind",
         "bname_active_layer_stack_index",

@@ -122,6 +122,7 @@ class BNameTextEntry(bpy.types.PropertyGroup):
     # レイヤーリスト上のページ/コマ親子付け。空の旧データは位置から親を推定する。
     parent_kind: StringProperty(name="親種別", default="page")  # type: ignore[valid-type]
     parent_key: StringProperty(name="親キー", default="")  # type: ignore[valid-type]
+    folder_key: StringProperty(name="レイヤーフォルダ", default="")  # type: ignore[valid-type]
     speaker_type: EnumProperty(  # type: ignore[valid-type]
         name="セリフ種別",
         items=_SPEAKER_TYPE_ITEMS,

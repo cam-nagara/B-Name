@@ -149,6 +149,10 @@ class BNAME_OT_work_new(Operator, ExportHelper):
 
         # 既存の作品データをリセットしてから新規作成
         work.pages.clear()
+        for attr in ("shared_balloons", "shared_texts", "shared_comas", "layer_folders"):
+            coll = getattr(work, attr, None)
+            if coll is not None:
+                coll.clear()
         raster_layers = getattr(context.scene, "bname_raster_layers", None)
         if raster_layers is not None:
             try:
@@ -476,6 +480,10 @@ class BNAME_OT_work_close(Operator):
         except Exception:  # noqa: BLE001
             _logger.exception("work_close: page collection cleanup failed")
         work.pages.clear()
+        for attr in ("shared_balloons", "shared_texts", "shared_comas", "layer_folders"):
+            coll = getattr(work, attr, None)
+            if coll is not None:
+                coll.clear()
         work.active_page_index = -1
         work.loaded = False
         work.work_dir = ""
