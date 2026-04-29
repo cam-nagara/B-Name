@@ -89,6 +89,12 @@ def flash_confirm(kind: str, *, page_id: str = "", coma_id: str = "", page_index
 
 
 def flash_error(kind: str, *, page_id: str = "", coma_id: str = "", page_index: int = -1, duration: float = 0.3) -> None:
+    """エラーを赤点滅で表示する。kind=page で page_id が空のときは描画ターゲットが
+    無いので、状態を残さずに早期リターン (将来 page-less な視覚エフェクトに拡張可能)."""
+    if kind == "page" and not page_id:
+        return
+    if kind == "coma" and not (page_id and coma_id):
+        return
     _state.error_kind = str(kind or "")
     _state.error_page_id = str(page_id or "")
     _state.error_coma_id = str(coma_id or "")

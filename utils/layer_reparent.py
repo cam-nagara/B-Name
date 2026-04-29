@@ -375,9 +375,14 @@ def _reparent_balloon(context, item, target: ClickTarget, new_parent_key: str, n
             return False
         return True
     # 別ページへ移動: balloon entry を別 page.balloons へ複製 + 元削除
+    from ..operators.balloon_op import _allocate_balloon_id
+
+    # 衝突回避のため移動先で新規 id を採番 (例: dst にすでに同じ id がある場合)
+    existing_dst_ids = {str(getattr(b, "id", "") or "") for b in dst_page.balloons}
+    final_id = balloon_id if balloon_id and balloon_id not in existing_dst_ids else _allocate_balloon_id(dst_page)
     new_entry = dst_page.balloons.add()
     schema.balloon_entry_from_dict(new_entry, schema.balloon_entry_to_dict(src_entry))
-    new_entry.id = balloon_id
+    new_entry.id = final_id
     new_entry.parent_kind = "coma" if target.kind == "coma" else "page"
     new_entry.parent_key = new_parent_key
     # 位置調整 (ページ間オフセットを差し引く)
@@ -388,11 +393,11 @@ def _reparent_balloon(context, item, target: ClickTarget, new_parent_key: str, n
         # ユーザー要求「位置を動かさない」を満たすには、世界座標を維持する必要がある
         # → src ページのオフセット - dst ページのオフセット を加算して entry x/y を補正
         _shift_entry_for_page_change(context, src_page, dst_page, new_entry)
-    # 子テキストも別ページへ移送
-    _move_child_texts_across_page(context, src_page, dst_page, balloon_id)
-    # 元 page から削除
+    # 子テキストも別ページへ移送 (新 balloon_id を使うので付け替え)
+    _move_child_texts_across_page(context, src_page, dst_page, balloon_id, final_id)
+    # 元 page から削除 (Blender wrapper の `is` 比較は unstable なので id でマッチ)
     for i, e in enumerate(src_page.balloons):
-        if e is src_entry:
+        if str(getattr(e, "id", "") or "") == balloon_id:
             src_page.balloons.remove(i)
             break
     return True
@@ -436,17 +441,22 @@ def _reparent_text(context, item, target: ClickTarget, new_parent_key: str, new_
             return False
         return True
     # 別ページ
+    from ..operators.text_op import _allocate_text_id
+
+    existing_dst_ids = {str(getattr(t, "id", "") or "") for t in dst_page.texts}
+    final_id = text_id if text_id and text_id not in existing_dst_ids else _allocate_text_id(dst_page)
     new_entry = dst_page.texts.add()
     schema.text_entry_from_dict(new_entry, schema.text_entry_to_dict(src_entry))
-    new_entry.id = text_id
+    new_entry.id = final_id
     new_entry.parent_kind = "coma" if target.kind == "coma" else "page"
     new_entry.parent_key = new_parent_key
     if new_world_xy_mm is not None:
         _move_entry_position_local(new_entry, dst_page, target, new_world_xy_mm)
     else:
         _shift_entry_for_page_change(context, src_page, dst_page, new_entry)
+    # 元削除 (id でマッチ)
     for i, e in enumerate(src_page.texts):
-        if e is src_entry:
+        if str(getattr(e, "id", "") or "") == text_id:
             src_page.texts.remove(i)
             break
     return True
@@ -635,27 +645,44 @@ def _shift_entry_for_page_change(context, src_page, dst_page, dst_entry) -> None
         pass
 
 
-def _move_child_texts_across_page(context, src_page, dst_page, balloon_id: str) -> None:
-    """別ページへフキダシを送るときに、その子テキスト (parent_balloon_id == balloon_id) も
-    一緒に dst_page に移送する.
+def _move_child_texts_across_page(context, src_page, dst_page, balloon_id: str, new_balloon_id: str = "") -> None:
+    """別ページへフキダシを送るときに、その子テキスト (parent_balloon_id == balloon_id)
+    を一緒に dst_page に移送する.
+
+    new_balloon_id: 移送先ページで balloon が衝突回避のため別 id に採番されたとき、
+    子テキストの parent_balloon_id をそちらに付け替える。空なら旧 id を維持.
     """
     from ..io import schema
+    from ..operators.text_op import _allocate_text_id
 
     if src_page is None or dst_page is None or not balloon_id:
         return
-    moved = []
-    for entry in list(src_page.texts):
-        if str(getattr(entry, "parent_balloon_id", "") or "") != balloon_id:
+    target_balloon_id = str(new_balloon_id or balloon_id)
+    # まず移送対象のテキスト id を集める (移送中に collection が変動するため snapshot)
+    target_text_ids = [
+        str(getattr(entry, "id", "") or "")
+        for entry in src_page.texts
+        if str(getattr(entry, "parent_balloon_id", "") or "") == balloon_id
+    ]
+    for text_id in target_text_ids:
+        # src_page から取り出す (id でマッチ)
+        src_entry = None
+        for e in src_page.texts:
+            if str(getattr(e, "id", "") or "") == text_id:
+                src_entry = e
+                break
+        if src_entry is None:
             continue
+        existing_dst_ids = {str(getattr(t, "id", "") or "") for t in dst_page.texts}
+        final_id = text_id if text_id and text_id not in existing_dst_ids else _allocate_text_id(dst_page)
         new_entry = dst_page.texts.add()
-        schema.text_entry_from_dict(new_entry, schema.text_entry_to_dict(entry))
-        new_entry.id = str(getattr(entry, "id", "") or "")
-        new_entry.parent_balloon_id = balloon_id
+        schema.text_entry_from_dict(new_entry, schema.text_entry_to_dict(src_entry))
+        new_entry.id = final_id
+        new_entry.parent_balloon_id = target_balloon_id
         # 位置補正
         _shift_entry_for_page_change(context, src_page, dst_page, new_entry)
-        moved.append(entry)
-    for entry in moved:
+        # 元削除 (id でマッチ)
         for i, e in enumerate(src_page.texts):
-            if e is entry:
+            if str(getattr(e, "id", "") or "") == text_id:
                 src_page.texts.remove(i)
                 break

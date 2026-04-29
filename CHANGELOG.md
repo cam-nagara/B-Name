@@ -3,6 +3,29 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-30 — ビューポート Alt 系 reparent の徹底チェック修正
+
+### 修正
+- **クリティカル**: cross-page balloon/text 移送時の **id 衝突によるデータ重複**を修正。
+  移送先ページに同じ id がある場合、`_allocate_balloon_id` / `_allocate_text_id` で
+  新規 id を採番する。子テキストも同様に衝突回避し、balloon の new_id への
+  parent_balloon_id 付け替えを実装
+- **クリティカル**: `_reparent_balloon` / `_reparent_text` / `_move_child_texts_across_page`
+  の元エントリ削除を `if e is src_entry` (Blender wrapper の `is` 比較は不安定) から
+  `id` での文字列マッチに置換。これで src ページに古いエントリが残ったまま
+  新ページにも複製される重複バグを根本対策
+- `flash_error("page", page_id="")` の no-target 呼び出しは状態を残さず早期リターン
+
+### 既知の制限事項 (Phase A)
+- balloon_tool / text_tool / object_tool 等の **modal 中の Alt+LEFTMOUSE は当該ツールが
+  先取り** する (balloon_tool は Alt+クリックを「テールドラッグ」に使用)。Alt+ドラッグの
+  reparent はデフォルトモード (オブジェクトモード/ページモード) でのみ機能。ツール中
+  の Alt 系 reparent は別タスクで対応予定
+- Cross-page reparent 後、移動したレイヤーの stack uid が変わるため、マルチセレクト
+  状態 / アクティブ行の追従が失われる場合がある
+- `BNAME_OT_coma_move_to_page` 経由のコマ別ページ移送は work.active_page_index を
+  変更するため、ビューが意図せず切り替わる場合がある
+
 ## 2026-04-30 — ビューポート Alt 系 reparent (フェーズ A)
 
 ビューポート上の Alt+ドラッグ / Alt+クリック / Alt+Shift+クリックで、選択中の
