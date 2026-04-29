@@ -78,8 +78,14 @@ def _get_prefs():
 
 
 def _indent(row, depth: int) -> None:
+    """階層インデント。1 階層あたり約 1 文字分 (factor 2.0) ずらす.
+
+    `row.separator(factor=N)` は ``N * 0.5 ui-unit`` の幅を空けるため、factor=2.0
+    でおよそ 1 文字分。旧実装は 1.25 で半文字弱しかインデントせず、階層が
+    視認しづらかった。
+    """
     if depth > 0:
-        row.separator(factor=1.25 * depth)
+        row.separator(factor=2.0 * depth)
 
 
 def _kind_icon(kind: str) -> str:
@@ -117,12 +123,20 @@ def _select_icon(row, index: int, icon: str) -> None:
 def _select_name(row, index: int, text: str) -> None:
     """名前ラベルを描画。
 
-    クリックは ``template_list`` の既定動作で行選択 (active_index 更新)、
-    そのまま行をドラッグした場合は内蔵の row reorder で並び替えが起きる。
+    名前領域を ``bname.layer_stack_drag`` のクリックハンドルにする。
+    オペレーター側で「クリックだけ (mouse_prev_press と mouse_x/y がほぼ同じ)」
+    か「ドラッグ (有意な移動)」を判定し、前者なら選択のみ、後者ならリリース時の
+    Y デルタから移動先を決めて即座に並び替える。
     """
     cell = row.row(align=True)
     cell.alignment = "LEFT"
-    cell.label(text=text or "")
+    cell.operator_context = "INVOKE_DEFAULT"
+    op = cell.operator(
+        "bname.layer_stack_drag",
+        text=text or "",
+        emboss=False,
+    )
+    op.index = index
 
 
 def _select_icon_name(row, index: int, text: str, icon: str) -> None:

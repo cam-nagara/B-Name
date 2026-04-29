@@ -332,31 +332,14 @@ class BNAME_OT_layer_stack_move(Operator):
 class BNAME_OT_layer_stack_drag(Operator):
     bl_idname = "bname.layer_stack_drag"
     bl_label = "レイヤーをドラッグ移動"
-    bl_options = {"REGISTER", "UNDO", "BLOCKING"}
+    bl_description = "クリックで選択、ドラッグで並び替え"
+    bl_options = {"REGISTER", "UNDO"}
 
     index: IntProperty(default=-1)  # type: ignore[valid-type]
 
     _moved_uid: str
-    _initial_order: tuple[str, ...]
-    _initial_parents: dict[str, str]
-    _start_y: float
-    _start_x: float
-    _row_height: float
-    _indent_width: float
-    _last_nesting_delta: int
-    _last_nesting_anchor: str
-    _current_index: int
-    _dragged: bool
-    _mouse_x: float
-    _mouse_y: float
-    _region_ptr: int
-    _drag_label: str
-    _drag_kind: str
-    _click_released: bool
 
-    # GPU draw (ドラッグ中インジケーター+プレビュー)
-    _draw_handle = None  # bpy.types.SpaceView3D draw handler
-    _draw_instance = None  # type: ignore[assignment]
+    DRAG_THRESHOLD_PX: float = 6.0  # この距離以上動いたらドラッグ扱い
 
     @classmethod
     def poll(cls, context):
@@ -364,183 +347,68 @@ class BNAME_OT_layer_stack_drag(Operator):
         return stack is not None and len(stack) > 0
 
     def invoke(self, context, event):
+        """ボタン invoke は RELEASE 時に呼ばれる。
+
+        - press 位置と release 位置の差が閾値未満ならクリック扱い → 選択だけ
+        - 閾値以上ならドラッグ扱い → Y デルタから新しい位置を計算して移動
+        """
         stack = layer_stack_utils.sync_layer_stack(context, preserve_active_index=True)
         if stack is None or not (0 <= self.index < len(stack)):
             return {"CANCELLED"}
-        self._moved_uid = layer_stack_utils.stack_item_uid(stack[self.index])
-        item = stack[self.index]
-        self._drag_label = str(getattr(item, "label", "") or getattr(item, "name", "") or "")
-        self._drag_kind = str(getattr(item, "kind", "") or "")
-        self._initial_order = tuple(layer_stack_utils.stack_item_uid(item) for item in stack)
-        self._initial_parents = {
-            layer_stack_utils.stack_item_uid(item): str(getattr(item, "parent_key", "") or "")
-            for item in stack
-        }
-        self._start_y = float(getattr(event, "mouse_region_y", 0.0))
-        self._start_x = float(getattr(event, "mouse_region_x", 0.0))
-        self._mouse_x = self._start_x
-        self._mouse_y = self._start_y
-        self._row_height = self._estimate_row_height(context)
-        self._indent_width = max(18.0, self._row_height * 0.9)
-        self._last_nesting_delta = 0
-        self._last_nesting_anchor = ""
-        self._current_index = self.index
-        self._dragged = False
-        # ボタン経由 invoke は RELEASE 時に呼ばれる。マウスが既に離されているか
-        # 判定し、コミット待ち方法 (PRESS or RELEASE) を切り替える。
-        self._click_released = bool(getattr(event, "value", "") == "RELEASE")
-        try:
-            region = getattr(context, "region", None)
-            self._region_ptr = int(region.as_pointer()) if region is not None else 0
-        except Exception:  # noqa: BLE001
-            self._region_ptr = 0
-        context.scene.bname_active_layer_stack_index = self.index
-        layer_stack_utils.remember_layer_stack_signature(context)
-        context.window_manager.modal_handler_add(self)
-        BNAME_OT_layer_stack_drag._start_drawing(self)
-        self._tag_ui_redraw(context)
-        return {"RUNNING_MODAL"}
 
-    def modal(self, context, event):
-        if event.type in {"ESC", "RIGHTMOUSE"} and event.value == "PRESS":
-            self._restore_initial_order(context)
-            self._finish(context, apply_order=True)
+        try:
+            press_x = float(getattr(event, "mouse_prev_press_x", getattr(event, "mouse_x", 0.0)))
+            press_y = float(getattr(event, "mouse_prev_press_y", getattr(event, "mouse_y", 0.0)))
+            cur_x = float(getattr(event, "mouse_x", press_x))
+            cur_y = float(getattr(event, "mouse_y", press_y))
+        except Exception:  # noqa: BLE001
+            press_x = press_y = cur_x = cur_y = 0.0
+
+        dx = cur_x - press_x
+        dy = cur_y - press_y
+
+        if abs(dx) < self.DRAG_THRESHOLD_PX and abs(dy) < self.DRAG_THRESHOLD_PX:
+            # クリック扱い: 選択だけ
+            layer_stack_utils.select_stack_index(context, self.index)
+            return {"FINISHED"}
+
+        # ドラッグ扱い: Y デルタから移動先 index を決める
+        row_height = self._estimate_row_height(context)
+        if row_height <= 0.0:
+            layer_stack_utils.select_stack_index(context, self.index)
             return {"CANCELLED"}
-        if event.type == "MOUSEMOVE":
-            try:
-                self._mouse_x = float(getattr(event, "mouse_region_x", self._mouse_x))
-                self._mouse_y = float(getattr(event, "mouse_region_y", self._mouse_y))
-            except Exception:  # noqa: BLE001
-                pass
-            self._drag_to_event(context, event)
-            self._tag_ui_redraw(context)
-            return {"RUNNING_MODAL"}
-        # ボタン経由 invoke ではマウスが既に離れているため、次の LEFTMOUSE PRESS
-        # でコミット。ホールド中ドラッグの場合は RELEASE でコミット。両方を
-        # 受けるようにすれば、どちらの起動経路でも 1 回の追加クリックで完了する。
-        if event.type == "LEFTMOUSE" and event.value in {"PRESS", "RELEASE"}:
-            # 起動 invoke の RELEASE と紛らわしいので、起動が PRESS なら同じ
-            # PRESS は無視 (まだホールド中)、RELEASE で commit。
-            if not self._click_released and event.value == "PRESS":
-                return {"RUNNING_MODAL"}
-            self._finish(context, apply_order=True)
-            return {"FINISHED" if self._dragged else "CANCELLED"}
-        return {"RUNNING_MODAL"}
+        # Blender UI の Y は上が大きい。ユーザーが下方向 (画面下) にドラッグした
+        # = dy が負 → リスト上で「後ろ (下)」へ移動 → offset 正。
+        offset = int(round(-dy / row_height))
+        target_index = max(0, min(len(stack) - 1, self.index + offset))
 
-    # ---------- GPU draw (drop indicator + drag preview) ----------
+        moved_uid = layer_stack_utils.stack_item_uid(stack[self.index])
+        if target_index == self.index:
+            layer_stack_utils.select_stack_index(context, self.index)
+            return {"FINISHED"}
 
-    @classmethod
-    def _start_drawing(cls, instance) -> None:
-        cls._draw_instance = instance
-        if cls._draw_handle is not None:
-            return
-        try:
-            cls._draw_handle = bpy.types.SpaceView3D.draw_handler_add(
-                cls._draw_callback, (), "UI", "POST_PIXEL"
-            )
-        except Exception:  # noqa: BLE001
-            cls._draw_handle = None
+        stack.move(self.index, target_index)
+        # 親キー更新 (CSP/PS 風: 直前行のコンテナを親に採用)
+        if not layer_stack_utils.apply_stack_drop_hint(
+            context, moved_uid, nesting_delta=0
+        ):
+            layer_stack_utils.apply_stack_order(context)
+        layer_stack_utils.sync_layer_stack(context, preserve_active_index=True)
 
-    @classmethod
-    def _stop_drawing(cls) -> None:
-        if cls._draw_handle is not None:
-            try:
-                bpy.types.SpaceView3D.draw_handler_remove(cls._draw_handle, "UI")
-            except Exception:  # noqa: BLE001
-                pass
-            cls._draw_handle = None
-        cls._draw_instance = None
+        # 移動後の位置を選択
+        for i, item in enumerate(context.scene.bname_layer_stack):
+            if layer_stack_utils.stack_item_uid(item) == moved_uid:
+                layer_stack_utils.select_stack_index(context, i)
+                break
 
-    @classmethod
-    def _draw_callback(cls) -> None:
-        instance = cls._draw_instance
-        if instance is None:
-            return
-        try:
-            instance._draw_overlay()
-        except Exception:  # noqa: BLE001
-            pass
+        layer_stack_utils.remember_layer_stack_signature(context)
+        self._tag_ui_redraw(context)
+        return {"FINISHED"}
 
-    def _draw_overlay(self) -> None:
-        """カーソル位置にドロップ位置の横線と、半透明レイヤーカードプレビューを描画."""
-        region = bpy.context.region
-        if region is None or region.type != "UI":
-            return
-        # 起動した region と同じところでだけ描画
-        try:
-            region_ptr = int(region.as_pointer())
-        except Exception:  # noqa: BLE001
-            region_ptr = 0
-        if self._region_ptr and region_ptr and region_ptr != self._region_ptr:
-            return
-
-        import gpu
-        from gpu_extras.batch import batch_for_shader
-
-        try:
-            shader = gpu.shader.from_builtin("UNIFORM_COLOR")
-        except Exception:  # noqa: BLE001
-            return
-
-        my = float(self._mouse_y)
-        mx = float(self._mouse_x)
-        rh = max(16.0, float(self._row_height))
-
-        gpu.state.blend_set("ALPHA")
-
-        # 1) 横線 (ドロップインジケーター)
-        line_color = (0.27, 0.6, 1.0, 0.9)
-        gpu.state.line_width_set(2.5)
-        line_coords = [(0.0, my), (float(region.width), my)]
-        batch = batch_for_shader(shader, "LINES", {"pos": line_coords})
-        shader.bind()
-        shader.uniform_float("color", line_color)
-        batch.draw(shader)
-        gpu.state.line_width_set(1.0)
-
-        # 2) 半透明プレビュー矩形
-        rect_h = rh * 0.85
-        rect_w = min(220.0, max(80.0, float(region.width) - mx - 16.0))
-        x1 = mx + 12.0
-        y1 = my - rect_h * 0.5
-        x2 = x1 + rect_w
-        y2 = y1 + rect_h
-        verts = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
-        indices = [(0, 1, 2), (2, 3, 0)]
-        bg_color = (0.27, 0.6, 1.0, 0.28)
-        batch = batch_for_shader(shader, "TRIS", {"pos": verts}, indices=indices)
-        shader.bind()
-        shader.uniform_float("color", bg_color)
-        batch.draw(shader)
-
-        # 矩形の枠
-        border_color = (0.27, 0.6, 1.0, 0.85)
-        border_coords = [
-            (x1, y1), (x2, y1),
-            (x2, y1), (x2, y2),
-            (x2, y2), (x1, y2),
-            (x1, y2), (x1, y1),
-        ]
-        batch = batch_for_shader(shader, "LINES", {"pos": border_coords})
-        shader.bind()
-        shader.uniform_float("color", border_color)
-        batch.draw(shader)
-
-        gpu.state.blend_set("NONE")
-
-        # 3) ラベル文字
-        try:
-            import blf
-
-            font_id = 0
-            label = self._drag_label[:32]
-            if label:
-                blf.size(font_id, 12)
-                blf.position(font_id, x1 + 8.0, y1 + rect_h * 0.5 - 5.0, 0.0)
-                blf.color(font_id, 1.0, 1.0, 1.0, 0.95)
-                blf.draw(font_id, label)
-        except Exception:  # noqa: BLE001
-            pass
+    def execute(self, context):
+        # 直接 EXEC されたとき (履歴から再実行など) は単純な選択にする.
+        layer_stack_utils.select_stack_index(context, self.index)
+        return {"FINISHED"}
 
     def _estimate_row_height(self, context) -> float:
         scale = 1.0
@@ -551,113 +419,6 @@ class BNAME_OT_layer_stack_drag(Operator):
         except Exception:  # noqa: BLE001
             scale = 1.0
         return max(16.0, 22.0 * max(0.5, scale))
-
-    def _drag_to_event(self, context, event) -> None:
-        stack = getattr(context.scene, "bname_layer_stack", None)
-        if stack is None or len(stack) == 0 or not self._moved_uid:
-            return
-        current_index = self._find_moved_index(stack)
-        if current_index < 0:
-            return
-        offset = int(round((self._start_y - float(getattr(event, "mouse_region_y", self._start_y))) / self._row_height))
-        target_index = max(0, min(len(stack) - 1, self.index + offset))
-        if target_index == current_index:
-            self._apply_nesting_hint(context, event)
-            return
-        stack.move(current_index, target_index)
-        self._dragged = True
-        self._current_index = target_index
-        context.scene.bname_active_layer_stack_index = target_index
-        # CSP / Photoshop 風に、Y-drag で 1 つ前の行 (= 直前のコンテナ) を親として
-        # 採用する。signature 比較に依存する apply_stack_order_if_ui_changed では
-        # 最初の MOUSEMOVE で previous=None のため reparent が走らないため、
-        # 直接 apply_stack_drop_hint を毎回呼ぶ。
-        if not layer_stack_utils.apply_stack_drop_hint(
-            context, self._moved_uid, nesting_delta=0
-        ):
-            # 親変更が無くても並び替え自体は実データへ反映する。
-            layer_stack_utils.apply_stack_order(context)
-        self._apply_nesting_hint(context, event)
-        layer_stack_utils.sync_layer_stack(context, preserve_active_index=True)
-        self._current_index = self._find_moved_index(context.scene.bname_layer_stack)
-        if self._current_index >= 0:
-            context.scene.bname_active_layer_stack_index = self._current_index
-        layer_stack_utils.remember_layer_stack_signature(context)
-        self._tag_ui_redraw(context)
-
-    def _find_moved_index(self, stack) -> int:
-        for i, item in enumerate(stack or []):
-            if layer_stack_utils.stack_item_uid(item) == self._moved_uid:
-                return i
-        return -1
-
-    def _nesting_delta(self, event) -> int:
-        dx = float(getattr(event, "mouse_region_x", self._start_x)) - self._start_x
-        if dx >= self._indent_width:
-            return 1
-        if dx <= -self._indent_width:
-            return -1
-        return 0
-
-    def _nesting_anchor(self, context) -> str:
-        stack = getattr(context.scene, "bname_layer_stack", None)
-        index = self._find_moved_index(stack)
-        if stack is None or index <= 0:
-            return ""
-        return layer_stack_utils.stack_item_uid(stack[index - 1])
-
-    def _apply_nesting_hint(self, context, event) -> None:
-        delta = self._nesting_delta(event)
-        if delta == 0:
-            self._last_nesting_delta = 0
-            self._last_nesting_anchor = ""
-            return
-        anchor = self._nesting_anchor(context)
-        if delta == self._last_nesting_delta and anchor == self._last_nesting_anchor:
-            return
-        if layer_stack_utils.apply_stack_drop_hint(
-            context,
-            self._moved_uid,
-            nesting_delta=delta,
-        ):
-            self._dragged = True
-            self._last_nesting_delta = delta
-            self._last_nesting_anchor = anchor
-
-    def _restore_initial_order(self, context) -> None:
-        stack = getattr(context.scene, "bname_layer_stack", None)
-        if stack is None or not self._initial_order:
-            return
-        for item in stack:
-            uid = layer_stack_utils.stack_item_uid(item)
-            if uid in self._initial_parents:
-                item.parent_key = self._initial_parents[uid]
-        for target_index, uid in enumerate(self._initial_order):
-            current_index = next(
-                (
-                    i
-                    for i, item in enumerate(stack)
-                    if layer_stack_utils.stack_item_uid(item) == uid
-                ),
-                -1,
-            )
-            if current_index >= 0 and current_index != target_index:
-                stack.move(current_index, target_index)
-        moved_index = self._find_moved_index(stack)
-        if moved_index >= 0:
-            context.scene.bname_active_layer_stack_index = moved_index
-        layer_stack_utils.apply_stack_order(context)
-
-    def _finish(self, context, *, apply_order: bool) -> None:
-        BNAME_OT_layer_stack_drag._stop_drawing()
-        if apply_order:
-            layer_stack_utils.apply_stack_order(context)
-        layer_stack_utils.sync_layer_stack(context, preserve_active_index=True)
-        moved_index = self._find_moved_index(context.scene.bname_layer_stack)
-        if moved_index >= 0:
-            layer_stack_utils.select_stack_index(context, moved_index)
-        layer_stack_utils.remember_layer_stack_signature(context)
-        self._tag_ui_redraw(context)
 
     def _tag_ui_redraw(self, context) -> None:
         area = getattr(context, "area", None)
