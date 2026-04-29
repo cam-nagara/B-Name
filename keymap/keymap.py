@@ -117,6 +117,14 @@ class KeymapState:
             print(f"[B-Name][KEYMAP] _populate_keymap_items failed: {exc!r}")
             _logger.exception("_populate_keymap_items failed")
             return None
+        # Object Mode keymap にも Alt+LEFTMOUSE / Alt+Shift+LEFTMOUSE を追加.
+        # これは "3D View" space keymap より高優先度で評価されるため、ツール
+        # keymap (例: Select Box の Alt+LEFTMOUSE → paint.face_select_loop) が
+        # poll 失敗で fall-through した時に確実に発火する.
+        try:
+            self._populate_object_mode_overrides(kc)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[B-Name][KEYMAP] _populate_object_mode_overrides failed: {exc!r}")
         # Window キーマップにも Shift+Space / Ctrl+Space を登録して
         # screen.screen_full_area (Shift+Space) 等の標準ショートカットを
         # 先取りする。3D View 外で押された場合は invoke が PASS_THROUGH を
@@ -259,6 +267,46 @@ class KeymapState:
         _add("bname.coma_knife_cut", "F")
         _add("bname.coma_edge_move", "G")
         _add("bname.text_tool", "T")
+
+    def _populate_object_mode_overrides(self, kc) -> None:
+        """Object Mode (mode keymap) にも Alt+drag / Alt+Shift+click を登録.
+
+        Blender のキーマップは Tool > Mode > Space > Window の優先度で評価される。
+        "3D View" は Space 層なので、Tool keymap (例: Select Box の Alt+LEFTMOUSE
+        → paint.face_select_loop) が先に消費する場合がある。Object Mode (Mode 層)
+        に登録すると Tool 層の poll 失敗時の fall-through で確実に発火し、また
+        どのツールが active でも Alt+drag が動くようになる.
+        """
+        target_keymaps = (
+            "Object Mode",
+            "Grease Pencil Edit Mode",
+            "Grease Pencil Draw Mode",
+            "Grease Pencil Sculpt Mode",
+            "Grease Pencil Weight Paint",
+            "Grease Pencil Vertex Paint",
+        )
+        for km_name in target_keymaps:
+            km = kc.keymaps.get(km_name)
+            if km is None:
+                # 一部のキーマップは初回ロードまで存在しない場合があるので
+                # mode 名を指定して新規取得 (なければ作る)
+                try:
+                    km = kc.keymaps.new(name=km_name, space_type="EMPTY", region_type="WINDOW")
+                except Exception:  # noqa: BLE001
+                    continue
+            self.bname_keymaps.append(km)
+            try:
+                kmi = km.keymap_items.new("bname.alt_reparent_drag", "LEFTMOUSE", "PRESS", alt=True)
+                self.bname_items.append(kmi)
+                print(f"[B-Name][KEYMAP] + bname.alt_reparent_drag ({km_name}) LEFTMOUSE alt=1")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[B-Name][KEYMAP] {km_name} alt_reparent_drag failed: {exc!r}")
+            try:
+                kmi = km.keymap_items.new("bname.alt_reparent_out", "LEFTMOUSE", "PRESS", alt=True, shift=True)
+                self.bname_items.append(kmi)
+                print(f"[B-Name][KEYMAP] + bname.alt_reparent_out ({km_name}) LEFTMOUSE alt=1 shift=1")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[B-Name][KEYMAP] {km_name} alt_reparent_out failed: {exc!r}")
 
     def _populate_window_overrides(self, km) -> None:
         """Window キーマップに 修飾+ナビゲートキー / 枠線カット F を先取り登録.
