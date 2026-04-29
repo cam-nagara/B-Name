@@ -405,17 +405,18 @@ class BNAME_UL_layer_stack(UIList):
         active = int(getattr(context.scene, "bname_active_layer_stack_index", -1)) == index
         resolved = layer_stack_utils.resolve_stack_item(context, item)
         target = resolved.get("target") if resolved is not None else None
-        # GRIP アイコンは廃止: Blender の template_list は内蔵で「クリック=選択、
-        # 行ドラッグ=並び替え」を行う (UI_BTYPE_LISTROW)。`sort_lock=False` で
-        # 有効化されており、追加のハンドルは不要。
         _draw_visibility_slot(row, item, target, index)
         _draw_selection_slot(row, index, active)
         _draw_hierarchy_slot(row, item, target, index)
-        content = row.split(factor=0.60, align=True)
-        left = content.row(align=True)
+        # 旧実装は ``row.split(factor=0.60)`` で右側に常に 40% を確保しており、
+        # 右コントロール (3 ui-units) と左コンテンツの間に大きな空白が出ていた。
+        # 右側を ``ui_units_x=3.0`` の固定幅にすることで、左 (型アイコン + 名前)
+        # が残り全幅へ拡張され、レイヤー名の表示領域が広がる。
+        left = row.row(align=True)
         left.alignment = "LEFT"
-        right = content.row(align=True)
+        right = row.row(align=True)
         right.alignment = "RIGHT"
+        right.ui_units_x = 3.0
         controls = {}
         if item.kind == "page":
             _draw_stack_page_row(left, item, resolved, index, get_work(context))
