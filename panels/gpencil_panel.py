@@ -117,10 +117,8 @@ def _select_icon(row, index: int, icon: str) -> None:
 def _select_name(row, index: int, text: str) -> None:
     """名前ラベルを描画。
 
-    クリックは ``template_list`` の既定動作で行選択 (active_index 更新) のみ。
-    ドラッグ開始は ``_draw_drag_handle`` (GRIP アイコン) を意図的に押した時だけ
-    に限定する。クリック=即移動開始だとユーザーが意図せずレイヤーを動かして
-    しまうため、明示的なドラッグハンドル経由に統一する。
+    クリックは ``template_list`` の既定動作で行選択 (active_index 更新)、
+    そのまま行をドラッグした場合は内蔵の row reorder で並び替えが起きる。
     """
     cell = row.row(align=True)
     cell.alignment = "LEFT"
@@ -400,7 +398,9 @@ class BNAME_UL_layer_stack(UIList):
         active = int(getattr(context.scene, "bname_active_layer_stack_index", -1)) == index
         resolved = layer_stack_utils.resolve_stack_item(context, item)
         target = resolved.get("target") if resolved is not None else None
-        _draw_drag_handle(row, index)
+        # GRIP アイコンは廃止: Blender の template_list は内蔵で「クリック=選択、
+        # 行ドラッグ=並び替え」を行う (UI_BTYPE_LISTROW)。`sort_lock=False` で
+        # 有効化されており、追加のハンドルは不要。
         _draw_visibility_slot(row, item, target, index)
         _draw_selection_slot(row, index, active)
         _draw_hierarchy_slot(row, item, target, index)
