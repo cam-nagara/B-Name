@@ -763,6 +763,8 @@ def text_entry_to_dict(entry) -> dict[str, Any]:
         "widthMm": round(entry.width_mm, 3),
         "heightMm": round(entry.height_mm, 3),
         "parentBalloonId": entry.parent_balloon_id,
+        "parentKind": getattr(entry, "parent_kind", "page"),
+        "parentKey": getattr(entry, "parent_key", ""),
         "fontSpans": [
             {
                 "start": int(start),
@@ -818,6 +820,8 @@ def text_entry_from_dict(entry, data: dict[str, Any]) -> None:
     entry.width_mm = float(data.get("widthMm", 30.0))
     entry.height_mm = float(data.get("heightMm", 15.0))
     entry.parent_balloon_id = data.get("parentBalloonId", "")
+    entry.parent_kind = data.get("parentKind", data.get("parent_kind", "page"))
+    entry.parent_key = str(data.get("parentKey", data.get("parent_key", "")) or "")
     entry.font_spans.clear()
     for item in data.get("fontSpans", []):
         span = entry.font_spans.add()

@@ -41,12 +41,12 @@ def _entry_center(entry) -> tuple[float, float]:
     )
 
 
-def _balloon_parent_matches_panel(page, panel, balloon) -> bool | None:
-    parent_key = str(getattr(balloon, "parent_key", "") or "")
+def _entry_parent_matches_panel(page, panel, entry) -> bool | None:
+    parent_key = str(getattr(entry, "parent_key", "") or "")
     if not parent_key:
         return None
     page_key = page_stack_key(page)
-    parent_kind = str(getattr(balloon, "parent_kind", "") or "")
+    parent_kind = str(getattr(entry, "parent_kind", "") or "")
     if parent_kind == "page" or parent_key in {str(getattr(page, "id", "") or ""), page_key}:
         return False
     target_stem = str(getattr(panel, "coma_id", "") or "")
@@ -71,6 +71,10 @@ def _balloon_parent_matches_panel(page, panel, balloon) -> bool | None:
     return None
 
 
+def _balloon_parent_matches_panel(page, panel, balloon) -> bool | None:
+    return _entry_parent_matches_panel(page, panel, balloon)
+
+
 def _panel_children(page, panel):
     balloons = []
     texts = []
@@ -93,6 +97,12 @@ def _panel_children(page, panel):
     }
     for text in getattr(page, "texts", []):
         if getattr(text, "id", "") in attached_texts:
+            continue
+        parent_match = _entry_parent_matches_panel(page, panel, text)
+        if parent_match is True:
+            texts.append(text)
+            continue
+        if parent_match is False:
             continue
         hit = layer_stack_utils.coma_containing_point(page, *_entry_center(text))
         if hit is not None and str(getattr(hit, "coma_id", "") or "") == target_stem:
@@ -344,11 +354,26 @@ class BNAME_OT_layer_move_tool(Operator):
                     context, layer_stack_utils.gp_parent_keys_for_page(target)
                 ))
             )
+            self._snapshots.append(
+                ("effect_layers", None, layer_stack_utils.capture_effect_layers_for_parent_keys(
+                    context, layer_stack_utils.gp_parent_keys_for_page(target)
+                ))
+            )
         elif kind == "coma":
             self._snapshots.append(("coma", target, _snapshot_panel(target)))
             if page is not None:
                 self._snapshots.append(
                     ("gp_layers", None, layer_stack_utils.capture_gp_layers_for_parent_keys(
+                        context, {layer_stack_utils.gp_parent_key_for_coma(page, target)}
+                    ))
+                )
+                self._snapshots.append(
+                    ("effect_layers", None, layer_stack_utils.capture_effect_layers_for_parent_keys(
+                        context, {layer_stack_utils.gp_parent_key_for_coma(page, target)}
+                    ))
+                )
+                self._snapshots.append(
+                    ("raster_layers", None, layer_stack_utils.capture_raster_layers_for_parent_keys(
                         context, {layer_stack_utils.gp_parent_key_for_coma(page, target)}
                     ))
                 )
@@ -374,6 +399,8 @@ class BNAME_OT_layer_move_tool(Operator):
                         self._snapshots.append(("attached_text", text, (text.x_mm, text.y_mm)))
         elif kind == "gp":
             self._snapshots.append(("gp_layers", None, gp_parent.capture_layers([target])))
+        elif kind == "effect":
+            self._snapshots.append(("effect_layers", None, gp_parent.capture_layers([target])))
 
     def _restore_snapshots(self, context) -> None:
         for kind, target, data in self._snapshots:
@@ -385,6 +412,10 @@ class BNAME_OT_layer_move_tool(Operator):
                 target.x_mm, target.y_mm = data
             elif kind == "gp_layers":
                 layer_stack_utils.restore_gp_layer_snapshots(data)
+            elif kind == "effect_layers":
+                layer_stack_utils.restore_gp_layer_snapshots(data)
+            elif kind == "raster_layers":
+                layer_stack_utils.restore_raster_layer_snapshots(context, data)
         page_grid.apply_page_collection_transforms(context, get_work(context))
 
     def _apply_delta(self, context, dx_mm: float, dy_mm: float) -> bool:
@@ -399,6 +430,9 @@ class BNAME_OT_layer_move_tool(Operator):
             layer_stack_utils.translate_gp_layers_for_parent_keys(
                 context, layer_stack_utils.gp_parent_keys_for_page(target), dx_mm, dy_mm
             )
+            layer_stack_utils.translate_effect_layers_for_parent_keys(
+                context, layer_stack_utils.gp_parent_keys_for_page(target), dx_mm, dy_mm
+            )
             return True
         if kind == "coma":
             _move_panel(target, dx_mm, dy_mm)
@@ -410,6 +444,12 @@ class BNAME_OT_layer_move_tool(Operator):
                     child.y_mm += dy_mm
             if page is not None:
                 layer_stack_utils.translate_gp_layers_for_parent_keys(
+                    context, {layer_stack_utils.gp_parent_key_for_coma(page, target)}, dx_mm, dy_mm
+                )
+                layer_stack_utils.translate_effect_layers_for_parent_keys(
+                    context, {layer_stack_utils.gp_parent_key_for_coma(page, target)}, dx_mm, dy_mm
+                )
+                layer_stack_utils.translate_raster_layers_for_parent_keys(
                     context, {layer_stack_utils.gp_parent_key_for_coma(page, target)}, dx_mm, dy_mm
                 )
             return True
@@ -432,6 +472,9 @@ class BNAME_OT_layer_move_tool(Operator):
             target.y_mm += dy_mm
             return True
         if kind == "gp":
+            gp_parent.translate_layer(target, dx_mm, dy_mm)
+            return True
+        if kind == "effect":
             gp_parent.translate_layer(target, dx_mm, dy_mm)
             return True
         obj = self._target.get("object")

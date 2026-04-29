@@ -492,6 +492,8 @@ class BNAME_OT_object_tool(Operator):
                     "poly": poly,
                     "children": self._panel_child_snapshots(page, panel),
                     "gp": layer_stack_utils.capture_gp_layers_for_parent_keys(context, {gp_key}),
+                    "effect_gp": layer_stack_utils.capture_effect_layers_for_parent_keys(context, {gp_key}),
+                    "raster": layer_stack_utils.capture_raster_layers_for_parent_keys(context, {gp_key}),
                     "gp_key": gp_key,
                 })
             elif kind == "balloon":
@@ -640,6 +642,10 @@ class BNAME_OT_object_tool(Operator):
                     page.texts[idx].y_mm = y + dy
         layer_stack_utils.restore_gp_layer_snapshots(snapshot.get("gp", []))
         layer_stack_utils.translate_gp_layers_for_parent_keys(context, {snapshot["gp_key"]}, dx, dy)
+        layer_stack_utils.restore_gp_layer_snapshots(snapshot.get("effect_gp", []))
+        layer_stack_utils.translate_effect_layers_for_parent_keys(context, {snapshot["gp_key"]}, dx, dy)
+        layer_stack_utils.restore_raster_layer_snapshots(context, snapshot.get("raster", []))
+        layer_stack_utils.translate_raster_layers_for_parent_keys(context, {snapshot["gp_key"]}, dx, dy)
 
     def _finish_drag(self, context) -> None:
         moved = bool(getattr(self, "_drag_moved", False))

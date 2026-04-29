@@ -453,6 +453,9 @@ class BNAME_OT_coma_remove(Operator):
             layer_stack_utils.delete_gp_layers_for_parent_keys(
                 context, {layer_stack_utils.gp_parent_key_for_coma(page, entry)}
             )
+            layer_stack_utils.delete_effect_layers_for_parent_keys(
+                context, {layer_stack_utils.gp_parent_key_for_coma(page, entry)}
+            )
             page.comas.remove(idx)
             if len(page.comas) == 0:
                 page.active_coma_index = -1
@@ -618,7 +621,11 @@ class BNAME_OT_coma_move_to_page(Operator):
                 layer_stack_utils.translate_gp_layers_for_parent_keys(
                     context, {old_parent_key}, dst_ox - src_ox, dst_oy - src_oy
                 )
+                layer_stack_utils.translate_effect_layers_for_parent_keys(
+                    context, {old_parent_key}, dst_ox - src_ox, dst_oy - src_oy
+                )
             layer_stack_utils.reparent_gp_layers(context, old_parent_key, new_parent_key)
+            layer_stack_utils.reparent_effect_layers(context, old_parent_key, new_parent_key)
             coma_io.save_coma_meta(work_dir, target_page.id, new_entry)
             # 元の collection から削除
             page.comas.remove(idx)
@@ -748,6 +755,7 @@ class BNAME_OT_coma_merge_selected(Operator):
                 removed = page.comas[idx]
                 old_key = layer_stack_utils.gp_parent_key_for_coma(page, removed)
                 layer_stack_utils.reparent_gp_layers(context, old_key, survivor_key)
+                layer_stack_utils.reparent_effect_layers(context, old_key, survivor_key)
                 try:
                     coma_io.remove_coma_files(work_dir, page.id, removed.coma_id)
                 except Exception:  # noqa: BLE001
@@ -882,6 +890,9 @@ class BNAME_OT_coma_split_template(Operator):
             if self.clear_existing:
                 coma_io.remove_coma_files(work_dir, page.id, src.coma_id)
                 layer_stack_utils.delete_gp_layers_for_parent_keys(
+                    context, {layer_stack_utils.gp_parent_key_for_coma(page, src)}
+                )
+                layer_stack_utils.delete_effect_layers_for_parent_keys(
                     context, {layer_stack_utils.gp_parent_key_for_coma(page, src)}
                 )
                 page.comas.remove(self.target_coma_index)

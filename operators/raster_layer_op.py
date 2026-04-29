@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import uuid
+from array import array
 from pathlib import Path
 
 import bpy
@@ -113,6 +114,36 @@ def _set_image_relative_path(image, raster_id: str, abs_path: Path) -> None:
         _logger.exception("raster image filepath setup failed: %s", raster_id)
 
 
+def _image_path_is_current(image, abs_path: Path) -> bool:
+    for attr in ("filepath_raw", "filepath"):
+        raw = str(getattr(image, attr, "") or "")
+        if not raw:
+            continue
+        try:
+            current = Path(bpy.path.abspath(raw)).resolve()
+        except Exception:  # noqa: BLE001
+            continue
+        try:
+            if current == abs_path.resolve():
+                return True
+        except Exception:  # noqa: BLE001
+            if str(current) == str(abs_path):
+                return True
+    return False
+
+
+def _entry_has_unsaved_pixels(entry, image) -> bool:
+    try:
+        if bool(entry.get("bname_raster_dirty", False)):
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        return bool(getattr(image, "is_dirty", False))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def ensure_raster_image(context, entry, *, create_missing: bool = True, mark_missing: bool = False):
     work = get_work(context)
     if work is None or not getattr(work, "work_dir", ""):
@@ -125,7 +156,8 @@ def ensure_raster_image(context, entry, *, create_missing: bool = True, mark_mis
     abs_path = _abs_png_path(work_dir, entry)
     image = bpy.data.images.get(name)
     if image is not None:
-        _set_image_relative_path(image, raster_id, abs_path)
+        if not _image_path_is_current(image, abs_path) and not _entry_has_unsaved_pixels(entry, image):
+            _set_image_relative_path(image, raster_id, abs_path)
         return image
     if abs_path.is_file():
         try:
@@ -422,6 +454,55 @@ def mark_raster_dirty(entry) -> None:
         entry["bname_raster_dirty"] = True
     except Exception:  # noqa: BLE001
         pass
+
+
+def translate_raster_layer_pixels(context, entry, dx_mm: float, dy_mm: float) -> bool:
+    """コマ移動時に、親コマ配下のラスター画素をページ座標上で平行移動する."""
+    image = ensure_raster_image(context, entry, create_missing=False)
+    if image is None:
+        return False
+    dpi = int(getattr(entry, "dpi", 300))
+    dx_px = int(round(mm_to_px(float(dx_mm), dpi)))
+    dy_px = int(round(mm_to_px(float(dy_mm), dpi)))
+    if dx_px == 0 and dy_px == 0:
+        return False
+    try:
+        width, height = int(image.size[0]), int(image.size[1])
+    except Exception:  # noqa: BLE001
+        return False
+    if width <= 0 or height <= 0:
+        return False
+    channels = 4
+    total = width * height * channels
+    source = array("f", image.pixels[:])
+    if len(source) != total:
+        return False
+    dest = array("f", [0.0]) * total
+    src_x0 = max(0, -dx_px)
+    src_x1 = min(width, width - dx_px)
+    src_y0 = max(0, -dy_px)
+    src_y1 = min(height, height - dy_px)
+    if src_x0 >= src_x1 or src_y0 >= src_y1:
+        try:
+            image.pixels[:] = dest
+            image.update()
+        except Exception:  # noqa: BLE001
+            return False
+        mark_raster_dirty(entry)
+        return True
+    row_values = (src_x1 - src_x0) * channels
+    for src_y in range(src_y0, src_y1):
+        dst_y = src_y + dy_px
+        src_start = (src_y * width + src_x0) * channels
+        dst_start = (dst_y * width + src_x0 + dx_px) * channels
+        dest[dst_start:dst_start + row_values] = source[src_start:src_start + row_values]
+    try:
+        image.pixels[:] = dest
+        image.update()
+    except Exception:  # noqa: BLE001
+        return False
+    mark_raster_dirty(entry)
+    return True
 
 
 def save_dirty_raster_layers(context) -> int:

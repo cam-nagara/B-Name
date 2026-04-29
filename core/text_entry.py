@@ -98,6 +98,9 @@ class BNameTextEntry(bpy.types.PropertyGroup):
         description="同じページの BNameBalloonEntry.id を参照。空で独立テキスト。",
         default="",
     )
+    # レイヤーリスト上のページ/コマ親子付け。空の旧データは位置から親を推定する。
+    parent_kind: StringProperty(name="親種別", default="page")  # type: ignore[valid-type]
+    parent_key: StringProperty(name="親キー", default="")  # type: ignore[valid-type]
     speaker_type: EnumProperty(  # type: ignore[valid-type]
         name="セリフ種別",
         items=_SPEAKER_TYPE_ITEMS,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from array import array
 
 import bpy
 
@@ -24,6 +25,7 @@ from .layer_hierarchy import (
 _logger = log.get_logger(__name__)
 
 EFFECT_GP_OBJECT_NAME = "BName_EffectLines"
+PAGE_COMA_CHILD_KINDS = {"gp", "effect", "raster", "balloon", "text"}
 _sync_scheduled = False
 _sync_should_apply_order = False
 _sync_order_moved_uid = ""
@@ -335,14 +337,18 @@ def _collect_page_layer_targets(
     for entry in reversed(list(getattr(page, "texts", []))):
         tid = _ensure_unique_id(entry, used_text, "text")
         label = getattr(entry, "body", "") or tid
-        center = entry_center(entry)
-        panel = coma_containing_point(page, *center)
-        if panel is not None:
-            parent = coma_stack_key(page, panel)
-            depth = 2
+        explicit_parent = _explicit_entry_parent(entry, page, panels_by_key)
+        if explicit_parent is not None:
+            parent, depth = explicit_parent
         else:
-            parent = page_key
-            depth = 1
+            center = entry_center(entry)
+            panel = coma_containing_point(page, *center)
+            if panel is not None:
+                parent = coma_stack_key(page, panel)
+                depth = 2
+            else:
+                parent = page_key
+                depth = 1
         target = LayerTarget("text", f"{page_key}:{tid}", label, parent, depth)
         if depth == 2:
             panel_children.setdefault(parent, []).append(target)
@@ -770,7 +776,7 @@ def _target_index_for_stack_move(
 def _parent_item_allows_child(parent, child_kind: str) -> bool:
     parent_kind = getattr(parent, "kind", "")
     if parent_kind in {PAGE_KIND, COMA_KIND}:
-        return child_kind in {"gp", "effect", "raster", "balloon"}
+        return child_kind in PAGE_COMA_CHILD_KINDS
     if parent_kind == "gp_folder":
         return child_kind in {"gp", "gp_folder"}
     return False
@@ -781,7 +787,7 @@ def _parent_key_exists_for_child(context, child_kind: str, parent_key: str) -> b
     if not parent_key:
         return True
     work = get_work(context)
-    if child_kind in {"gp", "effect", "raster", "balloon"} and gp_parent.parent_key_exists(work, parent_key):
+    if child_kind in PAGE_COMA_CHILD_KINDS and gp_parent.parent_key_exists(work, parent_key):
         return True
     if child_kind in {"gp", "gp_folder"}:
         stack = getattr(getattr(context, "scene", None), "bname_layer_stack", None)
@@ -796,7 +802,7 @@ def _parent_key_from_flat_drop(stack, moved_index: int, child_kind: str) -> str:
     previous = stack[moved_index - 1]
     if _parent_item_allows_child(previous, child_kind):
         return str(getattr(previous, "key", "") or "")
-    if child_kind in {"gp", "effect", "raster", "balloon"} and getattr(previous, "kind", "") in {"gp", "effect", "raster", "balloon"}:
+    if child_kind in PAGE_COMA_CHILD_KINDS and getattr(previous, "kind", "") in PAGE_COMA_CHILD_KINDS:
         return str(getattr(previous, "parent_key", "") or "")
     previous_parent_key = str(getattr(previous, "parent_key", "") or "")
     if previous_parent_key:
@@ -851,7 +857,7 @@ def _apply_stack_drop_hint(context, moved_uid: str, *, nesting_delta: int = 0) -
         return False
     item = stack[moved_index]
     kind = getattr(item, "kind", "")
-    if kind not in {"gp", "gp_folder", "effect", "raster", "balloon"}:
+    if kind not in {"gp", "gp_folder", "effect", "raster", "balloon", "text"}:
         return False
     parent_key = _drop_parent_from_nesting_delta(stack, item, moved_index, nesting_delta)
     old_parent_key = str(getattr(item, "parent_key", "") or "")
@@ -861,7 +867,7 @@ def _apply_stack_drop_hint(context, moved_uid: str, *, nesting_delta: int = 0) -
         item_key = str(getattr(item, "key", "") or "")
         if parent_key == item_key or _is_stack_folder_descendant(stack, item_key, parent_key):
             return False
-    if kind in {"effect", "raster", "balloon"} and _find_stack_item(stack, "gp_folder", parent_key):
+    if kind in {"effect", "raster", "balloon", "text"} and _find_stack_item(stack, "gp_folder", parent_key):
         return False
     if nesting_delta == 0 and old_parent_key and parent_key:
         old_page_key, _old_child_key = split_child_key(old_parent_key)
@@ -1128,6 +1134,14 @@ def gp_layers_for_parent_keys(context, parent_keys: set[str]) -> list[object]:
     return list(gp_parent.iter_layers_with_parent(obj, set(parent_keys)))
 
 
+def effect_layers_for_parent_keys(context, parent_keys: set[str]) -> list[object]:
+    _ = context
+    obj = get_effect_gp_object()
+    if obj is None or not parent_keys:
+        return []
+    return list(gp_parent.iter_layers_with_parent(obj, set(parent_keys)))
+
+
 def delete_gp_layers_for_parent_keys(context, parent_keys: set[str]) -> int:
     obj = gp_utils.get_master_gpencil()
     layers = getattr(getattr(obj, "data", None), "layers", None) if obj is not None else None
@@ -1141,6 +1155,24 @@ def delete_gp_layers_for_parent_keys(context, parent_keys: set[str]) -> int:
             removed += 1
         except Exception:  # noqa: BLE001
             _logger.exception("delete gp layer for parent failed: %s", getattr(layer, "name", ""))
+    if removed:
+        tag_view3d_redraw(context)
+    return removed
+
+
+def delete_effect_layers_for_parent_keys(context, parent_keys: set[str]) -> int:
+    obj = get_effect_gp_object()
+    layers = getattr(getattr(obj, "data", None), "layers", None) if obj is not None else None
+    if layers is None or not parent_keys:
+        return 0
+    removed = 0
+    for layer in list(gp_parent.iter_layers_with_parent(obj, set(parent_keys))):
+        try:
+            gp_parent.set_parent_key(layer, "")
+            layers.remove(layer)
+            removed += 1
+        except Exception:  # noqa: BLE001
+            _logger.exception("delete effect layer for parent failed: %s", getattr(layer, "name", ""))
     if removed:
         tag_view3d_redraw(context)
     return removed
@@ -1162,9 +1194,35 @@ def reparent_gp_layers(context, old_parent_key: str, new_parent_key: str) -> int
     return changed
 
 
+def reparent_effect_layers(context, old_parent_key: str, new_parent_key: str) -> int:
+    work = get_work(context)
+    if not old_parent_key or not gp_parent.parent_key_exists(work, new_parent_key):
+        return 0
+    obj = get_effect_gp_object()
+    if obj is None:
+        return 0
+    changed = 0
+    for layer in list(gp_parent.iter_layers_with_parent(obj, {old_parent_key})):
+        gp_parent.set_parent_key(layer, new_parent_key)
+        changed += 1
+    if changed:
+        tag_view3d_redraw(context)
+    return changed
+
+
 def translate_gp_layers_for_parent_keys(context, parent_keys: set[str], dx_mm: float, dy_mm: float) -> int:
     moved = 0
     for layer in gp_layers_for_parent_keys(context, parent_keys):
+        gp_parent.translate_layer(layer, dx_mm, dy_mm)
+        moved += 1
+    if moved:
+        tag_view3d_redraw(context)
+    return moved
+
+
+def translate_effect_layers_for_parent_keys(context, parent_keys: set[str], dx_mm: float, dy_mm: float) -> int:
+    moved = 0
+    for layer in effect_layers_for_parent_keys(context, parent_keys):
         gp_parent.translate_layer(layer, dx_mm, dy_mm)
         moved += 1
     if moved:
@@ -1176,8 +1234,87 @@ def capture_gp_layers_for_parent_keys(context, parent_keys: set[str]):
     return gp_parent.capture_layers(gp_layers_for_parent_keys(context, parent_keys))
 
 
+def capture_effect_layers_for_parent_keys(context, parent_keys: set[str]):
+    return gp_parent.capture_layers(effect_layers_for_parent_keys(context, parent_keys))
+
+
 def restore_gp_layer_snapshots(snapshot) -> None:
     gp_parent.restore_layers(snapshot)
+
+
+def raster_entries_for_parent_keys(context, parent_keys: set[str]) -> list[object]:
+    scene = getattr(context, "scene", None)
+    coll = getattr(scene, "bname_raster_layers", None) if scene is not None else None
+    if coll is None or not parent_keys:
+        return []
+    keys = {str(key or "") for key in parent_keys if str(key or "")}
+    return [
+        entry for entry in coll
+        if str(getattr(entry, "parent_key", "") or "") in keys
+    ]
+
+
+def translate_raster_layers_for_parent_keys(context, parent_keys: set[str], dx_mm: float, dy_mm: float) -> int:
+    try:
+        from ..operators import raster_layer_op
+    except Exception:  # noqa: BLE001
+        return 0
+    moved = 0
+    for entry in raster_entries_for_parent_keys(context, parent_keys):
+        try:
+            if raster_layer_op.translate_raster_layer_pixels(context, entry, dx_mm, dy_mm):
+                moved += 1
+        except Exception:  # noqa: BLE001
+            _logger.exception("translate raster pixels failed: %s", getattr(entry, "id", ""))
+    if moved:
+        tag_view3d_redraw(context)
+    return moved
+
+
+def capture_raster_layers_for_parent_keys(context, parent_keys: set[str]):
+    try:
+        from ..operators import raster_layer_op
+    except Exception:  # noqa: BLE001
+        return []
+    snapshots = []
+    for entry in raster_entries_for_parent_keys(context, parent_keys):
+        image = raster_layer_op.ensure_raster_image(context, entry, create_missing=False)
+        if image is None:
+            continue
+        try:
+            total = int(image.size[0]) * int(image.size[1]) * 4
+            data = array("f", image.pixels[:])
+            if len(data) != total:
+                continue
+            snapshots.append((str(getattr(entry, "id", "") or ""), str(image.name), data))
+        except Exception:  # noqa: BLE001
+            _logger.exception("capture raster pixels failed: %s", getattr(entry, "id", ""))
+    return snapshots
+
+
+def restore_raster_layer_snapshots(context, snapshot) -> None:
+    try:
+        from ..operators import raster_layer_op
+    except Exception:  # noqa: BLE001
+        raster_layer_op = None
+    scene = getattr(context, "scene", None)
+    coll = getattr(scene, "bname_raster_layers", None) if scene is not None else None
+    entry_by_id = {
+        str(getattr(entry, "id", "") or ""): entry
+        for entry in (coll or [])
+    }
+    for entry_id, image_name, data in snapshot or []:
+        image = bpy.data.images.get(str(image_name))
+        if image is None:
+            continue
+        try:
+            image.pixels.foreach_set(data)
+            image.update()
+            entry = entry_by_id.get(str(entry_id))
+            if entry is not None and raster_layer_op is not None:
+                raster_layer_op.mark_raster_dirty(entry)
+        except Exception:  # noqa: BLE001
+            _logger.exception("restore raster pixels failed: %s", image_name)
 
 
 def resolve_stack_item(context, item):
@@ -1874,6 +2011,34 @@ def _apply_balloon_parenting(context, stack) -> None:
             entry.parent_key = parent_key
 
 
+def _apply_text_parenting(context, stack) -> None:
+    work = get_work(context)
+    if work is None:
+        return
+    for page in getattr(work, "pages", []):
+        page_key = page_stack_key(page)
+        by_key = {
+            split_child_key(str(getattr(item, "key", "") or ""))[1]: str(getattr(item, "parent_key", "") or "")
+            for item in stack
+            if getattr(item, "kind", "") == "text"
+            and split_child_key(str(getattr(item, "key", "") or ""))[0] == page_key
+        }
+        for entry in getattr(page, "texts", []):
+            key = str(getattr(entry, "id", "") or "")
+            if key not in by_key:
+                continue
+            parent_key = by_key[key]
+            existing_parent = str(getattr(entry, "parent_key", "") or "")
+            fallback_panel = coma_containing_point(page, *entry_center(entry))
+            fallback_parent = coma_stack_key(page, fallback_panel) if fallback_panel is not None else page_key
+            if not existing_parent and parent_key == fallback_parent:
+                continue
+            if not parent_key or not gp_parent.parent_key_exists(work, parent_key):
+                continue
+            entry.parent_kind = "coma" if ":" in parent_key else "page"
+            entry.parent_key = parent_key
+
+
 def _reorder_gp_parent(gp_data, parent_key: str, desired_front_uids: list[str], *, effect: bool):
     siblings = _siblings_for_parent(gp_data, parent_key)
     actual = [_node_uid_for_stack(node, effect=effect) for node in siblings]
@@ -1933,6 +2098,7 @@ def apply_stack_order(context) -> None:
         _apply_gp_order(effect_obj, stack, effect=True)
     _apply_raster_parenting(context, stack)
     _apply_balloon_parenting(context, stack)
+    _apply_text_parenting(context, stack)
     tag_view3d_redraw(context)
 
 

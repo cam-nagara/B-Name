@@ -174,21 +174,20 @@ def _parent_key_for_new_item(context, anchor_uid: str, kind: str) -> str:
     from ..utils import gp_layer_parenting as gp_parent
 
     work = get_work(context)
+    logical_child_kinds = {"gp", "effect", "raster", "balloon", "text"}
     for item in stack:
         if layer_stack_utils.stack_item_uid(item) != anchor_uid:
             continue
-        if kind == "gp" and item.kind in {PAGE_KIND, COMA_KIND}:
+        if kind in logical_child_kinds and item.kind in {PAGE_KIND, COMA_KIND}:
             return item.key
-        if kind == "gp" and gp_parent.parent_key_exists(
+        if kind in logical_child_kinds and gp_parent.parent_key_exists(
             work, str(getattr(item, "parent_key", "") or "")
         ):
             return str(getattr(item, "parent_key", "") or "")
         if kind in {"gp", "gp_folder"} and item.kind in {"gp", "gp_folder"}:
             return str(getattr(item, "parent_key", "") or "")
-        if kind in {"balloon", "text"} and item.kind in {"balloon", "text"}:
+        if kind in {"effect", "raster", "balloon", "text"} and item.kind in {"effect", "raster", "balloon", "text"}:
             return str(getattr(item, "parent_key", "") or "")
-        if kind in {"balloon", "text"} and item.kind == COMA_KIND:
-            return item.key
         if kind == COMA_KIND and item.kind == COMA_KIND:
             return str(getattr(item, "parent_key", "") or "")
         return ""
@@ -526,17 +525,19 @@ class BNAME_MT_layer_stack_add_raster(Menu):
     def draw(self, _context):
         layout = self.layout
         op = layout.operator(
-            "bname.raster_layer_add",
+            "bname.layer_stack_add",
             text="300dpi / グレー 8bit",
             icon="BRUSH_DATA",
         )
+        op.kind = "raster"
         op.dpi = 300
         op.bit_depth = "gray8"
         op = layout.operator(
-            "bname.raster_layer_add",
+            "bname.layer_stack_add",
             text="150dpi / グレー 8bit",
             icon="BRUSH_DATA",
         )
+        op.kind = "raster"
         op.dpi = 150
         op.bit_depth = "gray8"
 
@@ -548,6 +549,12 @@ class BNAME_OT_layer_stack_add(Operator, ImportHelper):
 
     kind: EnumProperty(items=_ADD_KIND_ITEMS, default="gp")  # type: ignore[valid-type]
     anchor_uid: StringProperty(default="", options={"HIDDEN"})  # type: ignore[valid-type]
+    dpi: IntProperty(name="DPI", default=300, min=30, soft_max=1200)  # type: ignore[valid-type]
+    bit_depth: EnumProperty(  # type: ignore[valid-type]
+        name="階調",
+        items=(("gray8", "グレー 8bit", ""), ("gray1", "1bit", "")),
+        default="gray8",
+    )
     filter_glob: StringProperty(  # type: ignore[valid-type]
         default="*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.psd;*.bmp",
         options={"HIDDEN"},
@@ -587,13 +594,13 @@ class BNAME_OT_layer_stack_add(Operator, ImportHelper):
         if self.kind == "image":
             return self._add_image(context)
         if self.kind == "raster":
-            return self._add_raster(context)
+            return self._add_raster(context, anchor_uid)
         if self.kind == "balloon":
             return self._add_balloon(context, anchor_uid)
         if self.kind == "text":
             return self._add_text(context, anchor_uid)
         if self.kind == "effect":
-            return self._add_effect(context)
+            return self._add_effect(context, anchor_uid)
         if self.kind == "gp_folder":
             return self._add_gp_folder(context, anchor_uid)
         return ""
@@ -711,12 +718,16 @@ class BNAME_OT_layer_stack_add(Operator, ImportHelper):
         layer_stack_utils.sync_layer_stack_after_data_change(context)
         return layer_stack_utils.target_uid("image", entry.id)
 
-    def _add_raster(self, context) -> str:
+    def _add_raster(self, context, anchor_uid: str) -> str:
         before = {
             getattr(entry, "id", "")
             for entry in (getattr(context.scene, "bname_raster_layers", None) or [])
         }
-        result = bpy.ops.bname.raster_layer_add("EXEC_DEFAULT", dpi=300, bit_depth="gray8")
+        result = bpy.ops.bname.raster_layer_add(
+            "EXEC_DEFAULT",
+            dpi=int(getattr(self, "dpi", 300)),
+            bit_depth=str(getattr(self, "bit_depth", "gray8") or "gray8"),
+        )
         if "FINISHED" not in result:
             return ""
         coll = getattr(context.scene, "bname_raster_layers", None)
@@ -724,6 +735,11 @@ class BNAME_OT_layer_stack_add(Operator, ImportHelper):
             return ""
         for entry in coll:
             if getattr(entry, "id", "") not in before:
+                parent_key = _parent_key_for_new_item(context, anchor_uid, "raster")
+                if parent_key:
+                    entry.scope = "page"
+                    entry.parent_kind = "coma" if ":" in parent_key else "page"
+                    entry.parent_key = parent_key
                 return layer_stack_utils.target_uid("raster", entry.id)
         idx = int(getattr(context.scene, "bname_active_raster_layer_index", -1))
         if 0 <= idx < len(coll):
@@ -781,12 +797,16 @@ class BNAME_OT_layer_stack_add(Operator, ImportHelper):
             width_mm=width,
             height_mm=height,
         )
+        if parent_key:
+            entry.parent_kind = "coma" if ":" in parent_key else "page"
+            entry.parent_key = parent_key
         return layer_stack_utils.target_uid("text", f"{page_stack_key(page)}:{entry.id}")
 
-    def _add_effect(self, context) -> str:
+    def _add_effect(self, context, anchor_uid: str) -> str:
         from .effect_line_op import _create_effect_layer
 
-        _obj, layer = _create_effect_layer(context)
+        parent_key = _parent_key_for_new_item(context, anchor_uid, "effect")
+        _obj, layer = _create_effect_layer(context, parent_key=parent_key)
         return layer_stack_utils.target_uid("effect", layer_stack_utils._node_stack_key(layer))
 
 

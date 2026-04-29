@@ -131,6 +131,9 @@ class BNAME_OT_page_remove(Operator):
             layer_stack_utils.delete_gp_layers_for_parent_keys(
                 context, layer_stack_utils.gp_parent_keys_for_page(page)
             )
+            layer_stack_utils.delete_effect_layers_for_parent_keys(
+                context, layer_stack_utils.gp_parent_keys_for_page(page)
+            )
             work.pages.remove(idx)
             for i, entry in enumerate(work.pages):
                 old = old_offsets.get(entry.id)
@@ -141,6 +144,9 @@ class BNAME_OT_page_remove(Operator):
                 dy = new[1] - old[1]
                 if abs(dx) > 1.0e-6 or abs(dy) > 1.0e-6:
                     layer_stack_utils.translate_gp_layers_for_parent_keys(
+                        context, layer_stack_utils.gp_parent_keys_for_page(entry), dx, dy
+                    )
+                    layer_stack_utils.translate_effect_layers_for_parent_keys(
                         context, layer_stack_utils.gp_parent_keys_for_page(entry), dx, dy
                     )
             # GP オブジェクト / データ / Collection も削除
@@ -282,6 +288,9 @@ class BNAME_OT_page_move(Operator):
                 dy = new[1] - old[1]
                 if abs(dx) > 1.0e-6 or abs(dy) > 1.0e-6:
                     layer_stack_utils.translate_gp_layers_for_parent_keys(
+                        context, layer_stack_utils.gp_parent_keys_for_page(page), dx, dy
+                    )
+                    layer_stack_utils.translate_effect_layers_for_parent_keys(
                         context, layer_stack_utils.gp_parent_keys_for_page(page), dx, dy
                     )
             # 順序が変わったので Collection transform を再計算
