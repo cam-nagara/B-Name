@@ -121,22 +121,15 @@ def _select_icon(row, index: int, icon: str) -> None:
 
 
 def _select_name(row, index: int, text: str) -> None:
-    """名前ラベルを描画。
+    """名前ラベルを描画 (クリックは template_list 既定の選択動作)。
 
-    名前領域を ``bname.layer_stack_drag`` のクリックハンドルにする。
-    オペレーター側で「クリックだけ (mouse_prev_press と mouse_x/y がほぼ同じ)」
-    か「ドラッグ (有意な移動)」を判定し、前者なら選択のみ、後者ならリリース時の
-    Y デルタから移動先を決めて即座に並び替える。
+    Blender の UIList にはカスタムクラス向けのドラッグ並び替え API が無く、
+    ボタン widget では drag-out を検出できないため、レイヤーの並び替えは
+    パネル右列の TRIA_UP/TRIA_DOWN ボタン経由で行う。
     """
     cell = row.row(align=True)
     cell.alignment = "LEFT"
-    cell.operator_context = "INVOKE_DEFAULT"
-    op = cell.operator(
-        "bname.layer_stack_drag",
-        text=text or "",
-        emboss=False,
-    )
-    op.index = index
+    cell.label(text=text or "")
 
 
 def _select_icon_name(row, index: int, text: str, icon: str) -> None:
