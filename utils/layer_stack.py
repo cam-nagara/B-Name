@@ -215,6 +215,15 @@ def _coma_parent_key_matches(entry, page, coma_key: str, panel) -> bool:
 
 
 def _explicit_entry_parent(entry, page, panels_by_key: dict[str, object]) -> tuple[str, int] | None:
+    """エントリ (balloon/text) の永続化された親キーを解決する.
+
+    coma 親は ``panels_by_key`` ではなく ``page.comas`` 全件で解決する。これにより、
+    per-panel 呼び出し (``panels_by_key`` が部分集合) でも、別コマがオーソリティ
+    親であるエントリを「該当無し」と誤判定して空間フォールバックで重複生成する
+    バグを避ける。呼び出し側で ``parent not in panels_by_key`` のときに skip する
+    こと。
+    """
+    _ = panels_by_key  # 互換のため引数は残すが、解決は page.comas で行う
     parent = str(getattr(entry, "parent_key", "") or "")
     if not parent:
         return None
@@ -225,7 +234,8 @@ def _explicit_entry_parent(entry, page, panels_by_key: dict[str, object]) -> tup
             return page_key, 1
         return None
     if parent_kind == "coma" or ":" in parent:
-        for coma_key, panel in panels_by_key.items():
+        for panel in getattr(page, "comas", []):
+            coma_key = coma_stack_key(page, panel)
             if _coma_parent_key_matches(entry, page, coma_key, panel):
                 return coma_key, 2
     return None
@@ -286,11 +296,17 @@ def _collect_page_layer_targets(
         explicit_parent = _explicit_entry_parent(entry, page, panels_by_key)
         if explicit_parent is not None:
             parent, depth = explicit_parent
+            # オーソリティ親が今回の panels_by_key 範囲外なら skip。
+            # (all-panels 呼び出しでは全コマが含まれるため skip されない)
+            if depth == 2 and parent not in panels_by_key:
+                continue
         else:
             panel = coma_containing_point(page, *entry_center(entry))
             if panel is not None:
                 parent = coma_stack_key(page, panel)
                 depth = 2
+                if parent not in panels_by_key:
+                    continue
             else:
                 parent = page_key
                 depth = 1
@@ -340,12 +356,16 @@ def _collect_page_layer_targets(
         explicit_parent = _explicit_entry_parent(entry, page, panels_by_key)
         if explicit_parent is not None:
             parent, depth = explicit_parent
+            if depth == 2 and parent not in panels_by_key:
+                continue
         else:
             center = entry_center(entry)
             panel = coma_containing_point(page, *center)
             if panel is not None:
                 parent = coma_stack_key(page, panel)
                 depth = 2
+                if parent not in panels_by_key:
+                    continue
             else:
                 parent = page_key
                 depth = 1
@@ -452,7 +472,16 @@ def collect_targets(context) -> list[LayerTarget]:
 
     targets.extend(gp_root_targets)
 
-    return targets
+    # 防御: 万一 UID 重複が混入してもスタックには 1 行しか出さない。
+    # (per-panel 呼び出しと spatial fallback の組合せで重複が紛れ込むケースの保険)
+    seen: set[str] = set()
+    deduped: list[LayerTarget] = []
+    for t in targets:
+        if t.uid in seen:
+            continue
+        seen.add(t.uid)
+        deduped.append(t)
+    return deduped
 
 
 def _set_item_from_target(item, target: LayerTarget) -> None:
@@ -848,6 +877,32 @@ def _drop_parent_from_nesting_delta(stack, item, moved_index: int, nesting_delta
     return _parent_key_from_flat_drop(stack, moved_index, getattr(item, "kind", ""))
 
 
+def _stack_item_page_key(item) -> str:
+    """スタック行が属するページキーを返す。ページ非依存なら "" を返す.
+
+    - balloon / text / balloon_group: 行 key が ``page_id:child_id`` 形式
+    - raster: 永続化された ``parent_key`` のページプレフィックス
+    - gp / effect / gp_folder: ``parent_key`` のページプレフィックス
+    """
+    kind = getattr(item, "kind", "")
+    key = str(getattr(item, "key", "") or "")
+    parent_key = str(getattr(item, "parent_key", "") or "")
+    if kind in {"balloon", "balloon_group", "text"}:
+        page_key, _ = split_child_key(key)
+        return page_key
+    if kind in {"raster", "gp", "gp_folder", "effect"}:
+        page_key, _ = split_child_key(parent_key)
+        return page_key
+    return ""
+
+
+def _parent_key_page(parent_key: str) -> str:
+    if not parent_key:
+        return ""
+    page_key, _ = split_child_key(parent_key)
+    return page_key
+
+
 def _apply_stack_drop_hint(context, moved_uid: str, *, nesting_delta: int = 0) -> bool:
     """UIList D&Dの位置/横方向ヒントを、保存可能な親変更へ変換する."""
     scene = getattr(context, "scene", None)
@@ -862,6 +917,13 @@ def _apply_stack_drop_hint(context, moved_uid: str, *, nesting_delta: int = 0) -
     parent_key = _drop_parent_from_nesting_delta(stack, item, moved_index, nesting_delta)
     old_parent_key = str(getattr(item, "parent_key", "") or "")
     if parent_key and not _parent_key_exists_for_child(context, kind, parent_key):
+        return False
+    # ページ間 D&D は保存データ整合性が崩れる (balloon/text は page.balloons/texts
+    # にバインドされ、raster/gp/effect の座標も元ページの world 系に固定) ため
+    # 拒否する。ページ非依存 (root → page) や (page → root) は許可。
+    entry_page = _stack_item_page_key(item)
+    target_page = _parent_key_page(parent_key)
+    if entry_page and target_page and entry_page != target_page:
         return False
     if kind == "gp_folder":
         item_key = str(getattr(item, "key", "") or "")
