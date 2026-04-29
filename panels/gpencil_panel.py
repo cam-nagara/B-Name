@@ -115,21 +115,16 @@ def _select_icon(row, index: int, icon: str) -> None:
 
 
 def _select_name(row, index: int, text: str) -> None:
-    """名前ラベルを描画。クリックすると D&D が始まる (CSP/PS 風の挙動).
+    """名前ラベルを描画。
 
-    `_draw_drag_handle` の GRIP アイコンに加え、行名の領域全体を
-    ドラッグハンドル化することで、ユーザーが小さい GRIP を狙わなくても
-    レイヤー名をクリックして即ドラッグへ移れるようにする。
+    クリックは ``template_list`` の既定動作で行選択 (active_index 更新) のみ。
+    ドラッグ開始は ``_draw_drag_handle`` (GRIP アイコン) を意図的に押した時だけ
+    に限定する。クリック=即移動開始だとユーザーが意図せずレイヤーを動かして
+    しまうため、明示的なドラッグハンドル経由に統一する。
     """
     cell = row.row(align=True)
     cell.alignment = "LEFT"
-    cell.operator_context = "INVOKE_DEFAULT"
-    op = cell.operator(
-        "bname.layer_stack_drag",
-        text=text or "",
-        emboss=False,
-    )
-    op.index = index
+    cell.label(text=text or "")
 
 
 def _select_icon_name(row, index: int, text: str, icon: str) -> None:
