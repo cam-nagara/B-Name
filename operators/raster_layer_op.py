@@ -18,6 +18,16 @@ from ..utils.geom import mm_to_m, mm_to_px
 _logger = log.get_logger(__name__)
 
 RASTER_Z_LIFT_M = 0.0005
+RASTER_MATERIAL_VERSION = 2
+RASTER_MATERIAL_VERSION_PROP = "bname_raster_material_version"
+RASTER_IMAGE_NODE = "BName Raster Image"
+RASTER_EMISSION_NODE = "BName Raster Emission"
+RASTER_TRANSPARENT_NODE = "BName Raster Transparent"
+RASTER_ALPHA_SCALE_NODE = "BName Raster Alpha Scale"
+RASTER_ALPHA_MULTIPLY_NODE = "BName Raster Alpha Multiply"
+RASTER_MIX_NODE = "BName Raster Mix"
+RASTER_OUTPUT_NODE = "BName Raster Output"
+RASTER_BRUSH_INITIALIZED_PROP = "bname_raster_brush_initialized"
 
 
 def raster_image_name(raster_id: str) -> str:
@@ -130,6 +140,10 @@ def ensure_raster_image(context, entry, *, create_missing: bool = True, mark_mis
     width, height = _raster_size_px(work, int(getattr(entry, "dpi", 300)))
     image = bpy.data.images.new(name, width=width, height=height, alpha=True, float_buffer=False)
     try:
+        image.generated_color = (0.0, 0.0, 0.0, 0.0)
+    except Exception:  # noqa: BLE001
+        _logger.exception("raster image transparent initialization failed: %s", name)
+    try:
         image.colorspace_settings.name = "Non-Color"
     except Exception:  # noqa: BLE001
         pass
@@ -151,28 +165,109 @@ def _clear_material_nodes(mat) -> None:
         nodes.remove(node)
 
 
+def _node_by_name_and_type(tree, name: str, bl_idname: str):
+    node = tree.nodes.get(name)
+    if node is not None and getattr(node, "bl_idname", "") == bl_idname:
+        return node
+    return None
+
+
+def _build_raster_material_nodes(mat) -> dict[str, object]:
+    tree = mat.node_tree
+    _clear_material_nodes(mat)
+    nodes = tree.nodes
+    links = tree.links
+
+    tex = nodes.new("ShaderNodeTexImage")
+    tex.name = RASTER_IMAGE_NODE
+    emission = nodes.new("ShaderNodeEmission")
+    emission.name = RASTER_EMISSION_NODE
+    transparent = nodes.new("ShaderNodeBsdfTransparent")
+    transparent.name = RASTER_TRANSPARENT_NODE
+    alpha_scale = nodes.new("ShaderNodeValue")
+    alpha_scale.name = RASTER_ALPHA_SCALE_NODE
+    alpha_mul = nodes.new("ShaderNodeMath")
+    alpha_mul.name = RASTER_ALPHA_MULTIPLY_NODE
+    alpha_mul.operation = "MULTIPLY"
+    mix = nodes.new("ShaderNodeMixShader")
+    mix.name = RASTER_MIX_NODE
+    out = nodes.new("ShaderNodeOutputMaterial")
+    out.name = RASTER_OUTPUT_NODE
+
+    if tex.outputs.get("Alpha") is not None:
+        links.new(tex.outputs["Alpha"], alpha_mul.inputs[0])
+        links.new(alpha_scale.outputs[0], alpha_mul.inputs[1])
+        links.new(alpha_mul.outputs[0], mix.inputs[0])
+    links.new(transparent.outputs["BSDF"], mix.inputs[1])
+    links.new(emission.outputs["Emission"], mix.inputs[2])
+    links.new(mix.outputs["Shader"], out.inputs["Surface"])
+    nodes.active = tex
+    mat[RASTER_MATERIAL_VERSION_PROP] = RASTER_MATERIAL_VERSION
+    return {
+        "tex": tex,
+        "emission": emission,
+        "alpha_scale": alpha_scale,
+    }
+
+
+def _ensure_raster_material_nodes(mat) -> dict[str, object]:
+    tree = mat.node_tree
+    try:
+        version = int(mat.get(RASTER_MATERIAL_VERSION_PROP, 0))
+    except Exception:  # noqa: BLE001
+        version = 0
+    if version != RASTER_MATERIAL_VERSION:
+        return _build_raster_material_nodes(mat)
+
+    required_nodes = {
+        "tex": (RASTER_IMAGE_NODE, "ShaderNodeTexImage"),
+        "emission": (RASTER_EMISSION_NODE, "ShaderNodeEmission"),
+        "transparent": (RASTER_TRANSPARENT_NODE, "ShaderNodeBsdfTransparent"),
+        "alpha_scale": (RASTER_ALPHA_SCALE_NODE, "ShaderNodeValue"),
+        "alpha_mul": (RASTER_ALPHA_MULTIPLY_NODE, "ShaderNodeMath"),
+        "mix": (RASTER_MIX_NODE, "ShaderNodeMixShader"),
+        "output": (RASTER_OUTPUT_NODE, "ShaderNodeOutputMaterial"),
+    }
+    resolved = {
+        key: _node_by_name_and_type(tree, name, bl_idname)
+        for key, (name, bl_idname) in required_nodes.items()
+    }
+    if any(node is None for node in resolved.values()):
+        return _build_raster_material_nodes(mat)
+    tree.nodes.active = resolved["tex"]
+    return {
+        "tex": resolved["tex"],
+        "emission": resolved["emission"],
+        "alpha_scale": resolved["alpha_scale"],
+    }
+
+
 def ensure_raster_material(entry, image):
     raster_id = str(getattr(entry, "id", "") or "")
     mat = bpy.data.materials.get(raster_material_name(raster_id))
     if mat is None:
         mat = bpy.data.materials.new(raster_material_name(raster_id))
     mat.use_nodes = True
-    mat.diffuse_color = (1.0, 1.0, 1.0, float(getattr(entry, "opacity", 1.0)))
+    line_color = getattr(entry, "line_color", (0.0, 0.0, 0.0, 1.0))
+    try:
+        mat.diffuse_color = (
+            float(line_color[0]),
+            float(line_color[1]),
+            float(line_color[2]),
+            0.0,
+        )
+    except Exception:  # noqa: BLE001
+        mat.diffuse_color = (0.0, 0.0, 0.0, 0.0)
     try:
         mat.blend_method = "BLEND"
         mat.use_screen_refraction = False
         mat.show_transparent_back = True
     except Exception:  # noqa: BLE001
         pass
-    tree = mat.node_tree
-    _clear_material_nodes(mat)
-    nodes = tree.nodes
-    links = tree.links
-    tex = nodes.new("ShaderNodeTexImage")
-    tex.name = "BName Raster Image"
+    nodes = _ensure_raster_material_nodes(mat)
+    tex = nodes["tex"]
     tex.image = image
-    emission = nodes.new("ShaderNodeEmission")
-    line_color = getattr(entry, "line_color", (0.0, 0.0, 0.0, 1.0))
+    emission = nodes["emission"]
     try:
         emission.inputs["Color"].default_value = (
             float(line_color[0]),
@@ -182,8 +277,7 @@ def ensure_raster_material(entry, image):
         )
     except Exception:  # noqa: BLE001
         pass
-    transparent = nodes.new("ShaderNodeBsdfTransparent")
-    alpha_scale = nodes.new("ShaderNodeValue")
+    alpha_scale = nodes["alpha_scale"]
     try:
         alpha_scale.outputs[0].default_value = (
             max(0.0, min(1.0, float(getattr(entry, "opacity", 1.0))))
@@ -191,19 +285,20 @@ def ensure_raster_material(entry, image):
         )
     except Exception:  # noqa: BLE001
         alpha_scale.outputs[0].default_value = 1.0
-    alpha_mul = nodes.new("ShaderNodeMath")
-    alpha_mul.operation = "MULTIPLY"
-    mix = nodes.new("ShaderNodeMixShader")
-    out = nodes.new("ShaderNodeOutputMaterial")
-    if tex.outputs.get("Alpha") is not None:
-        links.new(tex.outputs.get("Alpha"), alpha_mul.inputs[0])
-        links.new(alpha_scale.outputs[0], alpha_mul.inputs[1])
-        links.new(alpha_mul.outputs[0], mix.inputs[0])
-    links.new(transparent.outputs.get("BSDF"), mix.inputs[1])
-    links.new(emission.outputs.get("Emission"), mix.inputs[2])
-    links.new(mix.outputs.get("Shader"), out.inputs.get("Surface"))
-    nodes.active = tex
+    mat.node_tree.nodes.active = tex
     return mat
+
+
+def _assign_raster_material(obj, mat) -> None:
+    if obj is None or mat is None or getattr(obj, "data", None) is None:
+        return
+    materials = getattr(obj.data, "materials", None)
+    if materials is None:
+        return
+    if len(materials) == 1 and materials[0] is mat:
+        return
+    materials.clear()
+    materials.append(mat)
 
 
 def sync_raster_runtime_display(context, entry) -> None:
@@ -218,8 +313,7 @@ def sync_raster_runtime_display(context, entry) -> None:
     image = ensure_raster_image(context, entry, create_missing=False)
     if obj is not None and image is not None:
         mat = ensure_raster_material(entry, image)
-        obj.data.materials.clear()
-        obj.data.materials.append(mat)
+        _assign_raster_material(obj, mat)
     layer_stack_utils.tag_view3d_redraw(context)
 
 
@@ -282,8 +376,7 @@ def ensure_raster_plane(context, entry, *, mark_missing: bool = False):
     else:
         obj.data = mesh
     mat = ensure_raster_material(entry, image)
-    obj.data.materials.clear()
-    obj.data.materials.append(mat)
+    _assign_raster_material(obj, mat)
     obj["bname_raster_id"] = raster_id
     obj["bname_raster_parent_page"] = getattr(page, "id", "")
     obj.hide_viewport = not bool(getattr(entry, "visible", True))
@@ -422,6 +515,13 @@ def _active_image_paint_brush(context):
             paint.brush = brush
         except Exception:  # noqa: BLE001
             brush = None
+    if brush is not None:
+        try:
+            if not bool(brush.get(RASTER_BRUSH_INITIALIZED_PROP, False)):
+                brush.color = (0.0, 0.0, 0.0)
+                brush[RASTER_BRUSH_INITIALIZED_PROP] = True
+        except Exception:  # noqa: BLE001
+            pass
     return brush
 
 
@@ -592,15 +692,15 @@ class BNAME_OT_raster_layer_paint_enter(Operator):
             coma_modal_state.finish_all(context)
         except Exception:  # noqa: BLE001
             pass
-        obj = ensure_raster_plane(context, entry)
-        image = ensure_raster_image(context, entry)
-        if obj is None or image is None:
-            return {"CANCELLED"}
         try:
             if getattr(context.object, "mode", "OBJECT") != "OBJECT":
                 bpy.ops.object.mode_set(mode="OBJECT")
         except Exception:  # noqa: BLE001
             pass
+        obj = ensure_raster_plane(context, entry)
+        image = ensure_raster_image(context, entry)
+        if obj is None or image is None:
+            return {"CANCELLED"}
         for selected in tuple(getattr(context, "selected_objects", []) or []):
             if selected is not obj:
                 selected.select_set(False)
