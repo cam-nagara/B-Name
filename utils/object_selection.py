@@ -35,6 +35,18 @@ def effect_key(layer) -> str:
     return make_key("effect", "", str(getattr(layer, "name", "") or ""))
 
 
+def page_key(page) -> str:
+    return make_key("page", "", str(getattr(page, "id", "") or ""))
+
+
+def image_key(entry) -> str:
+    return make_key("image", "", str(getattr(entry, "id", "") or ""))
+
+
+def raster_key(entry) -> str:
+    return make_key("raster", "", str(getattr(entry, "id", "") or ""))
+
+
 def _coma_id(panel) -> str:
     return str(getattr(panel, "coma_id", "") or getattr(panel, "id", "") or "")
 
@@ -164,17 +176,38 @@ def selected_effect_names(context) -> set[str]:
 
 
 def _sync_balloon_flags(context, keys: list[str]) -> None:
+    """ビューポート object selection (key 集合) を全エントリの ``selected`` フラグへ反映.
+
+    レイヤーリストの RADIOBUT 表示と viewport 選択を一致させるため、balloon 以外
+    (text / page / coma / image / raster) も同じ key 集合で書き戻す。
+    """
     try:
         from ..core.work import get_work
 
         work = get_work(context)
     except Exception:  # noqa: BLE001
         work = None
-    if work is None:
-        return
     key_set = set(keys)
-    for page in getattr(work, "pages", []) or []:
-        page_id = str(getattr(page, "id", "") or "")
-        for balloon in getattr(page, "balloons", []) or []:
-            if hasattr(balloon, "selected"):
-                balloon.selected = make_key("balloon", page_id, getattr(balloon, "id", "")) in key_set
+    scene = getattr(context, "scene", None)
+    if work is not None:
+        for page in getattr(work, "pages", []) or []:
+            page_id = str(getattr(page, "id", "") or "")
+            if hasattr(page, "selected"):
+                page.selected = make_key("page", "", page_id) in key_set or make_key("page", page_id, "") in key_set
+            for panel in getattr(page, "comas", []) or []:
+                if hasattr(panel, "selected"):
+                    panel.selected = make_key("coma", page_id, _coma_id(panel)) in key_set
+            for balloon in getattr(page, "balloons", []) or []:
+                if hasattr(balloon, "selected"):
+                    balloon.selected = make_key("balloon", page_id, getattr(balloon, "id", "")) in key_set
+            for text in getattr(page, "texts", []) or []:
+                if hasattr(text, "selected"):
+                    text.selected = make_key("text", page_id, getattr(text, "id", "")) in key_set
+    # シーン直下に置かれる image / raster コレクションも同期
+    if scene is not None:
+        for entry in getattr(scene, "bname_image_layers", []) or []:
+            if hasattr(entry, "selected"):
+                entry.selected = make_key("image", "", getattr(entry, "id", "")) in key_set
+        for entry in getattr(scene, "bname_raster_layers", []) or []:
+            if hasattr(entry, "selected"):
+                entry.selected = make_key("raster", "", getattr(entry, "id", "")) in key_set

@@ -82,6 +82,7 @@ class BNameRasterLayer(bpy.types.PropertyGroup):
         update=_on_raster_runtime_display_changed,
     )
     visible: BoolProperty(name="表示", default=True, update=_on_raster_runtime_display_changed)  # type: ignore[valid-type]
+    selected: BoolProperty(name="マルチ選択", default=False, options={"SKIP_SAVE"})  # type: ignore[valid-type]
     locked: BoolProperty(name="ロック", default=False)  # type: ignore[valid-type]
     scope: EnumProperty(  # type: ignore[valid-type]
         name="所属",

@@ -406,6 +406,10 @@ class KeymapState:
         # オブジェクトモードのクリック → ページをアクティブ化。
         # operator 側で PASS_THROUGH し、Blender 標準のオブジェクト選択は妨げない。
         _add("bname.page_pick_viewport", "LEFTMOUSE")
+        # Ctrl+クリック / Shift+クリック → ページ/コマのマルチセレクト
+        # operator 内で event の修飾キーを参照し、object_selection に toggle/add する.
+        _add("bname.page_pick_viewport", "LEFTMOUSE", ctrl=True)
+        _add("bname.page_pick_viewport", "LEFTMOUSE", shift=True)
         # ダブルクリック → コマ編集モードへ (固定)
         _add("bname.enter_coma_mode", "LEFTMOUSE", value="DOUBLE_CLICK")
 

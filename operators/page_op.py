@@ -393,12 +393,17 @@ class BNAME_OT_page_pick_viewport(Operator):
     def invoke(self, context, event):
         if (
             event.value != "PRESS"
-            or bool(getattr(event, "shift", False))
-            or bool(getattr(event, "ctrl", False))
             or bool(getattr(event, "alt", False))
             or bool(getattr(event, "oskey", False))
         ):
             return {"PASS_THROUGH"}
+        is_ctrl = bool(getattr(event, "ctrl", False))
+        is_shift = bool(getattr(event, "shift", False))
+        # Ctrl+Shift は既存の bname.view_layer_pick (作画レイヤー選択) に予約されている
+        # ため、ここでは無視して PASS_THROUGH する.
+        if is_ctrl and is_shift:
+            return {"PASS_THROUGH"}
+        multi_mode = "toggle" if is_ctrl else ("add" if is_shift else "single")
         area = getattr(context, "area", None)
         if area is None or area.type != "VIEW_3D":
             return {"PASS_THROUGH"}
@@ -413,7 +418,7 @@ class BNAME_OT_page_pick_viewport(Operator):
 
             if is_browser:
                 context.scene.bname_overview_mode = True
-            if coma_edge_move_op.extend_selected_handle_at_event(context, event):
+            if multi_mode == "single" and coma_edge_move_op.extend_selected_handle_at_event(context, event):
                 return {"FINISHED"}
             edge_hit = coma_picker.find_coma_edge_at_event(context, event)
             panel_hit = None if edge_hit is not None else coma_picker.find_coma_at_event(context, event)
@@ -435,6 +440,24 @@ class BNAME_OT_page_pick_viewport(Operator):
             return {"PASS_THROUGH"}
         if not page_range.page_in_range(work.pages[page_index]):
             return {"PASS_THROUGH"}
+        # マルチ選択モード時は object_selection キーセットへトグル/追加するだけで
+        # アクティブやページ切替は行わない (CSP/PS のレイヤー複数選択と同じ感覚)
+        if multi_mode != "single":
+            page = work.pages[page_index]
+            from ..utils import object_selection
+
+            if coma_index is not None and 0 <= coma_index < len(page.comas):
+                key = object_selection.coma_key(page, page.comas[coma_index])
+            else:
+                key = object_selection.page_key(page)
+            object_selection.select_key(context, key, mode=multi_mode)
+            _tag_screen_redraw(context)
+            return {"FINISHED"}
+        # --- single (修飾キーなし) クリック: 従来動作 ---
+        # 単独選択時は他のマルチセレクトをクリアする (CSP / PS と同じ感覚)
+        from ..utils import object_selection
+
+        object_selection.clear(context)
         changed = False
         if not is_browser and not bool(getattr(context.scene, "bname_overview_mode", True)):
             context.scene.bname_overview_mode = True
@@ -453,6 +476,12 @@ class BNAME_OT_page_pick_viewport(Operator):
                     changed = True
                 if hasattr(context.scene, "bname_active_layer_kind"):
                     context.scene.bname_active_layer_kind = "coma"
+                # アクティブコマ自身も object_selection に登録 (リストの RADIO を点灯)
+                object_selection.select_key(
+                    context,
+                    object_selection.coma_key(page, page.comas[coma_index]),
+                    mode="single",
+                )
                 if edge_hit is not None:
                     edge_selection.set_selection(
                         context,

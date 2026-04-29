@@ -82,6 +82,7 @@ class BNameImageLayer(bpy.types.PropertyGroup):
 
     # 表示属性
     visible: BoolProperty(name="表示", default=True, update=_on_image_layer_changed)  # type: ignore[valid-type]
+    selected: BoolProperty(name="マルチ選択", default=False, options={"SKIP_SAVE"})  # type: ignore[valid-type]
     locked: BoolProperty(name="ロック", default=False)  # type: ignore[valid-type]
     opacity: FloatProperty(  # type: ignore[valid-type]
         name="不透明度",

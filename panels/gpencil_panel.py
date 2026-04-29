@@ -178,8 +178,22 @@ def _draw_visibility_slot(row, item, target, index: int) -> None:
         _draw_square_label(row)
 
 
-def _draw_selection_slot(row, index: int, active: bool) -> None:
-    _select_icon(row, index, "RADIOBUT_ON" if active else "RADIOBUT_OFF")
+def _draw_selection_slot(row, index: int, selected: bool) -> None:
+    """マルチセレクトのトグルボタン.
+
+    通常クリック=単独選択 / Ctrl=トグル / Shift=範囲選択。invoke 側で event の
+    修飾キーを見るため operator_context を INVOKE_DEFAULT にする。
+    """
+    cell = row.row(align=True)
+    cell.ui_units_x = 1.0
+    cell.operator_context = "INVOKE_DEFAULT"
+    op = cell.operator(
+        "bname.layer_stack_multi_select",
+        text="",
+        icon="RADIOBUT_ON" if selected else "RADIOBUT_OFF",
+        emboss=False,
+    )
+    op.index = index
 
 
 def _draw_drag_handle(row, index: int) -> None:
@@ -404,11 +418,16 @@ class BNAME_UL_layer_stack(UIList):
             layout.label(text=item.label, icon=_kind_icon(item.kind))
             return
         row = layout.row(align=True)
-        active = int(getattr(context.scene, "bname_active_layer_stack_index", -1)) == index
+        is_active = int(getattr(context.scene, "bname_active_layer_stack_index", -1)) == index
         resolved = layer_stack_utils.resolve_stack_item(context, item)
         target = resolved.get("target") if resolved is not None else None
+        # マルチ選択は data 側の selected フラグで判定。アクティブ行は常に選択扱い。
+        try:
+            is_selected = is_active or layer_stack_utils.is_item_selected(context, item)
+        except Exception:  # noqa: BLE001
+            is_selected = is_active
         _draw_visibility_slot(row, item, target, index)
-        _draw_selection_slot(row, index, active)
+        _draw_selection_slot(row, index, is_selected)
         _draw_hierarchy_slot(row, item, target, index)
         # 旧実装は ``row.split(factor=0.60)`` で右側に常に 40% を確保しており、
         # 右コントロール (3 ui-units) と左コンテンツの間に大きな空白が出ていた。

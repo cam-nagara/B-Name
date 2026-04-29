@@ -1530,6 +1530,77 @@ def resolve_stack_item(context, item):
     return None
 
 
+def _selection_attr_name(target) -> str:
+    """エントリの選択フラグ属性名を返す。GP layer は native ``select`` を使う."""
+    if target is None:
+        return ""
+    if hasattr(target, "selected"):
+        return "selected"
+    if hasattr(target, "select"):
+        return "select"
+    return ""
+
+
+def is_item_selected(context, item) -> bool:
+    """``item`` がマルチセレクト集合に含まれるかを返す。
+
+    アクティブ行 (``bname_active_layer_stack_index``) も「選択中」として扱う。
+    """
+    scene = getattr(context, "scene", None)
+    if scene is None or item is None:
+        return False
+    stack = getattr(scene, "bname_layer_stack", None)
+    if stack is not None:
+        idx = int(getattr(scene, "bname_active_layer_stack_index", -1))
+        if 0 <= idx < len(stack):
+            if stack_item_uid(stack[idx]) == stack_item_uid(item):
+                return True
+    resolved = resolve_stack_item(context, item)
+    target = resolved.get("target") if resolved is not None else None
+    attr = _selection_attr_name(target)
+    if not attr:
+        return False
+    try:
+        return bool(getattr(target, attr))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def set_item_selected(context, item, value: bool) -> bool:
+    """``item`` 配下の実エントリにマルチセレクトフラグを書き込む.
+
+    GP layer は native ``select`` を使い、その他のエントリは独自 ``selected``
+    プロパティを使う。balloon_group のような仮想行は対象外で False を返す.
+    """
+    if item is None:
+        return False
+    resolved = resolve_stack_item(context, item)
+    target = resolved.get("target") if resolved is not None else None
+    attr = _selection_attr_name(target)
+    if not attr:
+        return False
+    try:
+        setattr(target, attr, bool(value))
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def clear_all_selection(context) -> int:
+    """スタック全行のマルチセレクトフラグをクリアする (アクティブ行は影響なし)."""
+    scene = getattr(context, "scene", None)
+    if scene is None:
+        return 0
+    stack = getattr(scene, "bname_layer_stack", None)
+    if stack is None:
+        return 0
+    cleared = 0
+    for item in stack:
+        if set_item_selected(context, item, False):
+            cleared += 1
+    return cleared
+
+
 def active_stack_item(context):
     stack = sync_layer_stack(context)
     if stack is None:

@@ -298,6 +298,87 @@ class BNAME_OT_layer_stack_select(Operator):
         return {"FINISHED"}
 
 
+class BNAME_OT_layer_stack_multi_select(Operator):
+    """レイヤーリストの複数選択。Ctrl=トグル / Shift=範囲 / 通常=単独選択."""
+
+    bl_idname = "bname.layer_stack_multi_select"
+    bl_label = "レイヤーを複数選択"
+    bl_options = {"REGISTER"}
+
+    index: IntProperty(default=-1)  # type: ignore[valid-type]
+    mode: EnumProperty(  # type: ignore[valid-type]
+        items=(
+            ("SET", "単独", ""),
+            ("TOGGLE", "トグル", ""),
+            ("RANGE", "範囲", ""),
+        ),
+        default="SET",
+        options={"HIDDEN"},
+    )
+
+    @classmethod
+    def poll(cls, context):
+        stack = getattr(context.scene, "bname_layer_stack", None)
+        return stack is not None and len(stack) > 0
+
+    def invoke(self, context, event):
+        if bool(getattr(event, "shift", False)):
+            self.mode = "RANGE"
+        elif bool(getattr(event, "ctrl", False)) or bool(getattr(event, "oskey", False)):
+            self.mode = "TOGGLE"
+        else:
+            self.mode = "SET"
+        return self.execute(context)
+
+    def execute(self, context):
+        stack = layer_stack_utils.sync_layer_stack(context, preserve_active_index=True)
+        if stack is None or not (0 <= self.index < len(stack)):
+            return {"CANCELLED"}
+        scene = context.scene
+        active_idx = int(getattr(scene, "bname_active_layer_stack_index", -1))
+
+        if self.mode == "RANGE" and 0 <= active_idx < len(stack):
+            layer_stack_utils.clear_all_selection(context)
+            lo = min(active_idx, self.index)
+            hi = max(active_idx, self.index)
+            for i in range(lo, hi + 1):
+                layer_stack_utils.set_item_selected(context, stack[i], True)
+            # アクティブ行は変更せず、範囲の終端は選択フラグで表現する
+            layer_stack_utils.tag_view3d_redraw(context)
+            return {"FINISHED"}
+
+        if self.mode == "TOGGLE":
+            target = stack[self.index]
+            currently = layer_stack_utils.is_item_selected(context, target)
+            if currently:
+                # アクティブ行を解除する場合は別の選択行にアクティブを移す
+                if self.index == active_idx:
+                    layer_stack_utils.set_item_selected(context, target, False)
+                    new_active = -1
+                    for i, it in enumerate(stack):
+                        if i == self.index:
+                            continue
+                        if layer_stack_utils.is_item_selected(context, it):
+                            new_active = i
+                            break
+                    if new_active >= 0:
+                        layer_stack_utils.select_stack_index(context, new_active)
+                else:
+                    layer_stack_utils.set_item_selected(context, target, False)
+            else:
+                layer_stack_utils.set_item_selected(context, target, True)
+                layer_stack_utils.select_stack_index(context, self.index)
+            layer_stack_utils.tag_view3d_redraw(context)
+            return {"FINISHED"}
+
+        # SET: 単独選択 — 他の selected をすべてクリアし、この行のみ選択
+        layer_stack_utils.clear_all_selection(context)
+        layer_stack_utils.set_item_selected(context, stack[self.index], True)
+        layer_stack_utils.select_stack_index(context, self.index)
+        layer_stack_utils.tag_view3d_redraw(context)
+        return {"FINISHED"}
+
+
 class BNAME_OT_layer_stack_move(Operator):
     bl_idname = "bname.layer_stack_move"
     bl_label = "レイヤー順を変更"
@@ -1178,6 +1259,7 @@ class BNAME_OT_layer_stack_detail(Operator):
 
 _CLASSES = (
     BNAME_OT_layer_stack_select,
+    BNAME_OT_layer_stack_multi_select,
     BNAME_OT_layer_stack_move,
     BNAME_OT_layer_stack_drag,
     BNAME_MT_layer_stack_add,

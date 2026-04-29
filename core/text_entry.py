@@ -100,6 +100,11 @@ class BNameTextEntry(bpy.types.PropertyGroup):
         default=True,
         update=_on_text_visible_changed,
     )
+    selected: BoolProperty(  # type: ignore[valid-type]
+        name="マルチ選択",
+        default=False,
+        options={"SKIP_SAVE"},
+    )
     body: StringProperty(name="本文", default="", options={"TEXTEDIT_UPDATE"})  # type: ignore[valid-type]
 
     # ページローカル座標 (mm). overlay 描画時にページ grid offset を加算する。

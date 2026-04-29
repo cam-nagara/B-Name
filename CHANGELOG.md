@@ -3,6 +3,34 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-29 — Ctrl/Shift マルチセレクト (レイヤーリスト + ビューポート)
+
+### 追加
+- **レイヤーリスト**: `BNAME_OT_layer_stack_multi_select` を新設。レイヤー左の RADIOBUT_OFF/ON ボタンを以下のように動作させる:
+  - 通常クリック: そのレイヤー単独を選択 (他の selected をクリアして active に)
+  - Ctrl + クリック: そのレイヤーの選択をトグル (他の selected は維持)
+  - Shift + クリック: active 行から押した行までの範囲を一括選択
+- **ビューポート (オブジェクトモード)**: `BNAME_OT_page_pick_viewport` に Ctrl / Shift 修飾を追加し、コマ/ページの複数選択を可能化。
+  - Ctrl + クリック: そのコマ/ページの選択をトグル。アクティブ・ページ切替は行わない
+  - Shift + クリック: そのコマ/ページを選択集合に追加
+  - 通常クリック: 従来通り単独選択 + ページ切替 (旧マルチセレクトはクリアされる)
+- 全種別の data PG (`BNamePageEntry` / `BNameComaEntry` / `BNameImageLayer` / `BNameRasterLayer` / `BNameTextEntry`) に `selected: BoolProperty(SKIP_SAVE)` を追加 (フキダシは既存)。GP layer / group / 効果線は Blender 既定の `select` を流用
+- `utils/layer_stack` に `is_item_selected` / `set_item_selected` / `clear_all_selection` ヘルパーを追加。スタック行 → 実 PG への select 反映を一元化
+- `utils/object_selection` に `page_key` / `image_key` / `raster_key` ヘルパーを追加し、key 集合 → 各エントリの `selected` フラグへの sync を全種別 (page / coma / balloon / text / image / raster) に拡張 (旧 `_sync_balloon_flags`)
+- キーマップに `bname.page_pick_viewport` を Ctrl+LEFTMOUSE / Shift+LEFTMOUSE で追加バインド
+
+### 変更
+- `_draw_selection_slot` を「アクティブ行表示用ラベル」から「multi-select オペレーターを発火する emboss=False ボタン」に変更し、`operator_context = INVOKE_DEFAULT` で event の Ctrl/Shift を見て分岐
+- `BNAME_UL_layer_stack.draw_item` の selected 判定を「アクティブ行 OR data 側 selected フラグ」の OR に変更し、複数行に同時に塗りつぶし状態を出せるように
+- `BNAME_OT_page_pick_viewport.invoke` の修飾キー reject を緩和し、Ctrl / Shift 修飾を multi_mode へ流用するよう変更 (Ctrl+Shift は既存 `bname.view_layer_pick` 用に PASS_THROUGH)
+
+### 整合性
+- ビューポートの object_selection (key 集合) と各エントリの `selected` フラグが双方向に同期するため、ビューポート Ctrl+クリックでの選択は即座にレイヤーリストの RADIOBUT 表示に反映され、その逆も同様
+
+### 既知の制約
+- 行のラベル(名前)領域は Blender の `template_list` 既定の選択挙動 (単独 active 移動のみ) のまま。Ctrl/Shift 修飾は左の RADIOBUT トグルから操作する設計
+- balloon/text/object ツール (modal) 中の Ctrl/Shift クリックは各ツール側のロジックを既存利用 (本コミットでは page_pick_viewport だけを変更)
+
 ## 2026-04-29 — レイヤーリスト D&D の視覚フィードバックと操作性を改善
 
 ### 追加

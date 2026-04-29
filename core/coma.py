@@ -130,6 +130,11 @@ class BNameComaEntry(bpy.types.PropertyGroup):
         default=True,
         update=_on_coma_visible_changed,
     )
+    selected: BoolProperty(  # type: ignore[valid-type]
+        name="マルチ選択",
+        default=False,
+        options={"SKIP_SAVE"},
+    )
     background_color: FloatVectorProperty(  # type: ignore[valid-type]
         name="背景色",
         description="コマ内側に敷く背景色。アルファ0で透明",
