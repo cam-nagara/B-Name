@@ -231,22 +231,15 @@ class BNAME_OT_alt_reparent_drag(Operator):
         return _has_selected_targets(context)
 
     def invoke(self, context, event):
-        print(f"[B-Name][alt_reparent_drag] invoke: type={event.type} value={event.value} "
-              f"alt={event.alt} ctrl={event.ctrl} shift={event.shift} "
-              f"mouse=({event.mouse_x},{event.mouse_y})")
         if event.type != "LEFTMOUSE" or event.value != "PRESS":
-            print("  -> CANCELLED (not LEFTMOUSE PRESS)")
             return {"CANCELLED"}
         if not bool(getattr(event, "alt", False)):
-            print("  -> PASS_THROUGH (no alt)")
             return {"PASS_THROUGH"}
         # Ctrl+Alt は brush_size_drag 用 → こちらは発動させない
         if bool(getattr(event, "ctrl", False)):
-            print("  -> PASS_THROUGH (ctrl held)")
             return {"PASS_THROUGH"}
         # Shift+Alt は alt_reparent_out (クリック型) 用 → ドラッグ前提のこの operator は発動しない
         if bool(getattr(event, "shift", False)):
-            print("  -> PASS_THROUGH (shift held)")
             return {"PASS_THROUGH"}
         self._start_x = float(event.mouse_x)
         self._start_y = float(event.mouse_y)
@@ -255,9 +248,6 @@ class BNAME_OT_alt_reparent_drag(Operator):
         self._last_world_xy = None
         # 初期ターゲット表示
         target = layer_reparent.find_target_for_drop(context, event)
-        print(f"  initial target: kind={target.kind} page={getattr(target.page, 'id', None) if target.page else None}"
-              f" panel_coma_id={getattr(target.panel, 'coma_id', None) if target.panel else None}"
-              f" world_xy={target.world_xy_mm}")
         _set_overlay_for_target(target)
         if target.world_xy_mm is not None:
             count = _selected_count(context)
@@ -265,9 +255,7 @@ class BNAME_OT_alt_reparent_drag(Operator):
                 world_xy_mm=target.world_xy_mm,
                 count=count,
             )
-            print(f"  selected_count={count}")
         context.window_manager.modal_handler_add(self)
-        print("  -> RUNNING_MODAL (modal handler added)")
         return {"RUNNING_MODAL"}
 
     def modal(self, context, event):
@@ -295,13 +283,8 @@ class BNAME_OT_alt_reparent_drag(Operator):
 
     def _commit(self, context, event):
         target = layer_reparent.find_target_for_drop(context, event)
-        print(f"[B-Name][alt_reparent_drag] _commit: target.kind={target.kind} "
-              f"page={getattr(target.page, 'id', None) if target.page else None} "
-              f"panel_coma_id={getattr(target.panel, 'coma_id', None) if target.panel else None} "
-              f"world_xy={target.world_xy_mm} moved={self._moved}")
         self._cleanup_overlay()
         if target.kind == "outside":
-            print("  -> outside, CANCELLED")
             reparent_overlay.flash_error("page", duration=0.3)
             self.report({"INFO"}, "ドロップ位置にコンテナがありません")
             return {"CANCELLED"}
@@ -312,7 +295,6 @@ class BNAME_OT_alt_reparent_drag(Operator):
             target,
             new_world_xy_mm=new_world_xy,
         )
-        print(f"  reparent_selected returned changed={changed}")
         if changed > 0:
             _set_confirm_for_target(target)
             self.report({"INFO"}, f"{changed} レイヤーを {target.kind} に移動 (Alt+ドラッグ)")

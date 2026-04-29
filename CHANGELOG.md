@@ -3,6 +3,18 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-30 — ビューポート Alt reparent フェーズA検証修正
+
+### 修正
+- `BNAME_OT_alt_reparent_drag` に残っていた診断用 `print` を削除し、通常操作時に
+  コンソールへ大量ログが出続けないようにした。
+- Blender 5.1.1 の `KeyMapItems.new(..., head=True)` を使い、Alt+LEFTMOUSE /
+  Alt+Shift+LEFTMOUSE の addon keymap を同一キーマップ内の先頭へ追加するようにした。
+
+### テスト
+- `test/blender_alt_reparent_phase_a_check.py` を追加。Blender 5.1.1 実機で
+  page→coma、別ページ移送、子テキスト連動、マルチセレクト一括 reparent を検証。
+
 ## 2026-04-30 — ビューポート Alt 系 reparent の徹底チェック修正
 
 ### 修正

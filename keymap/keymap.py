@@ -296,13 +296,26 @@ class KeymapState:
                     continue
             self.bname_keymaps.append(km)
             try:
-                kmi = km.keymap_items.new("bname.alt_reparent_drag", "LEFTMOUSE", "PRESS", alt=True)
+                kmi = km.keymap_items.new(
+                    "bname.alt_reparent_drag",
+                    "LEFTMOUSE",
+                    "PRESS",
+                    alt=True,
+                    head=True,
+                )
                 self.bname_items.append(kmi)
                 print(f"[B-Name][KEYMAP] + bname.alt_reparent_drag ({km_name}) LEFTMOUSE alt=1")
             except Exception as exc:  # noqa: BLE001
                 print(f"[B-Name][KEYMAP] {km_name} alt_reparent_drag failed: {exc!r}")
             try:
-                kmi = km.keymap_items.new("bname.alt_reparent_out", "LEFTMOUSE", "PRESS", alt=True, shift=True)
+                kmi = km.keymap_items.new(
+                    "bname.alt_reparent_out",
+                    "LEFTMOUSE",
+                    "PRESS",
+                    alt=True,
+                    shift=True,
+                    head=True,
+                )
                 self.bname_items.append(kmi)
                 print(f"[B-Name][KEYMAP] + bname.alt_reparent_out ({km_name}) LEFTMOUSE alt=1 shift=1")
             except Exception as exc:  # noqa: BLE001
@@ -459,10 +472,10 @@ class KeymapState:
         _add("bname.page_pick_viewport", "LEFTMOUSE", ctrl=True)
         _add("bname.page_pick_viewport", "LEFTMOUSE", shift=True)
         # Alt+ドラッグ → 選択中レイヤーをドロップ先のコマ/ページへ reparent + 位置追従
-        _add("bname.alt_reparent_drag", "LEFTMOUSE", alt=True)
+        _add("bname.alt_reparent_drag", "LEFTMOUSE", alt=True, head=True)
         # Alt+Shift+クリック → 選択中レイヤーを 1 段浅い親へ (位置維持)
         # operator 内でドラッグ判定をしないため、PRESS 即発火扱い.
-        _add("bname.alt_reparent_out", "LEFTMOUSE", alt=True, shift=True)
+        _add("bname.alt_reparent_out", "LEFTMOUSE", alt=True, shift=True, head=True)
         # ダブルクリック → コマ編集モードへ (固定)
         _add("bname.enter_coma_mode", "LEFTMOUSE", value="DOUBLE_CLICK")
 
