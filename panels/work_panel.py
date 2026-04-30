@@ -2,13 +2,41 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import bpy
 from bpy.types import Panel
 
 from ..core.mode import MODE_PAGE, MODE_COMA, get_mode
 from ..core.work import get_work
+from ..utils import paths as _paths
 
 B_NAME_CATEGORY = "B-Name"
+
+
+def _current_blend_is_coma_blend() -> bool:
+    """現在開いている .blend が ``pNNNN/cNN/cNN.blend`` 形式なら True.
+
+    ``bname_mode`` / ``work.loaded`` が load_post の遅延や同期失敗で正しく
+    セットされない場合の救済用。ファイルパス自体から「コマ編集中」かを
+    判定して、ページ一覧へ戻る経路を必ず提供する。
+    """
+    fp = bpy.data.filepath
+    if not fp:
+        return False
+    try:
+        path = Path(fp).resolve()
+    except OSError:
+        return False
+    parts = path.parts
+    if len(parts) < 3:
+        return False
+    page_id, coma_id, fname = parts[-3], parts[-2], parts[-1]
+    return (
+        _paths.is_valid_page_id(page_id)
+        and _paths.is_valid_coma_id(coma_id)
+        and fname == f"{coma_id}.blend"
+    )
 
 
 class BNAME_PT_work(Panel):
@@ -50,6 +78,12 @@ class BNAME_PT_work(Panel):
         row.enabled = mode == MODE_PAGE
         row.prop(info, "page_number_start", text="開始")
         row.prop(info, "page_number_end", text="終了")
+        # 綴じ方向 / 読む方向 (paper の設定だが、作品単位で決める情報なので
+        # 作品情報パネルから直接編集できるようにする)
+        sub = box.column(align=True)
+        sub.enabled = mode == MODE_PAGE
+        sub.prop(work.paper, "start_side", text="開始ページ")
+        sub.prop(work.paper, "read_direction", text="読む方向")
 
         box = layout.box()
         box.label(text="コマ3Dテンプレート", icon="FILE_BLEND")
@@ -67,12 +101,21 @@ class BNAME_PT_coma_return(Panel):
 
     @classmethod
     def poll(cls, context):
+        # 通常: モードが MODE_COMA + work.loaded
         work = get_work(context)
-        return bool(work and work.loaded and get_mode(context) == MODE_COMA)
+        if work and work.loaded and get_mode(context) == MODE_COMA:
+            return True
+        # フォールバック: load_post の遅延等でモードが同期できなくても、
+        # 開いている .blend のパスが cNN.blend ならパネルを表示する。
+        return _current_blend_is_coma_blend()
 
     def draw(self, context):
         layout = self.layout
-        layout.operator("bname.exit_coma_mode", text="ページ一覧に戻る", icon="BACK")
+        layout.operator(
+            "bname.exit_coma_mode_safe",
+            text="ページ一覧に戻る",
+            icon="BACK",
+        )
         layout.separator()
         layout.prop(context.scene, "bname_page_browser_position", text="ページ一覧位置")
         layout.prop(context.scene, "bname_page_browser_size", text="サイズ")

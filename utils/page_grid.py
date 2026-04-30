@@ -192,10 +192,11 @@ def _obj_subpage_offset_mm(obj) -> tuple[float, float]:
 
 
 # Grease Pencil オブジェクトを用紙より手前 (z>0) に配置するためのオフセット (m).
-# 紙塗りは overlay (z=0 平面) に描画されるため、GP がそれより上に乗らないと
-# Solid 描画の Z 順で GP が紙の背面になり「線が消える」現象が発生する。
-# 0.001 m = 1 mm 程度上げれば GP が確実に前に来る。
-GP_Z_LIFT_M = 0.001
+# GP Object のベース Z リフト。 現仕様では assign_per_page_z_ranks が
+# page 内 rank ベース (0.1 刻み) で Object.location.z を確定するため、
+# ここでは追加リフト不要 (= 0)。 paper_bg z=0 に対しては rank*0.1 で
+# 自然に上に乗る。
+GP_Z_LIFT_M = 0.0
 
 
 def apply_page_collection_transforms(context, work) -> int:

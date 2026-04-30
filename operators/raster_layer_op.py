@@ -18,7 +18,12 @@ from ..utils.geom import mm_to_m, mm_to_px
 
 _logger = log.get_logger(__name__)
 
-RASTER_Z_LIFT_M = 0.0005
+# ラスター Mesh の頂点 Z リフト (m)。
+# 旧仕様では Mesh 頂点に z オフセットを焼き込んでいたが、 現仕様では
+# **Object.location.z** を ``assign_per_page_z_ranks`` で page 内 rank
+# (0.1 刻み) に振り直すため、 Mesh 頂点側の Z リフトは不要 (= 0)。
+# Mesh ローカル z=0 + Object.location.z = rank*0.1 で自然な重なり順を実現。
+RASTER_Z_LIFT_M = 0.0
 RASTER_MATERIAL_VERSION = 2
 RASTER_MATERIAL_VERSION_PROP = "bname_raster_material_version"
 RASTER_IMAGE_NODE = "BName Raster Image"
@@ -291,10 +296,21 @@ def ensure_raster_material(entry, image):
     except Exception:  # noqa: BLE001
         mat.diffuse_color = (0.0, 0.0, 0.0, 0.0)
     try:
+        # ラスターの alpha は連続的 (筆圧/エッジ AA) なので BLENDED が正解。
+        # DITHERED は alpha-clip + dither pattern を使うためズームすると
+        # pattern がジラジラ動く副作用がある。
         mat.blend_method = "BLEND"
         mat.use_screen_refraction = False
         mat.show_transparent_back = True
     except Exception:  # noqa: BLE001
+        pass
+    # Blender 5.1 EEVEE Next: BLENDED 材質は alpha 合成 (滑らか)。
+    # depth buffer には書込まないため、用紙背景は overlay GPU 描画ではなく
+    # 実 Mesh (paper_bg_object.py) で表現する。実 Mesh は opaque 材質で
+    # depth を書き、BLENDED ラスター (z=0.005) が正しく alpha 合成される。
+    try:
+        mat.surface_render_method = "BLENDED"
+    except (AttributeError, TypeError):
         pass
     nodes = _ensure_raster_material_nodes(mat)
     tex = nodes["tex"]
@@ -350,16 +366,23 @@ def sync_raster_runtime_display(context, entry) -> None:
 
 
 def _ensure_raster_mesh(work, raster_id: str):
+    """ラスター plane Mesh を ensure。常にページキャンバス全体を覆う矩形 (mm).
+
+    paper.canvas_width_mm × canvas_height_mm のページピッタリ。頂点は Mesh
+    ローカル座標で z=RASTER_Z_LIFT_M。Object.location.z の z_index リフトと
+    合算されて Material Preview でも他レイヤーより確実に手前に表示される。
+    """
     mesh = bpy.data.meshes.get(raster_mesh_name(raster_id))
     if mesh is None:
         mesh = bpy.data.meshes.new(raster_mesh_name(raster_id))
     w = mm_to_m(float(work.paper.canvas_width_mm))
     h = mm_to_m(float(work.paper.canvas_height_mm))
+    z = RASTER_Z_LIFT_M
     verts = (
-        (0.0, 0.0, RASTER_Z_LIFT_M),
-        (w, 0.0, RASTER_Z_LIFT_M),
-        (w, h, RASTER_Z_LIFT_M),
-        (0.0, h, RASTER_Z_LIFT_M),
+        (0.0, 0.0, z),
+        (w, 0.0, z),
+        (w, h, z),
+        (0.0, h, z),
     )
     mesh.clear_geometry()
     mesh.from_pydata(verts, [], [(0, 1, 2, 3)])
@@ -387,10 +410,14 @@ def ensure_raster_plane(context, entry, *, mark_missing: bool = False):
         return None
     page = None
     parent_key = str(getattr(entry, "parent_key", "") or "")
-    for candidate in getattr(work, "pages", []):
-        if getattr(candidate, "id", "") == parent_key:
-            page = candidate
-            break
+    # parent_key は "pNNNN" (page) または "pNNNN:cNN" (coma) 形式。コマ配下では
+    # ":" の手前を page_id として扱い、ページ検索する。
+    page_id_part = parent_key.split(":", 1)[0] if parent_key else ""
+    if page_id_part:
+        for candidate in getattr(work, "pages", []):
+            if getattr(candidate, "id", "") == page_id_part:
+                page = candidate
+                break
     if page is None:
         page = get_active_page(context)
     if page is None:
@@ -402,7 +429,16 @@ def ensure_raster_plane(context, entry, *, mark_missing: bool = False):
     if image is None:
         return None
     mesh = _ensure_raster_mesh(work, raster_id)
-    obj = bpy.data.objects.get(raster_plane_name(raster_id))
+    # bname_id (= raster_id) で既存 Object を逆引き。stamp_layer_object 経由で
+    # canonical 名 (L0010__raster__title) にリネームされた後でも同 Object を
+    # 再利用できる。これがないと毎回 raster_plane_<id> 名で新規 Object を
+    # 作ってしまい、Object と Image の二重存在 + 描画対象のズレを招く。
+    from ..utils import object_naming as _on
+
+    obj = _on.find_object_by_bname_id(raster_id, kind="raster")
+    if obj is None:
+        # 旧名で残置されている可能性 (mirror 前のレガシー) を救出
+        obj = bpy.data.objects.get(raster_plane_name(raster_id))
     if obj is None:
         obj = bpy.data.objects.new(raster_plane_name(raster_id), mesh)
     else:
@@ -415,6 +451,63 @@ def ensure_raster_plane(context, entry, *, mark_missing: bool = False):
     obj.hide_render = not bool(getattr(entry, "visible", True))
     coll = gp_utils.ensure_page_collection(context.scene, page.id)
     _link_object_to_collection_only(obj, coll)
+    # 注意: page world offset の location 設定は stamp_layer_object 側で
+    # apply_page_offset=True により自動適用される (この後 stamp が呼ばれる)。
+
+    # Phase 3a: raster Object に B-Name 安定 ID と parent を stamp し、
+    # Outliner mirror の管理下に取り込む。Phase 1 で実装した
+    # stamp_layer_object 経由で Outliner Collection 階層にも link 同期する。
+    try:
+        from ..utils import layer_object_sync as _los
+
+        # raster の親キーは entry.parent_kind / entry.parent_key を採用。
+        # PARENT_KIND_ITEMS = ("none", "page", "coma") のいずれか。"none" は
+        # outside (ページ外) を意味する (ユーザーが意図的に outside に置いた
+        # raster を尊重する)。
+        entry_parent_key = str(getattr(entry, "parent_key", "") or "")
+        entry_parent_kind = str(getattr(entry, "parent_kind", "") or "page")
+        if entry_parent_kind == "none":
+            stamp_parent_kind = "outside"
+            stamp_parent_key = ""
+        elif entry_parent_kind == "coma" and entry_parent_key:
+            stamp_parent_kind = "coma"
+            stamp_parent_key = entry_parent_key
+        else:
+            # page or 不正値の fallback
+            stamp_parent_kind = "page"
+            stamp_parent_key = entry_parent_key or str(getattr(page, "id", "") or "")
+
+        # BNameRasterLayer には z_index フィールドが無いため、scene 内の
+        # raster 配列での index に 10 を掛けて sequential な z_index を採番。
+        # これにより複数 raster が異なる prefix を持ち、Outliner alpha sort で
+        # 順序破綻しない。
+        z_index = 0
+        coll = getattr(context.scene, "bname_raster_layers", None)
+        if coll is not None:
+            for i, e in enumerate(coll):
+                if str(getattr(e, "id", "") or "") == raster_id:
+                    z_index = (i + 1) * 10
+                    break
+
+        _los.stamp_layer_object(
+            obj,
+            kind="raster",
+            bname_id=str(raster_id),
+            title=str(getattr(entry, "title", "") or raster_id),
+            z_index=z_index,
+            parent_kind=stamp_parent_kind,
+            parent_key=stamp_parent_key,
+            scene=context.scene,
+        )
+        # コマ/ページマスクを Boolean Intersect で適用 (枠外を視覚的に切抜き)
+        try:
+            from ..utils import mask_apply
+
+            mask_apply.apply_mask_to_layer_object(obj)
+        except Exception:  # noqa: BLE001
+            _logger.exception("raster: mask_apply failed")
+    except Exception:  # noqa: BLE001
+        _logger.exception("raster: stamp_layer_object failed")
     return obj
 
 
@@ -658,16 +751,51 @@ class BNAME_OT_raster_layer_add(Operator):
     bl_label = "ラスター描画レイヤーを追加"
     bl_options = {"REGISTER", "UNDO"}
 
-    dpi: IntProperty(name="DPI", default=300, min=30, soft_max=1200)  # type: ignore[valid-type]
+    dpi_preset: EnumProperty(  # type: ignore[valid-type]
+        name="DPI",
+        items=(
+            ("150", "150 dpi", "下描き / 確認用 (軽量)"),
+            ("300", "300 dpi", "標準 (推奨)"),
+            ("600", "600 dpi", "印刷向け (高解像度)"),
+            ("custom", "カスタム", "カスタム値を直接指定"),
+        ),
+        default="300",
+    )
+    dpi: IntProperty(name="カスタム DPI", default=300, min=30, soft_max=1200)  # type: ignore[valid-type]
     bit_depth: EnumProperty(  # type: ignore[valid-type]
         name="階調",
         items=(("gray8", "グレー 8bit", ""), ("gray1", "1bit", "")),
         default="gray8",
     )
+    enter_paint: BoolProperty(  # type: ignore[valid-type]
+        name="作成後すぐ描画開始",
+        description="生成完了後、自動的に Texture Paint モードへ切替えます。",
+        default=True,
+    )
 
     @classmethod
     def poll(cls, context):
         return _raster_collection(context.scene) is not None
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=320)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, "dpi_preset")
+        if self.dpi_preset == "custom":
+            layout.prop(self, "dpi")
+        layout.prop(self, "bit_depth")
+        layout.separator()
+        layout.prop(self, "enter_paint")
+
+    def _resolved_dpi(self) -> int:
+        if self.dpi_preset == "custom":
+            return int(self.dpi)
+        try:
+            return int(self.dpi_preset)
+        except ValueError:
+            return 300
 
     def execute(self, context):
         work = get_work(context)
@@ -685,11 +813,17 @@ class BNAME_OT_raster_layer_add(Operator):
         entry.title = f"ラスター {len(coll)}"
         entry.image_name = raster_image_name(raster_id)
         entry.filepath_rel = raster_filepath_rel(raster_id)
-        entry.dpi = int(self.dpi)
+        entry.dpi = self._resolved_dpi()
         entry.bit_depth = self.bit_depth
         entry.scope = "page"
-        entry.parent_kind = "page"
-        entry.parent_key = page.id
+        # アクティブな階層 (コマ選択中ならコマ、そうでなければページ) を反映
+        from ..utils import active_target as _at
+
+        parent_kind, parent_key, _resolved_page = _at.resolve_active_target(
+            context, prefer_page=page
+        )
+        entry.parent_kind = parent_kind
+        entry.parent_key = parent_key or page.id
         context.scene.bname_active_raster_layer_index = len(coll) - 1
         context.scene.bname_active_layer_kind = "raster"
         if ensure_raster_plane(context, entry) is None:
@@ -705,6 +839,14 @@ class BNAME_OT_raster_layer_add(Operator):
                 if layer_stack_utils.stack_item_uid(item) == uid:
                     layer_stack_utils.select_stack_index(context, i)
                     break
+        # 作成完了後に自動的に Texture Paint モードへ入る (enter_paint=True 時)
+        if bool(self.enter_paint):
+            try:
+                bpy.ops.bname.raster_layer_paint_enter(
+                    "INVOKE_DEFAULT", raster_id=raster_id
+                )
+            except Exception:  # noqa: BLE001
+                _logger.exception("raster_layer_add: paint_enter 自動切替失敗")
         return {"FINISHED"}
 
 
@@ -796,6 +938,15 @@ class BNAME_OT_raster_layer_paint_enter(Operator):
             except Exception:  # noqa: BLE001
                 pass
         force_active_brush_grayscale(context)
+        # paper_bg Mesh を一時的に隠す: opaque な paper_bg が raycast に
+        # 干渉して active raster mesh の UV 取得が失敗する (= 描けない) のを
+        # 防ぐ。Texture Paint 中は raster mesh のみが ray 対象になる。
+        try:
+            from ..utils import paper_bg_object as _pbg
+
+            _pbg.set_paper_bg_visible(False)
+        except Exception:  # noqa: BLE001
+            _logger.exception("paper_bg hide failed (paint enter)")
         try:
             bpy.ops.object.mode_set(mode="TEXTURE_PAINT")
         except Exception as exc:  # noqa: BLE001
@@ -803,6 +954,26 @@ class BNAME_OT_raster_layer_paint_enter(Operator):
             return {"CANCELLED"}
         force_active_brush_grayscale(context)
         _start_brush_grayscale_timer()
+        # 3D ビューをマテリアルプレビューに切替えて、Image Texture (= 描いた
+        # ピクセル) が即座に見える状態にする。Solid モードでは Image Texture
+        # が反映されず「描いても見えない」状態になるため。
+        try:
+            for area in context.screen.areas if context.screen else ():
+                if area.type != "VIEW_3D":
+                    continue
+                space = area.spaces.active
+                if space is None or space.type != "VIEW_3D":
+                    continue
+                shading = getattr(space, "shading", None)
+                if shading is None:
+                    continue
+                if shading.type not in {"MATERIAL", "RENDERED"}:
+                    try:
+                        shading.type = "MATERIAL"
+                    except Exception:  # noqa: BLE001
+                        pass
+        except Exception:  # noqa: BLE001
+            pass
         return {"FINISHED"}
 
 
@@ -821,6 +992,13 @@ class BNAME_OT_raster_layer_paint_exit(Operator):
         except Exception as exc:  # noqa: BLE001
             self.report({"WARNING"}, f"Objectモードへ戻せません: {exc}")
             return {"CANCELLED"}
+        # paint 終了 → paper_bg を再表示して用紙白を復元
+        try:
+            from ..utils import paper_bg_object as _pbg
+
+            _pbg.set_paper_bg_visible(True)
+        except Exception:  # noqa: BLE001
+            _logger.exception("paper_bg show failed (paint exit)")
         return {"FINISHED"}
 
 

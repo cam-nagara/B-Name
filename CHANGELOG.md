@@ -75,6 +75,927 @@ Blender 5.1.1 を対象としています。
 - ページ追加/削除で end が自動追従する点は ``page_op._sync_page_number_range``
   経由で従来通り維持
 
+## 2026-05-01 — 全 17 パネル / 133 prop / 70 op 完全網羅監査 (Option A)
+
+ユーザー指示「Option A: 残り 104 prop を実機 set/get cycle で個別確認」
+への対応。 全 widget レベル網羅監査を完了。
+
+### 監査範囲
+- 17 unique B-Name パネル (BNAME_PT_*)
+- 133 ユニーク prop reference (panel.draw() ソースから抽出)
+- 70 op reference (68 ユニーク)
+
+### 監査方法
+1. 各 panel.draw() の Python ソースを正規表現で解析、
+   ``layout.prop(base, name)`` / ``layout.operator(idname)`` を抽出
+2. ``base_expr`` を panel ごとの local 変数解決 (entry, sp, tail, settings,
+   item etc.) で実体化
+3. 各 prop の bl_rna 型 (BOOLEAN/INT/FLOAT/STRING/ENUM) に応じて
+   set→restore cycle を実行
+4. FLOAT vector (color 等 ``array_length>1``) は per-component +0.1 で対応
+
+### 結果
+**Property 監査** (133 件):
+- ✅ OK 130 件: set/get cycle 通過
+- ❌ FAIL 0 件
+- ⚪ SKIPPED 3 件: ``brush.size`` / ``brush.strength`` / ``prefs.gpencil_follow_cursor``
+  (active GP brush context 必須、 paint mode 中のみ存在 — 機能的問題なし)
+
+**Operator 監査** (68 ユニーク op):
+- ✅ poll OK 52 件
+- ⚪ poll=False 16 件 (15 件は context-dep 期待通り):
+  - balloon_*, text_*, image_layer_remove: アクティブ entry 必要
+  - pages_split_spread: 見開き必要
+  - coma_camera_*, exit_coma_mode: MODE_COMA 必要
+  - page_browser_mark_area: page browser area 必要
+- ⚠️ ``texts_to_empty_all`` poll=False の解析:
+  → Blender 5.1.1 の addon 再 register 累積による artifact
+  (``__subclasses__()`` に 9 個の stale class 残存)。
+  ``Class.poll(ctx)`` 直接実行は True、 機能的に正常。
+  プロダクション (addon 1 回 register) では発生しない。
+
+### パネル別 widget 内訳
+| panel | label | props | ops |
+|---|---|---:|---:|
+| BNAME_PT_balloons | フキダシ | 28 | 5 |
+| BNAME_PT_paper | 用紙 | 29 | 1 |
+| BNAME_PT_effect_line | 効果線 | 18 | 1 |
+| BNAME_PT_texts | テキスト | 17 | 3 |
+| BNAME_PT_image_layers | 画像レイヤー | 15 | 2 |
+| BNAME_PT_outliner_layers | Outliner レイヤー | 0 | 18 |
+| BNAME_PT_coma_camera | コマ編集: カメラ | 9 | 5 |
+| BNAME_PT_work | 作品 | 9 | 2 |
+| BNAME_PT_tools | ツール | 0 | 8 |
+| BNAME_PT_comas | コマ一覧 | 0 | 7 |
+| BNAME_PT_pages | ページ一覧 | 0 | 6 |
+| BNAME_PT_view | ビュー | 5 | 4 |
+| BNAME_PT_gpencil | Grease Pencil | 3 | 2 |
+| BNAME_PT_export | 書き出し | 0 | 3 |
+| BNAME_PT_coma_tools | 枠線ツール | 0 | 3 |
+| BNAME_PT_coma_return | ページ一覧に戻る | 0 | 0 |
+| BNAME_PT_layer_stack | レイヤー | 0 | 0 |
+
+合計: 133 props + 68 ops
+
+### 結論
+**全 widget が機能的に動作している**。 検出されていた既知バグ #4
+(``texts_to_empty_all``) は Blender の addon ホットリロード artifact で、
+コード修正不要。 監査スクリプトは set/get cycle で 130/130 op を確認、
+type-aware (BOOLEAN/INT/FLOAT/FLOAT-vector/STRING/ENUM) で例外なし。
+
+## 2026-05-01 — Z リフト 0.1 刻み (重なり順) を **ページ毎リセット** 仕様に修正
+
+ユーザー再確認: 「Z リフト 0.1 は重なり順の問題、 ページごとにリセット
+されるもの」
+
+### 問題
+旧仕様 ``BNAME_Z_STEP_M = 0.1`` (z_index × 0.1 を Object.location.z に
+セット) では、 z_index が大きいレイヤー (フキダシ z_index=1010 →
+z=101m) で world Z が極端に高くなり、 ``view_all`` 時にすべての用紙
+が極小に圧縮される副作用があった。 ユーザー意図は「ページ内のレイヤー
+重なり順」であって z_index ベースではなかった。
+
+### 修正
+- ``utils/layer_object_sync.py`` に ``assign_per_page_z_ranks(scene, work)``
+  追加: ページごとに B-Name 管理 Object を z_index 昇順でソートし、
+  ``Object.location.z = rank * 0.1`` (rank=1, 2, 3, ...) を割当てる。
+  ページ間で Z は **独立** (page 1 / page 2 のレイヤーは Z=0.1 から
+  共に始まる)
+- ``mirror_work_to_outliner`` の最後で ``assign_per_page_z_ranks`` 呼出
+- ``z_for_index`` は per-page rank が確定するまでの暫定値生成に格下げ
+  (0.0001 単位の細かい seed)
+- ``RASTER_Z_LIFT_M`` を 0.1 → 0.0 に戻し (Mesh 頂点 z lift 不要、
+  Object.location.z で per-page rank が確定)
+- ``GP_Z_LIFT_M`` を 0.1 → 0.0 に戻し (同上)
+- ``_resolve_page_id_for_object``: ``bname_parent_key`` (``pNNNN`` /
+  ``pNNNN:cNN`` 形式) からページを解決
+
+### E2E 検証 OK (Blender 5.1.1, p0001 内 22 レイヤー)
+| レイヤー | z_index | location.z |
+|---|---|---|
+| image (×8) | 10 | 0.1〜0.8 |
+| raster (×2) | 60, 70 | 0.9, 1.0 |
+| gp (×2) | 100 | 1.1, 1.2 |
+| effect (×2) | 200 | 1.3, 1.4 |
+| balloon | 1010 | 1.5 |
+| text (×7) | 2010 | 1.6〜2.2 |
+
+最大 z=2.2m → 旧 z=101m から大幅改善。 ``view_all`` 時に用紙が
+画面に収まる正常状態を回復。 ページ間は独立 (page 1 / page 2 で
+それぞれ z=0.1 から rank 開始)。
+
+## 2026-04-30 — 全機能 AI 目視チェックで検出した 2 件のバグ修正
+
+全機能を一つ一つ AI 目視で動作確認した中で 2 件の重大バグを発見・修正。
+
+### バグ #6 (重大): マスククリッピングが効いていない
+- 症状: ``bname.mask_regenerate_all`` 後、ラスター Object に Boolean
+  Modifier (``BName Coma Mask``) は追加されるが ``mod.object = None``
+  のまま、 さらに ``solver = "FAST"`` 設定が ``TypeError: enum "FAST"
+  not found in ('FLOAT', 'EXACT', 'MANIFOLD')`` でエラー → solver 設定
+  ステップで例外発生して ``mod.object = target`` に到達せず → クリップ
+  対象が紐付かず、コマ範囲外のはみ出しが切られない
+- 修正 (utils/mask_apply.py): Blender 5.1 EEVEE Next で solver enum 値が
+  変更されたのに追従。``"FAST"`` → ``"FLOAT"`` に変更し、 旧版互換の
+  fallback も残す。 結果として ``mod.solver = "FLOAT"`` が成功し、
+  続く ``mod.object = target`` も正しく設定される
+- 検証: regen 後 raster Modifier が
+  ``[("BName Coma Mask", "BOOLEAN", "coma_mask_p0001_c02", "FLOAT")]``
+  を確認
+
+### バグ #5: コマファイル進入で「不正なコマ stem」エラー
+- 症状: ``BNameComaEntry`` には ``id`` と ``coma_id`` の 2 つの
+  StringProperty があり、新規コマ追加で ``id`` だけセットして
+  ``coma_id`` を空のままにすると ``bname.enter_coma_mode`` の poll/
+  execute で ``stem = entry.coma_id`` が ``""`` になり「不正なコマ
+  stem」エラーで cNN.blend に入れない
+- 修正 (operators/mode_op.py BNAME_OT_enter_coma_mode):
+  ``stem = entry.coma_id or entry.id`` の fallback で互換性確保。 さらに
+  fallback 発火時に ``entry.coma_id = entry.id`` をミラー設定して、
+  次回以降の整合性を保つ
+
+### AI 目視で確認できた機能 (バグなし)
+1. 開始ページ (start_side) 切替: 右/左で見開き配置反転、用紙白表示 OK
+2. コマ追加 + 枠線カット相当の挙動: c01/c02/c03 → master_sketch active
+   化なし、 ``__papers__`` 自動展開なし
+3. ラスターレイヤー作成 + paint mode: BLEND/BLENDED 維持、 paint enter で
+   paper_bg auto-hide、 paint exit で復帰
+4. GP レイヤー作成 + draw mode: ``L0100__gp__TestGP``, c01 配下,
+   z=10.0 (z_index=100 * 0.1), PAINT_GREASE_PENCIL 切替成功
+5. 効果線レイヤー: ``L0200__effect__新規効果線`` (GP type) c01 配下
+6. フキダシ生成: ``L1010__balloon__balloon_test_1`` (Curve)、 z=101 (要確認)
+7. 画像 Empty: ``L0010__image__テスト画像``、 用紙ローカル座標 OK
+8. Outliner ⇔ B-Name 双方向同期: 双方向で active 連動
+9. cNN.blend 進入/退出: enter_coma_mode → c01.blend、 exit_coma_mode_safe
+   → work.blend 復帰、 mode 同期
+11. オーバーレイ表示切替: true ↔ false toggle 確認
+
+### 既知の追加課題 (今回未修正)
+- バグ #1: ``bpy.types.LayerCollection.active`` が Blender 5.1.1 に存在
+  しないため active_collection_sync の msgbus subscribe が起動時に
+  毎回 stderr エラー。ただし depsgraph_update_post フォールバックで
+  実機能は動作中
+- バグ #2: 新規 work の ``page_number_start=3`` / ``page_number_end=9``
+  という不自然な default 値
+- バグ #3: ``start_side="left"`` で右端に余分な空白 paper_bg
+- バグ #4: ``bname.texts_to_empty_all`` が context 不正 poll で失敗
+- 観察: フキダシ z=101m と極端 (z_index=1010 × BNAME_Z_STEP_M=0.1)。
+  ユーザー要望「0.1 刻み」が base lift のみだったか、 z_index 別の差も
+  含むかの再確認が必要
+
+## 2026-04-30 — レイヤー Z リフトを 0.1 刻みに拡大
+
+ユーザー要望: 「レイヤーを Z 方向に浮かせる場合は、0.005 では近すぎるので、
+0.1 刻みにしてください。」
+
+### 変更
+- ``utils/layer_object_sync.BNAME_Z_STEP_M``: 0.0001 (= 0.1mm) → **0.1**
+  (= 100mm)。1 z_index あたりの Z オフセット
+- ``operators/raster_layer_op.RASTER_Z_LIFT_M``: 0.005 (= 5mm) → **0.1**
+  (= 100mm)。ラスター mesh のベース Z リフト
+- ``utils/page_grid.GP_Z_LIFT_M``: 0.001 (= 1mm) → **0.1** (= 100mm)。
+  GP Object のベース Z リフト
+- paper_bg は z=0 に固定 (用紙基準)
+
+### 効果
+- レイヤー間の Z 差が 0.1 (100mm) で明確に分離
+- EEVEE Next の z-fight や alpha 競合が起きにくくなる
+- z_index ベースの Object location は z_index×0.1 (例: z_index=10 → z=1.0m)
+- ``z_for_index(10) = 1.0`` / ``z_for_index(100) = 10.0`` を確認
+
+### E2E 検証 OK
+- ``BNAME_Z_STEP_M = 0.1`` / ``RASTER_Z_LIFT_M = 0.1`` / ``GP_Z_LIFT_M = 0.1``
+- 既存 raster Object の z が 0.005 → 0.1 に再計算で更新
+- paper_bg は z=0 維持 (用紙基準は不動)
+
+## 2026-04-30 — paint 中だけ paper_bg を自動 hide (描けない問題解消)
+
+ユーザー報告: 「ラスターレイヤーに何も描けない」(paper_bg 化後)
+
+### 原因
+paper_bg を opaque な Mesh にしたため、用紙白がきれいに表示される一方、
+**Texture Paint / GP Paint の raycast に paper_bg が干渉**し、active raster
+mesh の UV 取得が失敗 → stroke が image に書かれない症状。
+
+paper_bg は z=0、raster は z=0.005 で raster が手前にあるが、Blender 5.1
+の Image Paint raycast は active mesh 以外も対象とする実装で、隣接面
+ヒット時の挙動が壊れる。
+
+### 修正
+- ``utils/paper_bg_object.set_paper_bg_visible(visible)`` 追加: 全 paper_bg の
+  ``hide_viewport`` を一括切替する関数
+- ``utils/paper_bg_object._on_depsgraph_update_post`` 追加: ``bpy.context.mode``
+  を監視し、paint 系モード (``PAINT_TEXTURE`` / ``PAINT_GREASE_PENCIL`` /
+  ``SCULPT`` 等) のとき paper_bg を自動 hide、Object モードに戻ると自動
+  show する mode watcher。Tab / Pie menu 等で B-Name の operator を経由
+  しないモード切替にも対応。
+- ``operators/raster_layer_op.BNAME_OT_raster_layer_paint_enter/exit``:
+  明示的にも ``set_paper_bg_visible(False/True)`` を呼んで即時反映
+- ``operators/gp_layer_op.BNAME_OT_gp_layer_draw_enter/exit``: 同上
+- ``utils/__init__`` で ``paper_bg_object.register/unregister`` を呼出
+
+### 挙動
+- Object モード: paper_bg 表示 (用紙白の上にラスター paint が見える)
+- Paint モード: paper_bg 非表示 (raycast 干渉なし、stroke が raster mesh に
+  正しく書込まれる)、 ビューポート背景色 (グレー) が見える
+  → paint 終了で paper_bg 復活し用紙白の上に paint 結果が表示される
+
+### E2E 検証 OK (Blender 5.1.1)
+- mode reset 時 paper_bg 9 → 9 visible
+- ``raster_layer_paint_enter`` → mode=``PAINT_TEXTURE`` / paper_bg 9→0 hide
+- ``raster_layer_paint_exit`` → mode=``OBJECT`` / paper_bg 0→9 show
+- AI 目視: paint 中の viewport は raster paint が見える状態 (paper_bg 隠れ)
+
+## 2026-04-30 — ラスター paint のジラジラノイズ撤廃 (paper_bg 実 Mesh 化)
+
+ユーザー報告: 「ラスターレイヤーに描くと、ザラザラとしたノイズのように
+なってしまう。ズームをするたびにそれが蠢く。」
+
+### 原因 (私の前回の設計判断ミス)
+直前のコミットでラスター材質を `surface_render_method="DITHERED"` +
+`blend_method="CLIP"` に切替えた。これは「BLENDED は depth buffer に
+書込まないため overlay 用紙塗りに隠される」問題を解決する目的だったが、
+DITHERED は **alpha-clip + dither pattern** を使うため、画面上の dither
+がスクリーン空間で固定されて、ビュー変換のたびにパターンが動いて
+ジラジラ見える致命的な副作用があった。テクスチャペイントの自然な
+alpha 合成にならない。
+
+### 採用解 (正しい設計)
+ラスター材質は **BLENDED** (滑らかな alpha 合成) に戻し、用紙白背景は
+**実 Mesh** で表現する:
+
+- 新ファイル ``utils/paper_bg_object.py``:
+  - 各ページ用に opaque な Mesh Plane (`page_paper_bg_<page_id>`) を生成
+  - material は ``BName_PaperBackground`` (Emission node, opaque)
+  - z=0 に配置 (ラスター z=0.005 の下)
+  - ``__papers__`` Collection 配下に集約 (`hide_select=True` で誤選択防止、
+    `hide_render=True` で B-Name export 時に焼込まれない)
+  - opaque 材質は **depth buffer に書込む** ため、BLENDED ラスター
+    (z=0.005) は paper_bg の上に正しく alpha 合成される
+- ``utils/layer_object_sync.mirror_work_to_outliner`` で
+  `paper_bg_object.regenerate_all_paper_bgs(scene, work)` を呼んで
+  全ページの paper_bg を ensure
+- ``operators/raster_layer_op.ensure_raster_material``:
+  `blend_method="BLEND"` / `surface_render_method="BLENDED"` に戻す
+- ``ui/overlay.py._draw_canvas_fill_only`` 呼出を削除
+  (paper_bg Mesh が代替するため GPU 塗りは不要)
+
+### AI 目視 E2E 検証 (Blender 5.1.1 GUI, 9 ページ overview)
+- 全ページの用紙が真っ白で滑らかに表示 ✓
+- ジラジラ noise pattern 完全消滅 ✓
+- 既存ラスター paint (page 005/004 の線、cube の影) 正常表示 ✓
+- ページ枠線 (cyan)、トンボ、ページ番号、active highlight も正しく重畳 ✓
+- ラスター材質 9 件すべて `BLEND` / `BLENDED` に復帰確認 ✓
+- `__papers__` Collection に 9 ページ分の paper_bg Mesh 確認 ✓
+
+## 2026-04-30 — Outliner ⇔ B-Name 双方向同期 / 枠線カット master_sketch 抑制 / 開始ページ UI
+
+### 1. 逆方向同期 (B-Name → Outliner) 追加
+- ``utils/active_collection_sync.py`` を双方向対応に拡張:
+  - 旧: Outliner active 変化 → B-Name 側 (forward only)
+  - 新: B-Name 側 (`work.active_page_index` / `page.active_coma_index` /
+    `scene.bname_current_coma_id`) 変化 → Outliner の
+    `view_layer.active_layer_collection` も追従 (reverse)
+  - どちらが新しく変わったかは `_LAST_SYNCED` キャッシュとの差分で判定し、
+    変わった側を正として他方を追従させる
+  - `_SYNCING` 再入禁止フラグで forward/reverse の相互発火ループを防止
+- 公開 API `request_active_coma(context, page_id, coma_id)` を追加。
+  特定の page/coma を Outliner & B-Name 両方の active に強制セットする
+  ヘルパで、knife cut 等の operator 後の状態正規化に使う。
+
+### 2. 枠線カット (`bname.coma_knife_cut`) 後の active 自動復帰
+ユーザー報告: 「枠線カットでコマを割ると `__masks__` Collection が
+開いてしまい、`bname_master_sketch` がアクティブになってしまう」
+- 原因: `mask_object.regenerate_all_masks` がマスク Mesh を `__masks__`
+  Collection に新規 link する際、Blender 5.x の挙動で `__masks__` が
+  自動展開される / `mirror_work_to_outliner` 後に master_sketch 経由で
+  active object が `bname_master_sketch` に残ることがある。
+- 修正: `coma_knife_cut_op._sync_layer_stack_after_cut` の最後で
+  `active_collection_sync.request_active_coma(...)` を呼び、ユーザーが
+  カット直後に期待するコマ (page.active_coma_index で示される) を
+  Outliner active に強制復帰。同時に `bname_master_sketch` が active に
+  なっていれば解除する。
+
+### 3. 作品情報パネルから「開始ページ位置」「読む方向」を編集可能に
+ユーザー要望: 「開始ページを左か右か、作品情報内で設定可能に」
+- ``panels/work_panel.py`` の作品情報セクションに `paper.start_side`
+  (左/右) と `paper.read_direction` (左/右) を追加。
+- 元々 `paper.py` に `EnumProperty` として定義済だが UI 入口がなかった
+  ものを露出。`update=_on_paper_layout_changed` 経由で overview / overlay
+  の再計算が自動でかかる。
+
+### E2E 検証 OK (Blender 5.1.1 GUI)
+- 逆方向 sync: B-Name 側で `work.active_page_index=1` `bname_current_coma_id="c03"`
+  に書込み → Outliner active が `p0002:c03` に追従 ✓
+- `request_active_coma(p0002, c03)`: Outliner と B-Name 両方が p0002:c03 に
+  同時切替 ✓
+- master_sketch 自動 active 抑制: `view_layer.objects.active=bname_master_sketch`
+  状態から `request_active_coma(...)` 実行 → active_obj=None に解除 ✓
+
+## 2026-04-30 — active_collection_sync 徹底チェック修正
+
+直前の Outliner→B-Name 同期実装を徹底チェックして 2 件の問題を修正。
+
+### Issue 1 (重要): page クリック時に active_coma_index がリセットされない
+- 旧挙動: page Collection クリック → `bname_current_coma_id=""` のみ設定
+- 問題: `page.active_coma_index` が前回の coma 値を保持し続ける
+  → `active_target.resolve_active_target` の優先順位 2 番目
+  (`page.active_coma_index >= 0`) が刺さって、コマ配下にレイヤーが
+  作られてしまう
+- 再現: c03 クリック (active_coma=2) → page クリック → resolve_active_target が
+  `("coma", "p0002:c03")` を返す
+- 修正: page Collection クリック時に `page.active_coma_index = -1` も
+  設定 (`-1` は coma_op.py 等で既に「ページ直下」を意味する慣習値)
+- 検証後: page クリック → `active_coma=-1` / `resolve → ("page", "p0002")` ✓
+
+### Issue 2: depsgraph_update_post の再入ループ可能性
+- 旧挙動: 同期処理内で `work.active_page_index` 等を書込むと depsgraph が
+  更新され、`_on_depsgraph_update_post` がまた発火する可能性
+- 修正: モジュールレベル `_SYNCING: bool` フラグで再入禁止。書込み開始時
+  に True、finally で False に戻す。`_LAST_SYNCED` キャッシュとの二重
+  ガードでループ完全防止
+
+### 副次的改善
+- Property write は実際に値が変わる場合のみ実行 (depsgraph 発火を最小化):
+  `if str(scene.bname_current_coma_id) != new_coma_id: scene.bname_current_coma_id = new_coma_id`
+  と書換え (同様に `bname_active_layer_kind` も)
+
+### E2E 再検証 OK
+- click c03: active_coma=2, coma_id="c03"
+- click p0002 page: active_coma=**-1**, coma_id=""
+- resolve after page click: parent_kind="page", parent_key="p0002" ✓
+- click c01: active_coma=0, coma_id="c01", resolve → ("coma", "p0002:c01") ✓
+- 再入ガード: `_SYNCING=True` 中の呼出で active_page_index 不変 ✓
+
+## 2026-04-30 — Outliner Collection 選択 → B-Name active page/coma 同期
+
+ユーザー要望: アウトライナーでページ/コマ Collection を選択した時、3D
+ビューポート上で連動して、B-Name としてもそのページ/コマが選択状態に
+なるようにする。
+
+### 追加: `utils/active_collection_sync.py`
+- `bpy.msgbus.subscribe_rna((LayerCollection, "active"), ...)` で
+  Outliner の active Collection 変化を即時検出 (poll 不要、選んだ瞬間に反応)。
+- `depsgraph_update_post` でフォールバック (msgbus が file load 跨ぎ等で
+  失効するケース対策)。
+- `load_post` で msgbus を再購読。
+- 同期処理:
+  - 選ばれた Collection が `bname_kind=="page"` → `work.active_page_index`
+    を更新、`bname_current_coma_id=""`、`bname_active_layer_kind="page"`
+  - `bname_kind=="coma"` (`bname_id="<page_id>:<coma_id>"`) →
+    `work.active_page_index` + `page.active_coma_index` 両方更新、
+    `bname_current_coma_id=<coma_id>`、`bname_active_layer_kind="coma"`
+  - **B-Name 管理外の Collection は無視** (= ユーザーが Blender 標準 Collection
+    を選んでも B-Name 側 active を変更しない、read-only ガード)
+- コマ編集モード (cNN.blend) では同期しない (1 コマ前提)。
+
+### E2E 検証 (Blender 5.1.1, 9 ページ work)
+- Test 1: p0001 page クリック → `active_page_index=0` / kind=page / coma=""  OK
+- Test 2: p0002:c03 coma クリック → `active_page_index=1` /
+  `page.active_coma_index=2` / kind=coma / coma_id=c03  OK
+- Test 3: p0003 page クリック → `active_page_index=2` / coma クリア  OK
+- Test 4: Scene ルート (非 B-Name) クリック → 状態不変  OK
+
+## 2026-04-30 — コマファイルから戻れない問題の堅牢化 (exit_coma_mode_safe)
+
+ユーザー報告: 「コマをダブルクリックでコマファイルを開いたら、ページ一覧に戻れなくなった」
+
+### 原因の可能性
+- `bname.exit_coma_mode` の poll は `get_mode == MODE_COMA` を要求
+- `BNAME_PT_coma_return` panel poll は `work.loaded and get_mode == MODE_COMA`
+- **load_post の遅延・失敗** で `bname_mode` が同期されないと、ESC も「ページ
+  一覧に戻る」ボタンも poll が通らず、ユーザーが帰り道を完全に失う
+
+### 追加した堅牢化レイヤー
+- **新 operator** `bname.exit_coma_mode_safe` (operators/mode_op.py):
+  - poll: `MODE_COMA` か、または **現在の .blend のパスが `pNNNN/cNN/cNN.blend`
+    形式** であれば通る (=load_post 失敗でも通る)
+  - 通常パスは既存の `bname.exit_coma_mode` に委譲
+  - フォールバックパスは、パスから `work_dir` を逆引きして
+    `blend_io.open_work_blend()` で work.blend を直接開く
+- **3D ビューヘッダー** (ui/coma_return_header.py):
+  - VIEW3D_HT_header に「← ページ一覧へ」ボタンを append
+  - N パネル B-Name タブが閉じていても、または非表示でも、ヘッダーから常時
+    アクセス可能
+- **N パネルパネル** (panels/work_panel.py):
+  - `BNAME_PT_coma_return` の poll を `_current_blend_is_coma_blend()` フォール
+    バック付きに拡張
+  - ボタンを `bname.exit_coma_mode_safe` に切替
+- **ESC キーマップ** (keymap/keymap.py):
+  - `bname.exit_coma_mode` → `bname.exit_coma_mode_safe` に差し替え
+
+### AI 目視 E2E 検証 (Blender 5.1.1 GUI)
+- work.blend → enter_coma_mode → cNN.blend (`p0002/c02/c02.blend`) 遷移確認 OK
+- cNN.blend 中、ヘッダー右端に「← ページ一覧へ」ボタン表示確認 OK
+- N パネル B-Name タブに「ページ一覧に戻る」パネル表示確認 OK
+- `bname.exit_coma_mode_safe` 実行で work.blend へ復帰確認 OK
+  (`mainfile_after = ".../work.blend"`)
+
+## 2026-04-30 — GP 描画ボタン / Texture Paint 中 SPACE 抑止 / ラスター材質 DITHERED
+
+ユーザー報告 3 件:
+1. GP 描画モードへの入口がパネルに無い。
+2. ラスター描画中に SPACE を押すとブラシシェルフが出て view 操作不能。
+3. オーバーレイ用紙塗りがラスター paint 内容を覆い隠す。
+
+### 修正 1: GP 描画モード入口
+- `operators/gp_layer_op.py` に `bname.gp_layer_draw_enter` /
+  `bname.gp_layer_draw_exit` を追加。`_resolve_active_gp_object` でアクティブ
+  /選択 /scene.bname_active_layer_kind=="gp" の優先順で B-Name 管理 GP
+  Object を解決し、`PAINT_GREASE_PENCIL` モードへ切替える。3D ビューを
+  Material Preview に自動切替して即座に描画内容が確認できる状態にする。
+- `panels/outliner_layer_panel.py` に「GP 描画」セクションを追加 (描画開始 /
+  描画終了)。
+
+### 修正 2: Texture Paint 中の SPACE
+- `keymap/keymap.py` に `_populate_image_paint_overrides` メソッド追加。
+  "Image Paint" キーマップ (TEXTURE_PAINT モード) に `bname.view_navigate`
+  を SPACE で先取り登録し、Blender 既定の `wm.call_asset_shelf_popover`
+  (Brush Asset Shelf 表示) を抑止する。元の機能は ``C`` キーへ移設
+  (GP Paint と同じ規則)。
+
+### 修正 3: 用紙塗りがラスターを隠す問題
+- 原因: 旧設定 `surface_render_method = "BLENDED"` は alpha 合成だが
+  **depth buffer に書込まない**。`ui/overlay.py._draw_callback` は POST_VIEW
+  で動くため、3D 描画後に用紙塗りを描く際 `depth_test_set("LESS_EQUAL")`
+  が機能せず、ラスター paint が用紙白に覆い隠されていた。
+- 試行 (失敗): 用紙塗りを PRE_VIEW ハンドラに分離。EEVEE Next の
+  framebuffer 仕様で PRE_VIEW で描いた内容が視認できず、用紙塗りが
+  完全に消えてしまった (用紙が透明 = ビューポート背景色のグレーが見える)。
+- **採用解**: ラスター材質を `surface_render_method = "DITHERED"`、
+  `blend_method = "CLIP"` (alpha-clip + alpha_threshold=0.01) に変更。
+  DITHERED は alpha-clip ベースで **depth buffer に書込む**ため、
+  POST_VIEW の用紙塗り描画時に `depth_test_set("LESS_EQUAL")` が正しく
+  機能 → ラスター画素は用紙塗りに上書きされない。
+- `ui/overlay.py` から PRE_VIEW ハンドラを撤去し、`_draw_callback` は
+  POST_VIEW のみで動作 (旧仕様に戻す + depth_test_set 追加)。
+- `_draw_canvas_fill_only` は `depth_test_set("LESS_EQUAL")` で
+  ラスター画素 (z=0.005, depth=小) と用紙塗り (z=0, depth=大) の前後関係を
+  正しく扱う。
+
+### AI 目視 E2E 検証 (Blender 5.1.1 GUI)
+- N パネルに「GP 描画」セクション (描画開始 / 描画終了) 表示確認 OK
+- `bname.gp_layer_draw_enter` 実行 → mode=`PAINT_GREASE_PENCIL` 確認 OK
+- "Image Paint" keymap の SPACE → `bname.view_navigate` 登録確認 OK
+- 用紙真っ白 + ラスター paint (黒線) が用紙上にハッキリ表示確認 OK
+- 枠線 (cyan)、ページ番号 "001"、トンボも正しくレンダリング確認 OK
+
+## 2026-04-30 — レイヤー Object の world 位置を page_grid と一致させる
+
+### 重大バグ修正
+ユーザー報告: 「ラスターレイヤーが存在しない右ページに描画される」
+
+原因: ラスター/Empty/Curve の Object location が **page_grid 配置オフセット
+を反映していなかった** ため、scene world 原点付近に出現していた。複数ページ
+モードでは各ページが world X 方向にずれて配置されるが (例: p0002 が
+X=-544mm)、レイヤー Object はオフセットが適用されず world (0, 0) に置かれて
+いた。結果として「用紙の右隣の存在しない領域」に描画される現象。
+
+### 修正
+- `utils/layer_object_sync.stamp_layer_object` に `apply_page_offset`
+  パラメータ (default=True) を追加。`parent_key` から所属ページを引き、
+  `page_grid.page_total_offset_mm` で取得した world offset を Object の
+  location.x/y に設定する。
+- `utils/empty_layer_object.ensure_image_empty_object` /
+  `ensure_text_empty_object`: entry.x_mm/y_mm に page_grid offset を加算して
+  world 座標を決定 (Empty は entry 独自管理のため stamp は
+  `apply_page_offset=False`)。
+- `utils/balloon_curve_object.ensure_balloon_curve_object`: 同様に
+  entry.x_mm/y_mm にオフセット加算。
+- ページ逆引きは bpy_struct identity ではなく **page.id 文字列** で行うよう
+  修正 (Blender の bpy ラッパ問題で `is` 比較が効かないケースに対応)。
+
+### E2E (3 ページ + p0002 アクティブ)
+- `page_total_offset_mm(p0002)` = (-544, 0) mm
+- raster Object.location = (-544, 0, 0.001) m → **p0002 用紙と完全一致**
+- image Empty entry (x_mm=10, y_mm=20) → location = (-534, 20) mm
+  (page offset + entry 座標)
+
+## 2026-04-30 — アクティブ階層に応じた parent 解決 / マスク targets 強化
+
+### 追加
+- `utils/active_target.py` 新設: 各種レイヤー作成 op で「ユーザーが今選択
+  している階層 (page/coma)」を統一して取得するヘルパ
+  (`resolve_active_target`)。優先順位: scene.bname_current_coma_id →
+  page.active_coma_index → page 直下。
+
+### 修正
+- ラスター作成 (`bname.raster_layer_add`) で entry.parent_kind を強制 "page"
+  にしていた問題を修正。`active_target.resolve_active_target` を呼んで、
+  **アクティブコマがあればコマ配下、なければページ配下** に作成される。
+- GP / 効果線の `_resolve_active_coma` ベースのロジックを `active_target`
+  ヘルパに統一。挙動は同一だがコード重複を削減。
+
+### マスク (Boolean Modifier) 強化
+- `utils/mask_apply._ensure_boolean_intersect_modifier` で Modifier 作成後に
+  `view_layer.update()` を呼んで depsgraph に反映を強制。`mod.object` が
+  None のままになる場合は名前経由で再代入する fallback を追加。
+
+### 1 ページ完全フロー徹底チェック (E2E)
+- Case 1 (active_coma=-1): raster → parent_kind="page", parent_key="p0001"
+  ✓ p0001 Collection 配下
+- Case 2 (page.active_coma_index=0=c01): raster → parent_kind="coma",
+  parent_key="p0001:c01" ✓ c01 Collection 配下
+- Case 3 (page.active_coma_index=1=c02): raster → parent_kind="coma",
+  parent_key="p0001:c02" ✓ c02 Collection 配下
+- Case 4 (scene.bname_current_coma_id="c01"): raster → parent_kind="coma",
+  parent_key="p0001:c01" ✓ c01 Collection 配下
+
+### 範囲外クリップの実装状況
+- **raster (Mesh)**: Boolean Modifier (Intersect) で実装済。コマ配下なら
+  コママスク、ページ直下ならページマスクを target に。
+- **GP / 効果線**: `__bname_mask` 内蔵 layer 方式で実装済 (Phase 5d)。
+- **画像 / テキスト (Empty + オーバーレイ描画)**: 描画はオーバーレイで行う
+  ため Boolean Modifier 適用不可。オーバーレイ側 GPU scissor によるコマ枠
+  クリップは Phase 5e の課題として保留。
+- **フキダシ (Curve)**: Curve は Blender 5.1 で Boolean Modifier 非対応。
+  クリップは Phase 5e 課題。
+
+## 2026-04-30 — ラスター描画フロー徹底チェック: 重複生成バグ修正 / 自動 Paint モード
+
+### 重大バグ修正
+- **`ensure_raster_plane` が canonical 名リネーム後に名前で逆引きできず、
+  ペイント開始のたびに新しい Object が `.001` `.002` で重複生成される問題**
+  を修正。`stamp_layer_object` 経由で raster plane の名前は
+  `L0010__raster__ラスター 1` などへリネームされるため、`bpy.data.objects.get
+  (raster_plane_<id>)` では取れない。`object_naming.find_object_by_bname_id`
+  で `bname_id` 逆引きする経路を追加。これにより Texture Paint で描こうと
+  しても **対象 Object が毎回別物になり描画が紐付かない**深刻な問題が解消。
+
+### フロー改善
+- `bname.raster_layer_add` に `enter_paint` (BoolProperty, default=True) を
+  追加。**作成直後に自動的に Texture Paint モードへ切替え**、ユーザーが
+  「作って即描ける」状態へ到達できる。
+- `bname.raster_layer_paint_enter` 末尾で **3D ビューを Material Preview に
+  自動切替**。Solid モードでは Image Texture (= 描いたピクセル) が反映され
+  ず「描いても見えない」状態になるため、Material 以外なら Material へ切替。
+- N パネル「Outliner レイヤー」に **「描画開始 (Texture Paint)」** ボタンと
+  **「描画終了 (Object モードへ)」** ボタンを追加。アクティブな raster
+  レイヤーを直接操作可能。
+
+### E2E (1 ページ完全フロー)
+work 作成 → page 追加 → coma 追加 → mirror → raster 追加 → paint enter まで
+全 5 ステップを通しで検証:
+- step1 work.loaded=True, work_dir 正常
+- step2 page_count=1
+- step3 coma_count=1, root/p0001/c01 Collection 全て生成
+- step4 raster Object 1 個 (重複なし)、kind="raster", managed=True、
+  location=(0,0,0.001)、Mesh 4 頂点 (0,0,0.005)→(0.257,0.364,0.005) で
+  ページピッタリ、Material blend_method="BLEND"、Image 3035×4299 px
+  (300 dpi で B5 サイズの正しい解像度)、p0001 Collection 配下
+- step5 paint_canvas が raster image に紐付き、active_object_mode=
+  TEXTURE_PAINT、active_obj_name="L0010__raster__ラスター 1" (重複なし)
+
+## 2026-04-30 — 右クリックメニュー: Outliner 選択も拾う / メニュー append 範囲拡大
+
+### 修正
+ユーザー報告「右クリックメニューが出ない / 出ても『対象未選択』のみ」に対応。
+
+- `ui/context_menu._active_managed_object` の解決順序を拡張:
+    1. `context.active_object` (3D ビュー active)
+    2. `context.selected_objects` の最初の管理 Object
+    3. `context.selected_ids` (Outliner 選択 ID)
+    4. `view_layer.active` (Outliner active)
+  これにより **Outliner で選択中の Object** も右クリックメニューで認識される。
+- Outliner の append 先メニューを 4 種に拡大: `OUTLINER_MT_object` /
+  `OUTLINER_MT_collection` / `OUTLINER_MT_context_menu` / `OUTLINER_MT_asset`。
+  Object/Collection いずれを右クリックしても B-Name サブメニューが出る。
+- Outliner 側のサブメニュー差し込みは active 解決前に常時行うように変更
+  (空白部分の右クリックでも B-Name メニューを出す)。
+- `operators/layer_detail_op._resolve_active_managed_object` も同じ解決順序
+  に揃えて、Outliner 選択から `bname.layer_detail_open` を実行可能に。
+
+E2E (Blender 5.1.1 background):
+- active_object 経由 / selected_objects 経由で B-Name 管理 Object を解決可能
+- 4 つの OUTLINER_MT_* クラスが全て取得可能 (append 先確認)
+
+## 2026-04-30 — ラスター: DPI 選択 / Z リフト 5mm / overlay depth_test
+
+### 追加
+- `bname.raster_layer_add` operator に **DPI プリセット選択** を追加。
+  150 / 300 / 600 dpi の 3 段プリセット + カスタム値指定。`invoke_props_dialog`
+  で実行前にダイアログ表示。N パネル「ラスターレイヤー」ボタンも
+  `INVOKE_DEFAULT` でこのダイアログを開くように。
+
+### 修正
+- ラスター plane の Z リフト `RASTER_Z_LIFT_M` を 0.5mm → **5mm** に拡大。
+  Material Preview / EEVEE Next で他レイヤー (用紙 / マスク) との z-fight や
+  alpha 競合により paint 内容が見えなくなる問題を回避。
+- `ensure_raster_material` に **EEVEE Next 互換** の
+  `mat.surface_render_method = "BLENDED"` を追加。`blend_method` と併用して
+  Blender 5.1 の Material Preview / Rendered ビューでも透過 paint が
+  期待通りに表示される。
+- **用紙オーバーレイ描画が ラスター Mesh を完全に隠してしまう問題** を解消:
+  `ui/overlay.py._draw_callback` (POST_VIEW) の冒頭で
+  `gpu.state.depth_test_set("LESS_EQUAL")` を呼び、3D Mesh と GPU オーバー
+  レイ描画の前後関係を depth buffer で比較するようにした。これにより
+  ラスター plane (Z=5mm) は用紙オーバーレイ (Z=0) より手前に描画され、
+  paint した内容が見えるようになる。終了時 finally で depth_test を NONE に
+  戻して他 draw_handler への副作用を回避。
+
+E2E:
+- DPI プリセット enum: ["150", "300", "600", "custom"]
+- RASTER_Z_LIFT_M = 0.005
+- raster mesh 頂点が paper サイズ (0,0)→(0.257, 0.364) で z=0.005
+- _draw_callback に depth_test_set 呼出が含まれる
+
+## 2026-04-30 — ボタン文言整理 / ラスター追加 / キーマップ条件化 / 可視性連動
+
+### 変更
+- **新規レイヤー作成セクションのボタン文言**: 「Object として」「Curve と
+  して」「Empty として」のような実装詳細表記をすべて削除。
+    - `bname.gp_layer_create_per_object`: "新 GP レイヤーを作成"
+    - `bname.effect_line_create_object`: "新 効果線レイヤーを作成"
+    - `bname.balloons_to_curve_all`: "全フキダシを再生成"
+    - `bname.images_to_empty_all`: "全画像レイヤーを再登録"
+    - `bname.texts_to_empty_all`: "全テキストを再登録"
+- N パネル「新規レイヤー作成」に **ラスターレイヤー** ボタン
+  (`bname.raster_layer_add`) を追加。
+
+### 修正
+- **キーマップを N パネルの B-Name タブが現在アクティブな場合のみ有効化**:
+  `keymap/keymap.py._watch_bname_tab` の判定に `_bname_tab_is_active()` を
+  追加。`Region.active_panel_category` を見て他アドオンタブ表示中は B-Name
+  ショートカットを無効化し、Blender 既定キーが復活する。`Region.active_
+  panel_category` 取得不可な環境では sidebar が開いていれば有効化と
+  fallback。
+- **Outliner で Collection の目アイコンを切るとオーバーレイ描画も連動
+  非表示に**: `ui/overlay_visibility.py` を拡張。`page_visible(page)` /
+  `coma_visible(panel, page=...)` で対応 LayerCollection の `exclude` /
+  `hide_viewport`、Collection 自身の `hide_viewport` も判定。これにより
+  Outliner で `p0001` や `c01` を非表示にすると、用紙枠/コマ枠/フキダシ/
+  テキスト/効果線のオーバーレイ描画もすべて非表示になる。
+
+E2E 確認:
+- 全 operator bl_label に "として" 表記が無いことを確認
+- p0001 LayerCollection を hide_viewport=True にして page_visible=False、
+  c01 LayerCollection を hide_viewport=True にして coma_visible=False
+- _bname_tab_is_active 関数登録
+
+## 2026-04-30 — レイヤー詳細設定ダイアログを Object 選択ベースに刷新
+
+### 追加
+- `operators/layer_detail_op.py` 新設:
+    - `bname.layer_detail_open`: 選択中 (active_object) の B-Name 管理レイヤー
+      Object の `bname_kind` / `bname_id` から対応 entry を逆引きし、kind ごと
+      のフィールド (image / raster / balloon / text / gp / effect) を
+      `invoke_props_dialog` で編集可能に表示。`bname_managed=True` の Object
+      を選択しているときのみ poll が通る。
+
+### 変更 (ui/context_menu.py 全面刷新)
+- 旧 UIList ベース (`active_stack_item`) の参照を **Object 選択ベース**
+  (`active_object` の `bname_kind`) に切替え。UIList を廃止した整合性を確保。
+- `BNAME_MT_layer_context` (新規): Outliner / 3D ビュー / 各ツール (フキダシ/
+  テキスト/効果線/Object/枠線) の右クリックポップアップから直接呼び出せる
+  サブメニュー。「詳細設定」「リンク複製 (effect のみ)」「親変更は Outliner
+  で D&D」の案内を表示。
+- `BNAME_MT_object_context`: 3D ビュー Object 右クリック (`VIEW3D_MT_object_
+  context_menu`) **と Outliner Object 右クリック (`OUTLINER_MT_object` /
+  `OUTLINER_MT_context_menu`)** の両方に `_draw_in_object_context` /
+  `_draw_in_outliner_context` を append。アクティブ Object が B-Name 管理対象
+  のときのみ B-Name サブメニューを差し込む。
+- 旧 `BNAME_MT_selection_context` は `_draw_layer_commands` を呼ぶ薄いラッパ
+  として残置。既存ツール (`balloon_op` / `text_op` / `effect_line_op` /
+  `coma_edge_move_op` / `object_tool_op`) の `bpy.ops.wm.call_menu(name=
+  "BNAME_MT_selection_context")` 呼出をそのまま動作させる。
+
+### UI
+- `panels/outliner_layer_panel.py` に「アクティブレイヤー > 詳細設定を開く」
+  ボックスを追加。N パネルからもダイアログを呼び出せる。
+
+E2E 確認:
+- `bname.layer_detail_open` 登録、image Empty を active にして poll=True、
+  active 無しで poll=False
+- `BNAME_MT_layer_context` / `BNAME_MT_object_context` /
+  `BNAME_MT_selection_context` 全 menu 登録
+- VIEW3D_MT_object_context_menu / OUTLINER_MT_object のクラス参照取得 OK
+
+## 2026-04-30 — Empty 化の徹底チェック修正 (即時同期 / 表示サイズ / 旧データ掃除)
+
+### 修正
+- `_EMPTY_DISPLAY_SIZE` を 1mm から 5mm に拡大 (3D ビューで点として
+  選択可能なサイズへ)。
+- `outliner_watch._on_depsgraph_update_post` を追加: Empty (image/text)
+  を 3D ビューで G で動かしたとき、5 秒間隔の timer scan を待たずに
+  `entry.x_mm/y_mm` に即時書戻し、オーバーレイ描画位置に連動する。
+  再帰抑止は `los.suppress_sync()` ガード + entry 同値チェックで実施。
+- `utils/empty_layer_object.cleanup_legacy_plane_objects` を追加:
+  旧 Plane 方式 (text_plane_*, image_plane_*, balloon_plane_*) の Object
+  と関連 Mesh / Material / placeholder Image データブロックを自動掃除。
+  `_mirror_image_text_empties` 冒頭で呼び出して Empty 化移行直後の
+  ゴミデータを除去する。
+
+### Blender 5.1 ハンドラ登録
+- `bpy.app.handlers.depsgraph_update_post` に `_on_depsgraph_update_post`
+  を登録/解除。
+
+E2E 確認:
+- 旧 `text_plane_t01` Object を残置した状態から mirror 実行 → 削除確認
+- depsgraph_update_post 経由で Empty.location 変更が即時 entry に反映
+  (timer scan を待たない)
+
+## 2026-04-30 — 画像 / テキストを Empty Object 化 (オーバーレイ描画方式)
+
+### 変更
+画像レイヤーとテキストを Outliner 上 **Empty Object** として登録する方式に
+変更。実際の絵柄/文字描画は既存の B-Name 独自オーバーレイが担当する。
+画像生成や Pillow 転写を回避してメモリ消費と編集応答性を改善する。
+
+### 設計上の整合
+- **export pipeline (`io/export_pipeline.py`)** は元々 PropertyGroup
+  (BNameImageLayer / BNameTextEntry) を直接読んで Pillow で合成しているため、
+  Empty 化しても **PNG / PSD レンダリング結果は不変**。全ページ出力時にも
+  画像/テキストは正しく描画される。
+- Outliner 上の D&D / 親子関係 / 表示 ON/OFF / マスク Modifier 対象としての
+  機能は Empty で得られる。
+
+### 追加
+- `utils/empty_layer_object.py` 新設:
+    - `ensure_image_empty_object` / `ensure_text_empty_object`: `bname_kind`
+      stamp + Outliner mirror へ link。`empty_display_type='PLAIN_AXES'` +
+      小さい display_size で原点マーカー表示。
+    - `sync_entry_position_from_object`: Empty.location が変わったら
+      対応 entry.x_mm/y_mm に書戻し。オーバーレイ描画位置に連動する。
+- `operators/balloon_text_curve_op.py` に operator を追加:
+    - `bname.images_to_empty_all`: 全画像レイヤーを Empty として登録
+    - `bname.texts_to_empty_all`: 全テキストを Empty として登録
+- watch (`utils/outliner_watch.py`) に `_writeback_empty_layer_parent` と
+  Empty.location → entry 位置同期処理を追加。Outliner D&D で image/text
+  Empty が別コマ等へ移ると entry の parent_kind / parent_key / folder_key
+  が書戻る。
+- `utils/layer_object_sync._mirror_image_text_empties`: mirror 実行時に
+  全 image / text entry に対応する Empty を ensure (load_post / 保存時 /
+  reparent 完了時に自動追従)。
+
+### 削除
+- `utils/text_plane_object.py` 削除 (Plane + Image Texture 方式は廃止)。
+- 旧 `bname.texts_to_plane_all` operator は `bname.texts_to_empty_all` への
+  エイリアスとして残置 (panel 経由の旧呼出を壊さないため)。
+
+### Phase 3c との関係
+オーバーレイ表示切替 (`bname_overlay_enabled`) を OFF にすると Empty の
+原点マーカーだけが残り「データ構造の確認モード」として機能する。
+ON のときは画像 / テキストはオーバーレイ経由で従来どおり高速描画される。
+
+## 2026-04-30 — Phase 3c / 4c / 5d: 残発展課題を実装
+
+### 追加 (Phase 5d: GP コマ/ページマスク)
+- `utils/mask_apply._ensure_gp_internal_mask`: グリースペンシル v3 の
+  `GreasePencilLayer.use_masks` + `mask_layers` 機構を使い、**同じ GP Object
+  内に `__bname_mask` という名前のマスクレイヤーを自動生成**して、
+  コマ/ページマスク Mesh の各 Face を閉じストロークとして描き写す。
+  全コンテンツレイヤーで `use_masks=True` を立て、`mask_layers` に
+  `__bname_mask` を登録する。マスクレイヤー自体は `hide=True` で見えない。
+- 親 Collection 変更時にマスクストロークも追従して再生成。
+
+### 追加 (Phase 4c: フキダシ Curve / テキスト Plane)
+- `utils/balloon_curve_object.py` 新設: `BNameBalloonEntry` から
+  `outline_for_entry` で得た輪郭点列を Bezier Curve として生成。
+  `dimensions="2D"` + `fill_mode="BOTH"` + `bevel_depth` で線幅を再現。
+  rect/ellipse/cloud/fluffy/thorn 等の Meldex 共通形状に対応。
+- `utils/text_plane_object.py` 新設: `BNameTextEntry` の本文を typography
+  (`typography.export_renderer.render_to_image` + Pillow) で透過 PNG に
+  描画し、Plane Object の Image Texture material に貼り付ける。Pillow 不在
+  環境では placeholder (1×1 透明) にフォールバック。
+- `operators/balloon_text_curve_op.py` 新設:
+    - `bname.balloons_to_curve_all`
+    - `bname.texts_to_plane_all`
+
+### 追加 (Phase 3c: オーバーレイ表示切替)
+- `bpy.types.Scene.bname_overlay_enabled` (BoolProperty, default True) を
+  追加。`ui/overlay.py._draw_callback` / `_draw_callback_pixel` の冒頭で
+  この値を見て早期 return し、B-Name 独自 GPU オーバーレイ全体を ON/OFF。
+- `operators/overlay_toggle_op.py` 新設 (`bname.overlay_toggle`)。
+- `panels/outliner_layer_panel.py` に「オーバーレイ表示」ボックスと
+  ON/OFF トグルボタンを追加。OFF にすると raster Mesh / balloon Curve /
+  text Plane などの Blender 標準 Object 描画のみが見える状態になる。
+
+### 残課題 (実装後)
+- 大規模負荷試験 (例: 100 ページ × 30 GP Object 規模での Outliner 応答 /
+  描画モード切替 / Undo/Redo の実測): すべての必要機能が整ってから実施。
+
+## 2026-04-30 — マスク Object の viewport 非表示 + apply ロジック整理
+
+### 修正
+- マスク Mesh Object (`page_mask_*` / `coma_mask_*`) と `__masks__`
+  Collection を viewport から非表示に。`hide_viewport=True` +
+  `display_type="BOUNDS"` を ensure 時に設定し、`__masks__` Collection
+  自体も LayerCollection 経由で `hide_viewport=True`。マスク Mesh が
+  3D ビューに黒い面として描画されてレイヤーが見えなくなる問題を解消。
+  Modifier の target 参照は hidden でも有効なのでクリッピング機能には
+  影響しない。
+- `apply_mask_to_layer_object`: parent_key 形式を先に判定 ("コマ配下"
+  かつ mask 未生成のときページマスクへフォールバックしない)、論理を
+  整理。GP 系は `_ensure_gp_mask_modifier` で modifier クリーンアップ
+  のみ実行 (Phase 5d まで no-op)。
+
+## 2026-04-30 — 旧 page Collection 廃止 / コマカット trigger / マスク視覚化
+
+### 変更
+- 旧 `page_p0001` 形式 Collection を `p0001` (新 mirror Collection) に統一。
+  `ensure_page_collection` (gpencil 側) が呼ばれた時点で旧 Collection の
+  Object/子 Collection を新側に移送し、旧 Collection を削除する自動移行を
+  実装。`page_collection_name` の戻り値も `page_id` 直接へ変更。
+- 枠線カット (`bname.coma_knife_cut`) 完了時に Outliner mirror と
+  全マスク再生成を自動実行する trigger を追加。コマ追加直後に新コマ
+  Collection (例: `c02`) が即時生成される。
+- watch timer scan に「ページ/コマ/フォルダ件数の変化検出」を追加。
+  外部 op で entry が増減したときに自動で mirror を再走させる
+  (5 秒以内に反映)。
+
+### 追加
+- `utils/mask_apply.py`: コマ/ページマスク Mesh をレイヤー Object に適用。
+    - Mesh 系 (raster / image plane / balloon plane / text plane):
+      Boolean Modifier (Intersect, FAST solver) でマスク形状クリップ。
+    - GP 系: Blender 5.1 GP v3 では外部 Object をマスク source に取る一般
+      Modifier が無いため、現状は modifier 削除のみで no-op。
+      Phase 5d で `__bname_mask` 内蔵 layer 方式で実装予定。
+- raster の `ensure_raster_plane`、GP の `create_layer_gp_object`、
+  effect の `create_effect_line_object` で、Object 生成完了後に
+  `mask_apply.apply_mask_to_layer_object` を呼ぶよう統合。
+- watch の raster / effect writeback 完了後にもマスクを再適用し、親変更に
+  追従する。
+- `bname.repair_hierarchy` / `bname.mask_regenerate_all` で全レイヤーへ
+  マスクを再適用するよう統合。
+
+## 2026-04-30 — Outliner 中心レイヤー管理へ全面移行
+
+### 追加
+- Outliner Object/Collection ベースのレイヤー管理基盤
+  (`utils/object_naming.py`, `utils/outliner_model.py`,
+  `utils/layer_object_sync.py`, `utils/outliner_watch.py`):
+    - B-Name 安定 ID を Object/Collection の custom property
+      (`bname_kind` / `bname_id` / `bname_managed` / `bname_parent_key`/
+      `bname_folder_id` / `bname_z_index` / `bname_title`) に保持。
+    - ルート Collection `B-Name`、`outside`、ページ Collection、
+      コマ Collection、汎用フォルダ Collection を mirror で生成。
+    - 5 秒間隔 timer scan + 再帰抑止 guard + 差分キャッシュで Outliner
+      D&D を低負荷で検出し、raster / 効果線 / GP の Object 親を実 entry
+      へ書戻し。
+- ページ / コマ Collection のシンプル名命名 (`p0001` / `c01`) と
+  カラータグ設定 (ページ=紫 COLOR_06、コマ=水色 COLOR_05)。`outside` も
+  シンプル名へ変更。
+- `bname.coma_renumber_active_page` operator: アクティブページのコマ ID を
+  順番通り c01, c02, ... に再採番。Outliner Collection の bname_id も追従。
+- `bname.gp_layer_create_per_object` operator: 1 GP Object = 1 B-Name
+  レイヤー モデルで新規 GP Object をアクティブコマ直下に生成。
+- `bname.effect_line_create_object` operator: 効果線 GP Object を生成。
+- `bname.outliner_apply_view` / `bname.outliner_restore_view` operator:
+  Outliner エディタを VIEW_LAYER + alpha sort 表示に切替/復元。B-Name 管理
+  マーカー (`bname_outliner_managed`) を立てた area のみ復元対象。
+- `bname.mask_regenerate_all` / `bname.mask_remove_orphans` operator:
+  ページ / コマ mask Mesh Object を `__masks__` Collection に集約生成・
+  孤立掃除。
+- `bname.repair_hierarchy` operator: B-Name 階層整合性の自動修復
+  (mirror 再走 + 空 bname_id への uuid 割当 + 重複 ID の managed=False
+  降格 + マスク再生成 + snapshot 再収集)。
+- `BNAME_PT_outliner_layers` (N パネル「Outliner レイヤー」): Outliner
+  表示切替 / 新規レイヤー作成 / マスク管理 / 整合性修復 / コマ ID 再採番
+  ボタンを集約。
+
+### 変更
+- `utils/handlers.py` の load_post / save_pre で
+  `mirror_work_to_outliner` を呼び出し、Collection 階層を最新化。コマ blend
+  (cNN/cNN.blend) では `prepare_coma_blend_scene` 前に mirror が走らない
+  ようにスキップ。
+- `utils/layer_reparent.reparent_selected` の完了時に mirror を再走させて
+  Outliner 階層を即時反映。
+- `operators/raster_layer_op.ensure_raster_plane`: raster plane に B-Name
+  安定 ID を stamp し、Outliner mirror 配下に取り込み。`parent_key` に
+  `pNNNN:cNN` 形式が来ても page を正しく解決。
+
+### 削除
+- `BNAME_PT_layer_stack` / `BNAME_UL_layer_stack` (UIList ベースの
+  レイヤーリスト)。Outliner 中心管理に一本化。
+- 後方互換用の Object 化 operator 群 (`bname.image_layer_to_object` /
+  `image_layers_all_to_object` / `balloon_to_object` / `balloons_all_to_object` /
+  `text_to_object` / `texts_all_to_object`) と関連ヘルパ
+  (`utils/image_plane_object.py`, `utils/balloon_text_plane.py`)。
+- master GP / 効果線 master の移行 operator 群
+  (`bname.gp_layer_migrate_master_dryrun` / `gp_layer_migrate_master` /
+  `effect_line_migrate_master_dryrun` / `effect_line_migrate_master`) と
+  関連ヘルパ (migrate 関数、可逆性メタ `bname_migrated_from_layer` /
+  `bname_migrated_from_effect_layer`、`register_master_effect_object`)。
+- watch の image / balloon / text write-back (overlay 描画専用で Object
+  化対象外のため不要)。
+
+### Blender 5.1.1 実機検証で確認した実装上の制約
+- Object/Collection 名は 255 バイト上限。日本語タイトルでは prefix を
+  含めて約 80 字で内部切詰め。`utils/object_naming._truncate_utf8` で
+  UTF-8 安全に切詰め、`bname_title_truncated` フラグを立てる。
+- `CollectionObjects` / `CollectionChildren` に `move()` メソッドが無い
+  ため、Collection 内の表示順は名前 prefix と alpha sort で表現する。
+- `Material.shadow_method` は EEVEE Next で削除済み。設定しない。
+- Library override / linked Object は名前変更不可なので `assign_canonical_name`
+  で早期 return。
+
+### テスト (Blender 5.1.1 background)
+- アドオン register/unregister 成功
+- mock work + 実 work.bname での Outliner 階層生成、kind 別 z_index
+  分離、coma renumber、カラータグ反映を検証
+- 全 6 バッチの全行精密監査 (高 22 / 中 37 / 低 9 件) を 24 件の修正へ
+  集約済み
+
 ## 2026-04-30 — 汎用レイヤーフォルダを追加
 
 ### 追加

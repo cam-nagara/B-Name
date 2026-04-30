@@ -273,6 +273,18 @@ def reparent_selected(
         layer_stack_utils.apply_stack_order(context)
         layer_stack_utils.sync_layer_stack(context, preserve_active_index=True)
         layer_stack_utils.tag_view3d_redraw(context)
+        # Phase 1: reparent 完了時に Outliner mirror も最新化する。
+        # mirror は冪等なので連続呼出でも安全。
+        try:
+            from . import layer_object_sync as _los
+            from ..core.work import get_work
+
+            scene = getattr(context, "scene", None)
+            work = get_work(context)
+            if scene is not None and work is not None:
+                _los.mirror_work_to_outliner(scene, work)
+        except Exception:  # noqa: BLE001
+            pass
     return changed
 
 

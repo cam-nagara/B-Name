@@ -176,6 +176,17 @@ def save_scene_work_to_disk(context, *, reason: str = "") -> bool:
                 continue
             page_io.save_page_json(work_dir, page)
         _logger.info("B-Name metadata saved%s", f" ({reason})" if reason else "")
+        # Phase 1: 保存契機で Outliner mirror を最新化する。page/coma 追加削除
+        # 直後に save_scene_work_to_disk が呼ばれるため、ここでミラーを更新
+        # しておけば各 op に侵襲しない。冪等で安全。
+        try:
+            from . import layer_object_sync as _los
+
+            scene = getattr(context, "scene", None)
+            if scene is not None:
+                _los.mirror_work_to_outliner(scene, work)
+        except Exception:  # noqa: BLE001
+            _logger.exception("save_scene_work_to_disk: mirror refresh failed")
         return True
     except Exception:  # noqa: BLE001
         _logger.exception("B-Name metadata save failed%s", f" ({reason})" if reason else "")
@@ -274,6 +285,27 @@ def _bname_on_load_post(filepath_arg) -> None:  # signature: (str,) in Blender h
             _layer_stack.schedule_layer_stack_sync()
         except Exception:  # noqa: BLE001
             _logger.exception("load_post: layer stack sync failed")
+        # コマ blend (cNN/cNN.blend) では Outliner mirror を即時実行しない。
+        # prepare_coma_blend_scene が後段で scene 構造を組み直すため、その前に
+        # mirror が走ると不要な B-Name root が cNN scene に作られる。
+        is_coma_blend = False
+        try:
+            rel = blend_path.resolve().relative_to(work_dir.resolve())
+            is_coma_blend = (
+                len(rel.parts) == 3
+                and paths.is_valid_page_id(rel.parts[0])
+                and paths.is_valid_coma_id(rel.parts[1])
+                and rel.parts[2] == f"{rel.parts[1]}.blend"
+            )
+        except ValueError:
+            pass
+        if not is_coma_blend:
+            try:
+                from . import layer_object_sync as _los
+
+                _los.mirror_work_to_outliner(scene, work)
+            except Exception:  # noqa: BLE001
+                _logger.exception("load_post: outliner mirror failed")
         # work.blend / cNN.blend ごとに Scene の整合を補正する。
         try:
             rel = blend_path.resolve().relative_to(work_dir.resolve())

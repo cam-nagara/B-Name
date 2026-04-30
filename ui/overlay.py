@@ -46,6 +46,9 @@ _handle: Optional[object] = None
 # blf テキスト描画は POST_VIEW では view/projection matrix が適用されて
 # screen 座標が world 座標扱いになり画面外に飛ぶため、POST_PIXEL で別 handler。
 _handle_pixel: Optional[object] = None
+# 用紙塗りは PRE_VIEW で 3D 描画前に描く (BLENDED ラスター材質は depth 書込
+# しないため、POST_VIEW で塗ると raster Mesh が用紙背景に隠される)。
+_handle_pre: Optional[object] = None
 
 # 作品情報描画の診断ログ用 tick (60 フレーム毎に 1 回出力)
 _WORK_INFO_DEBUG_TICK = 0
@@ -939,12 +942,15 @@ def _translate_rect(r: Rect, ox_mm: float, oy_mm: float) -> Rect:
 
 
 def _draw_canvas_fill_only(paper, rects, ox_mm: float, oy_mm: float) -> None:
-    """キャンバス塗りのみを表示用 overlay として描画する.
+    """キャンバス塗り (用紙背景の白) を POST_VIEW で描画する.
 
-    `paper_color` は Blender COLOR プロパティなので scene-linear 値。
-    GPU overlay では UI 表示相当の sRGB に戻し、不透明 (alpha=1.0) で
-    描く。深度テストを有効にして、GP ストロークやレイヤー表示の背後に
-    入るようにする。
+    `paper_color` は Blender COLOR プロパティ (scene-linear) なので UI 表示
+    相当の sRGB に戻し、不透明 (alpha=1.0) で描く。
+
+    深度テストは ``LESS_EQUAL`` を維持。raster 材質は DITHERED で depth を
+    書込むため、ラスター画素では canvas (z=0) の depth (= 大きい値) が
+    ラスター (z=0.005, depth = 小さい値) との LESS_EQUAL に失敗して却下
+    される → ラスター画素は用紙塗りに上書きされない。
     """
     canvas_r = _translate_rect(rects.canvas, ox_mm, oy_mm)
     r, g, b = color_space.linear_to_srgb_rgb(paper.paper_color[:3])
@@ -975,11 +981,17 @@ def _draw_page_overlay(
     oy_mm: float = 0.0,
     draw_image_layers: bool = True,
     is_left_half: bool = False,
+    phase: str = "post",
 ) -> None:
     """1 ページ分のガイド/コマ枠を (ox_mm, oy_mm) オフセットで描画.
 
     ``is_left_half=True`` (見開きの左半分のページ) の場合、ノド/小口/
     inner_frame 横オフセットを左右反転して再計算する。
+
+    ``phase`` (将来拡張用): 現在は ``"post"`` のみ使用。POST_VIEW で
+    用紙塗り + 枠/トンボ/ガイドを順に描画する。ラスター材質を DITHERED
+    にしたため depth_test_set("LESS_EQUAL") が機能し、用紙塗りはラスター
+    画素を上書きしない。
     """
     if not overlay_visibility.page_visible(page):
         return
@@ -992,7 +1004,9 @@ def _draw_page_overlay(
     safe_r = _translate_rect(rects.safe, ox_mm, oy_mm)
     bleed_r = _translate_rect(rects.bleed, ox_mm, oy_mm)
 
-    _draw_canvas_fill_only(paper, rects, ox_mm, oy_mm)
+    # 用紙白背景は paper_bg_object.py の opaque な Mesh が表示するため、
+    # ここでは GPU 塗りを描かない。GPU で描くと BLENDED ラスター paint を
+    # 上から覆い隠す問題があった (旧バグ)。
 
     # セーフライン外オーバーレイ (全ページに表示)
     # 仕様: 常に乗算合成相当 + alpha 100%。
@@ -1389,10 +1403,16 @@ def _draw_page_highlight(rect: Rect | None) -> None:
     _draw_rect_outline(rect, viewport_colors.SELECTION, width_mm=1.00)
 
 
-def _draw_callback() -> None:
+def _draw_callback(phase: str = "post") -> None:
     context = bpy.context
     work = get_work(context)
     if work is None or not work.loaded:
+        return
+    # B-Name オーバーレイ全体の表示切替 (Phase 3c: Object 表示モード時は OFF)
+    scene_root = context.scene
+    if scene_root is not None and not bool(
+        getattr(scene_root, "bname_overlay_enabled", True)
+    ):
         return
     mode = get_mode(context)
     is_page_browser = page_browser.is_page_browser_area(context)
@@ -1403,6 +1423,10 @@ def _draw_callback() -> None:
     scene = context.scene
 
     gpu.state.blend_set("ALPHA")
+    # depth_test を有効にして、3D Mesh (raster plane など) との前後関係を
+    # オーバーレイ描画でも考慮する。これがないと用紙背景が常に最前面に
+    # 描画され、Mesh に paint した内容が見えなくなる。
+    gpu.state.depth_test_set("LESS_EQUAL")
     try:
         if (
             (
@@ -1439,7 +1463,7 @@ def _draw_callback() -> None:
                 _draw_page_overlay(
                     context, work, paper, rects, page, mode,
                     ox_mm=ox, oy_mm=oy, draw_image_layers=False,
-                    is_left_half=left_half,
+                    is_left_half=left_half, phase=phase,
                 )
                 # アクティブページにハイライト枠 (ズーム連動)
                 if highlight_active_page and i == active_idx:
@@ -1470,7 +1494,7 @@ def _draw_callback() -> None:
                 _draw_page_overlay(
                     context, work, paper, rects, page, mode,
                     ox_mm=ox, oy_mm=oy, draw_image_layers=False,
-                    is_left_half=left_half,
+                    is_left_half=left_half, phase=phase,
                 )
                 if highlight_active_page and i == active_idx:
                     active_highlight_rect = _page_highlight_rect(rects, ox, oy)
@@ -1500,7 +1524,7 @@ def _draw_callback() -> None:
             _draw_page_overlay(
                 context, work, paper, rects, page, mode,
                 ox_mm=ox, oy_mm=oy, draw_image_layers=True,
-                is_left_half=left_half,
+                is_left_half=left_half, phase=phase,
             )
         overlay_effect_line.draw_active_effect_line_bounds(
             context,
@@ -1510,6 +1534,11 @@ def _draw_callback() -> None:
         )
     finally:
         gpu.state.blend_set("NONE")
+        # depth_test を元に戻す (他の draw_handler への副作用を避ける)
+        try:
+            gpu.state.depth_test_set("NONE")
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def apply_bname_shading_mode(context=None) -> int:
@@ -1664,6 +1693,12 @@ def _draw_callback_pixel() -> None:
     work = get_work(context)
     if work is None or not work.loaded:
         return
+    # オーバーレイ表示切替 (Phase 3c)
+    scene_root = context.scene
+    if scene_root is not None and not bool(
+        getattr(scene_root, "bname_overlay_enabled", True)
+    ):
+        return
     paper = work.paper
     rects = overlay_shared.compute_paper_rects(paper)
     mode = get_mode(context)
@@ -1775,10 +1810,11 @@ def _draw_work_info_texts_pixel(context, work, inner_rect, page_index: int,
 
 
 def register() -> None:
-    global _handle, _handle_pixel
+    global _handle, _handle_pixel, _handle_pre
+    _handle_pre = None  # PRE_VIEW は使用しない (EEVEE Next で視認できないため)
     if _handle is None:
         _handle = bpy.types.SpaceView3D.draw_handler_add(
-            _draw_callback, (), "WINDOW", "POST_VIEW"
+            _draw_callback, ("post",), "WINDOW", "POST_VIEW"
         )
     if _handle_pixel is None:
         _handle_pixel = bpy.types.SpaceView3D.draw_handler_add(
@@ -1788,7 +1824,8 @@ def register() -> None:
 
 
 def unregister() -> None:
-    global _handle, _handle_pixel
+    global _handle, _handle_pixel, _handle_pre
+    _handle_pre = None
     if _handle is not None:
         try:
             bpy.types.SpaceView3D.draw_handler_remove(_handle, "WINDOW")

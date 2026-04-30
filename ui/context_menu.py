@@ -1,114 +1,192 @@
-"""カスタム右クリックコンテキストメニュー (計画書 3.4.5 / 8.13)."""
+"""カスタム右クリックコンテキストメニュー.
+
+Outliner / 3D ビュー / 各ツール (フキダシ/テキスト/効果線/Object/枠線) で
+右クリック時に B-Name レイヤーの「詳細設定」ダイアログを開けるようにする。
+active_object の ``bname_kind`` / ``bname_id`` を見て kind ごとの詳細を
+``bname.layer_detail_open`` operator で表示する。
+"""
 
 from __future__ import annotations
 
 import bpy
 from bpy.types import Menu
 
-from ..utils import layer_stack as layer_stack_utils
+from ..utils import object_naming as on
 
 
-def _active_stack_kind(context) -> str:
-    item = layer_stack_utils.active_stack_item(context)
-    return str(getattr(item, "kind", "") or "") if item is not None else ""
+def _active_managed_object(context):
+    """B-Name 管理下のレイヤー Object を解決する.
+
+    優先順位:
+        1. ``context.active_object`` (3D ビューでの選択)
+        2. ``context.selected_objects`` の最初の管理 Object
+        3. ``context.selected_ids`` (Outliner 選択) の最初の管理 Object
+        4. ``view_layer.active`` (Outliner の active)
+    """
+    # 1. 3D ビューの active_object
+    obj = getattr(context, "active_object", None)
+    if obj is not None and on.is_managed(obj):
+        return obj
+    # 2. selected_objects (3D ビューや Outliner で選択中)
+    selected = getattr(context, "selected_objects", None) or ()
+    for o in selected:
+        if on.is_managed(o):
+            return o
+    # 3. selected_ids (Outliner の context で利用可能)
+    selected_ids = getattr(context, "selected_ids", None) or ()
+    for sid in selected_ids:
+        if isinstance(sid, bpy.types.Object) and on.is_managed(sid):
+            return sid
+    # 4. view_layer.active (Outliner の active)
+    view_layer = getattr(context, "view_layer", None)
+    if view_layer is not None:
+        active = getattr(view_layer, "active", None)
+        if active is not None and on.is_managed(active):
+            return active
+    return None
 
 
-def _has_active_stack_item(context) -> bool:
-    return bool(_active_stack_kind(context))
-
-
-def _active_stack_index(context) -> int:
-    return int(getattr(context.scene, "bname_active_layer_stack_index", -1))
-
-
-def selection_command_items(context) -> list[dict[str, object]]:
-    item = layer_stack_utils.active_stack_item(context)
-    if item is None:
-        return [{"label": "対象が選択されていません", "enabled": False, "kind": "label"}]
-    active_kind = str(getattr(item, "kind", "") or "")
-    return [
-        {"label": "詳細設定", "enabled": True, "kind": "operator", "operator": "bname.layer_stack_detail"},
-        {"label": "複製", "enabled": True, "kind": "operator", "operator": "bname.layer_stack_duplicate"},
-        {
-            "label": "リンク複製",
-            "enabled": active_kind == "effect",
-            "kind": "operator" if active_kind == "effect" else "label",
-            "operator": "bname.effect_line_create_linked",
-        },
-        {"label": "削除", "enabled": True, "kind": "operator", "operator": "bname.layer_stack_delete"},
-    ]
-
-
-def _draw_selection_commands(layout, context) -> None:
-    items = selection_command_items(context)
-    if len(items) == 1 and items[0].get("kind") == "label":
-        layout.label(text=str(items[0]["label"]), icon="INFO")
+def _draw_layer_commands(layout, context) -> None:
+    """選択中レイヤー Object に対して詳細/複製/削除 等のコマンドを描画."""
+    obj = _active_managed_object(context)
+    if obj is None:
+        layout.label(text="B-Name レイヤー Object を選択してください", icon="INFO")
         return
-    active_index = _active_stack_index(context)
-    column = layout.column()
-    detail_row = column.row()
+    kind = on.get_kind(obj)
+    bid = on.get_bname_id(obj)
+    layout.label(text=f"{kind}: {bid}", icon="OBJECT_DATA")
+    layout.separator()
+
+    detail_row = layout.row()
     detail_row.operator_context = "INVOKE_DEFAULT"
-    detail = detail_row.operator("bname.layer_stack_detail", text="詳細設定", icon="PREFERENCES")
-    detail.index = active_index
-    detail.preserve_edge_selection = True
+    detail_row.operator(
+        "bname.layer_detail_open", text="詳細設定", icon="PREFERENCES"
+    )
 
-    column.operator("bname.layer_stack_duplicate", text="複製", icon="DUPLICATE")
-    link_item = next((item for item in items if item.get("operator") == "bname.effect_line_create_linked"), None)
-    if link_item is not None and bool(link_item.get("enabled", False)):
-        column.operator("bname.effect_line_create_linked", text="リンク複製", icon="LINKED")
-    else:
-        link_row = column.row()
-        link_row.enabled = False
-        link_row.label(text="リンク複製", icon="LINKED")
+    # 効果線の場合はリンク複製も
+    if kind in {"effect", "effect_legacy"}:
+        link_op = getattr(bpy.ops.bname, "effect_line_create_linked", None)
+        if link_op is not None:
+            layout.operator(
+                "bname.effect_line_create_linked",
+                text="リンク複製",
+                icon="LINKED",
+            )
 
-    delete_row = column.row()
-    delete_row.operator_context = "INVOKE_DEFAULT"
-    delete_row.operator("bname.layer_stack_delete", text="削除", icon="TRASH")
+    # Outliner D&D で親変更可能であることの案内
+    layout.separator()
+    layout.label(
+        text="親変更は Outliner で D&D してください",
+        icon="OUTLINER",
+    )
 
 
-class BNAME_MT_selection_context(Menu):
-    bl_idname = "BNAME_MT_selection_context"
+class BNAME_MT_layer_context(Menu):
+    """B-Name レイヤー Object 用サブメニュー (3D ビュー / Outliner 共通)."""
+
+    bl_idname = "BNAME_MT_layer_context"
     bl_label = "B-Name"
 
     def draw(self, context):
-        _draw_selection_commands(self.layout, context)
+        _draw_layer_commands(self.layout, context)
 
 
-def open_selection_context_menu() -> bool:
+def open_layer_context_menu() -> bool:
+    """ツール側の modal operator から呼び出すヘルパ."""
     try:
-        bpy.ops.wm.call_menu(name=BNAME_MT_selection_context.bl_idname)
+        bpy.ops.wm.call_menu(name=BNAME_MT_layer_context.bl_idname)
         return True
     except Exception:  # noqa: BLE001
         return False
 
 
+# 旧 idname を維持して既存ツール側の呼出を壊さない (内容は新メニューと同じ)
+class BNAME_MT_selection_context(Menu):
+    bl_idname = "BNAME_MT_selection_context"
+    bl_label = "B-Name"
+
+    def draw(self, context):
+        _draw_layer_commands(self.layout, context)
+
+
 class BNAME_MT_object_context(Menu):
+    """3D ビューの Object 右クリックに append されるサブメニュー."""
+
     bl_idname = "BNAME_MT_object_context"
     bl_label = "B-Name"
 
     def draw(self, context):
         layout = self.layout
-        _draw_selection_commands(layout, context)
+        _draw_layer_commands(layout, context)
         layout.separator()
-        layout.operator("bname.open_link_source", icon="FILE_BLEND")
-        layout.operator("bname.record_asset_link", icon="LINKED")
-        layout.separator()
-        layout.operator("bname.coma_update_thumb", icon="IMAGE")
-        layout.operator("bname.coma_generate_preview", icon="RESTRICT_RENDER_OFF")
+        op_link = getattr(bpy.ops.bname, "open_link_source", None)
+        if op_link is not None:
+            layout.operator("bname.open_link_source", icon="FILE_BLEND")
+        op_record = getattr(bpy.ops.bname, "record_asset_link", None)
+        if op_record is not None:
+            layout.operator("bname.record_asset_link", icon="LINKED")
+        op_thumb = getattr(bpy.ops.bname, "coma_update_thumb", None)
+        if op_thumb is not None:
+            layout.separator()
+            layout.operator("bname.coma_update_thumb", icon="IMAGE")
+        op_prev = getattr(bpy.ops.bname, "coma_generate_preview", None)
+        if op_prev is not None:
+            layout.operator("bname.coma_generate_preview", icon="RESTRICT_RENDER_OFF")
 
 
 def _draw_in_object_context(self, context):
+    """3D ビュー Object 右クリックメニューに B-Name サブメニューを差し込む."""
+    obj = _active_managed_object(context)
+    if obj is None:
+        return
     self.layout.separator()
-    self.layout.menu(BNAME_MT_object_context.bl_idname, icon="OUTLINER_OB_GROUP_INSTANCE")
+    self.layout.menu(
+        BNAME_MT_object_context.bl_idname,
+        icon="OUTLINER_OB_GROUP_INSTANCE",
+    )
 
 
-_CLASSES = (BNAME_MT_selection_context, BNAME_MT_object_context)
+def _draw_in_outliner_context(self, context):
+    """Outliner 右クリックメニューに B-Name サブメニューを差し込む.
+
+    Outliner では Object 未選択でも常にサブメニューを出す (選択中の場合は
+    詳細設定が有効、未選択は案内ラベルのみ)。
+    """
+    self.layout.separator()
+    self.layout.menu(
+        BNAME_MT_object_context.bl_idname,
+        icon="OUTLINER_OB_GROUP_INSTANCE",
+    )
+
+
+_CLASSES = (
+    BNAME_MT_layer_context,
+    BNAME_MT_selection_context,
+    BNAME_MT_object_context,
+)
+
+
+# Outliner の append 候補メニュー (Blender 5.1 で存在するもののみ append される)
+_OUTLINER_MENUS = (
+    "OUTLINER_MT_object",
+    "OUTLINER_MT_collection",
+    "OUTLINER_MT_context_menu",
+    "OUTLINER_MT_asset",
+)
 
 
 def register() -> None:
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.VIEW3D_MT_object_context_menu.append(_draw_in_object_context)
+    # Outliner の各種右クリックメニューにも同じサブメニューを差し込む
+    for menu_name in _OUTLINER_MENUS:
+        menu = getattr(bpy.types, menu_name, None)
+        if menu is not None:
+            try:
+                menu.append(_draw_in_outliner_context)
+            except (AttributeError, TypeError):
+                pass
 
 
 def unregister() -> None:
@@ -116,6 +194,14 @@ def unregister() -> None:
         bpy.types.VIEW3D_MT_object_context_menu.remove(_draw_in_object_context)
     except (ValueError, AttributeError):
         pass
+    for menu_name in _OUTLINER_MENUS:
+        menu = getattr(bpy.types, menu_name, None)
+        if menu is None:
+            continue
+        try:
+            menu.remove(_draw_in_outliner_context)
+        except (ValueError, AttributeError):
+            pass
     for cls in reversed(_CLASSES):
         try:
             bpy.utils.unregister_class(cls)
