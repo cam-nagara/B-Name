@@ -11,10 +11,11 @@ from bpy_extras.io_utils import ImportHelper, ExportHelper
 
 from ..core.mode import MODE_PAGE, MODE_COMA, get_mode, set_mode
 from ..core.work import get_work
+from ..core.work_info import suppress_page_number_range_update
 from ..io import blend_io, page_io, presets, work_io
 from ..utils import color_space
 from ..utils import gpencil as gp_utils
-from ..utils import log, page_grid, paths
+from ..utils import log, page_grid, page_range, paths
 
 _logger = log.get_logger(__name__)
 
@@ -40,9 +41,13 @@ def _apply_phase1_defaults(work) -> None:
     info.display_author.position = "bottom-right"
     info.display_page_number.enabled = True
     info.display_page_number.position = "bottom-center"
-    info.page_number_start = 1
-    if hasattr(info, "page_number_end"):
-        info.page_number_end = 1
+    # 前作品の値が残っている場合に備え、ページ番号レンジは 1, 1 に強制リセット。
+    # update callback を抑止することで ``ensure_pages_for_number_range`` が
+    # 中間状態 (start=1, end=旧値) で発火するのを防ぐ。
+    with suppress_page_number_range_update():
+        info.page_number_start = 1
+        if hasattr(info, "page_number_end"):
+            info.page_number_end = 1
     if hasattr(work, "coma_blend_template_path"):
         work.coma_blend_template_path = ""
     # 作者名が未入力なら OS のユーザー名で初期化 (上書きはしない)
@@ -190,6 +195,12 @@ class BNAME_OT_work_new(Operator, ExportHelper):
 
             create_basic_frame_coma(work, entry, work_dir)
             page_io.save_pages_json(work_dir, work)
+            # 初期ページが 1 個できた状態で end を実ページ数に揃える
+            # (= start + len(work.pages) - 1)。バグ #2 対策: 仮に
+            # `_apply_phase1_defaults` の reset が何らかの理由で適用
+            # 失敗していた場合でも、ここで最終状態が 1, max(1, len(pages))
+            # に確定する。
+            page_range.sync_end_number_to_page_count(work)
 
             # デフォルトシーンの Cube/Light/Camera を削除してから保存
             # (ネームキャンバスに余計な 3D オブジェクトが載らないようにする)

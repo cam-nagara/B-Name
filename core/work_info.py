@@ -23,6 +23,25 @@ _logger = log.get_logger(__name__)
 _page_range_update_depth = 0
 
 
+class suppress_page_number_range_update:
+    """page_number_start/end への代入で update callback を発火させないコンテキスト.
+
+    新規作品作成時の reset (前作品の値を 1 に強制リセット) のように、
+    callback 経由で ``ensure_pages_for_number_range`` を起動したくない
+    ケースで使う。
+    """
+
+    def __enter__(self):
+        global _page_range_update_depth
+        _page_range_update_depth += 1
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        global _page_range_update_depth
+        _page_range_update_depth -= 1
+        return False
+
+
 def _on_page_number_range_changed(self, context) -> None:
     global _page_range_update_depth
 
