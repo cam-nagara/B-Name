@@ -38,13 +38,35 @@ PER_LAYER_GP_DATA_PREFIX = "BName_LayerGP_"
 PROP_MIGRATED_FROM = "bname_migrated_from_layer"
 
 
+def _resolve_unique_data_name(base: str) -> str:
+    """``base`` をベースに、まだ未使用の GP data 名を返す.
+
+    既存 data block を別 Object が使っている場合に複数 Object が同 data を
+    共有してしまう事故を防ぐため、必ず未使用の名前を採用する。
+    """
+    coll = gp_utils._gp_data_blocks()
+    if base not in coll:
+        return base
+    for i in range(1, 10000):
+        candidate = f"{base}.{i:03d}"
+        if candidate not in coll:
+            return candidate
+    # 例外的に到達したら Blender に任せて .NNN を付けさせる
+    return base
+
+
 def _new_gp_object_for_layer(
     *,
     bname_id: str,
     title: str,
 ) -> bpy.types.Object:
-    """新 GP Object と GP data を生成する (まだ Collection に link しない)."""
-    data_name = f"{PER_LAYER_GP_DATA_PREFIX}{bname_id}"
+    """新 GP Object と GP data を生成する (まだ Collection に link しない).
+
+    GP data 名は **必ず未使用** にする。既存 data 名と衝突したら .001 を
+    付与した名前を採用し、別 Object との data 共有を防ぐ。
+    """
+    base_data_name = f"{PER_LAYER_GP_DATA_PREFIX}{bname_id}"
+    data_name = _resolve_unique_data_name(base_data_name)
     gp_data = gp_utils.ensure_gpencil(data_name)
     obj_name = title or bname_id  # 後で assign_canonical_name で正規名へ書換え
     # bpy.data.objects.new は同名衝突で .001 を自動付加するので名前指定 OK
@@ -151,15 +173,24 @@ def migrate_master_gp_layers_to_objects(
     for layer in layers:
         layer_name = str(getattr(layer, "name", "") or "")
         if not layer_name:
-            plan["skipped"].append({"reason": "no name"})
+            plan["skipped"].append({"reason": "no name", "z_index": z})
+            # skip でも z は進める。連番を保ち、2 回目 migrate で新 layer が
+            # 既存 Object と z_index 衝突するのを防ぐ。
+            z += z_step
             continue
-        # 既に Object 化済みの layer は skip
+        # 既に Object 化済みの layer は skip (z は進める)
         bname_id = f"gp_master_{layer_name}"
         existing = on.find_object_by_bname_id(bname_id, kind="gp")
         if existing is not None:
             plan["skipped"].append(
-                {"layer": layer_name, "reason": "already migrated", "obj": existing.name}
+                {
+                    "layer": layer_name,
+                    "reason": "already migrated",
+                    "obj": existing.name,
+                    "z_index": z,
+                }
             )
+            z += z_step
             continue
         plan["would_migrate"].append(
             {"layer": layer_name, "bname_id": bname_id, "z_index": z}

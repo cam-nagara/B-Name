@@ -14,26 +14,44 @@
 
 from __future__ import annotations
 
-import time
+import uuid
 
 import bpy
 from bpy.props import BoolProperty, IntProperty, StringProperty
 
 from ..utils import gp_object_layer as gpol
 from ..utils import log
+from ..utils import object_naming as on
 
 _logger = log.get_logger(__name__)
 
 
 def _make_gp_bname_id() -> str:
-    """``gp_<unix秒>`` 形式の安定 ID を生成 (簡易ユニーク)."""
-    return f"gp_{int(time.time() * 1000) % 10**9:09d}"
+    """``gp_<uuid12>`` 形式の安定 ID を生成.
+
+    UUID4 の上位 12 桁を採用。`time.time() * 1000` ベースの実装は同 ms 連打
+    で衝突するため UUID へ切替。万一の衝突 (実質 0%) も
+    ``find_object_by_bname_id`` で検出して再生成する。
+    """
+    for _ in range(10):
+        candidate = f"gp_{uuid.uuid4().hex[:12]}"
+        if on.find_object_by_bname_id(candidate, kind="gp") is None:
+            return candidate
+    # 10 回試して衝突するのは天文学的に低い確率だが、念のため最後の値を返す
+    return candidate
 
 
 def _resolve_active_coma(context):
     """アクティブページとコマを (page_id, coma_id, title) で返す.
 
-    取得できない場合は (None, None, None)。
+    優先順位:
+        1. ``scene.bname_current_coma_id`` が設定されていれば、そのコマ ID を
+           採用 (cNN.blend 編集中などコマ単独編集モード)。
+        2. ``page.active_coma_index`` (BNamePageEntry の IntProperty) を使う。
+        3. それ以外は最初のコマ (0 番目)。
+
+    アクティブコマが特定できない場合 ``coma_id=None`` を返し、呼出側で
+    ページ直下を採用するか警告するかを判断する。
     """
     scene = getattr(context, "scene", None)
     if scene is None:
@@ -52,7 +70,17 @@ def _resolve_active_coma(context):
     comas = getattr(page, "comas", None)
     if not comas:
         return page_id, None, None
-    coma_idx = int(getattr(scene, "bname_active_coma_index", 0))
+
+    # 1. scene.bname_current_coma_id (cNN.blend 編集中) を最優先
+    current_coma_id = str(getattr(scene, "bname_current_coma_id", "") or "")
+    if current_coma_id:
+        for coma in comas:
+            if str(getattr(coma, "id", "") or "") == current_coma_id:
+                title = str(getattr(coma, "title", "") or current_coma_id)
+                return page_id, current_coma_id, title
+
+    # 2. page.active_coma_index (BNamePageEntry.active_coma_index)
+    coma_idx = int(getattr(page, "active_coma_index", 0))
     if not (0 <= coma_idx < len(comas)):
         coma_idx = 0
     coma = comas[coma_idx]
