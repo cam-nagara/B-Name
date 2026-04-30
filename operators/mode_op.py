@@ -348,9 +348,112 @@ class BNAME_OT_exit_coma_mode(Operator):
         return {"FINISHED"}
 
 
+def _current_blend_is_coma_blend() -> tuple[Path | None, str, str]:
+    """開いている mainfile が ``pNNNN/cNN/cNN.blend`` 形式かを判定.
+
+    Returns ``(work_dir, page_id, coma_id)`` を返す。マッチしなければ
+    ``(None, "", "")``。``bname_mode`` / ``bname_current_coma_id`` 等の
+    Scene プロパティが load_post 失敗で同期されていないケースの救済用。
+    """
+    fp = bpy.data.filepath
+    if not fp:
+        return None, "", ""
+    try:
+        path = Path(fp).resolve()
+    except OSError:
+        return None, "", ""
+    parts = path.parts
+    if len(parts) < 4:
+        return None, "", ""
+    page_id, coma_id, fname = parts[-3], parts[-2], parts[-1]
+    if not (
+        paths.is_valid_page_id(page_id)
+        and paths.is_valid_coma_id(coma_id)
+        and fname == f"{coma_id}.blend"
+    ):
+        return None, "", ""
+    work_dir = path.parents[2]
+    return work_dir, page_id, coma_id
+
+
+class BNAME_OT_exit_coma_mode_safe(Operator):
+    """ページ一覧へ戻る (堅牢版).
+
+    ``bname.exit_coma_mode`` は ``get_mode == MODE_COMA`` かつ ``work.loaded``
+    を要求するが、load_post の遅延・失敗で Scene 状態が壊れていると
+    poll/execute が通らずユーザーが帰り道を失う。本 operator は
+
+    1. 通常パス: 既存の ``bname.exit_coma_mode`` を呼ぶ
+    2. フォールバック: それが無理なら、開いている .blend のパスから
+       ``work_dir`` を逆引きし、直接 ``open_work_blend`` で work.blend を
+       開く (cNN.blend は保存しない / Blender は通常 mainfile dirty 状態を
+       保存するか聞いてくる)
+
+    どちらにせよ、ユーザーは ``ページ一覧 (work.blend)`` に戻れる。
+    """
+
+    bl_idname = "bname.exit_coma_mode_safe"
+    bl_label = "ページ一覧に戻る"
+    bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, context):
+        if get_mode(context) == MODE_COMA:
+            return True
+        work_dir, _page_id, _coma_id = _current_blend_is_coma_blend()
+        return work_dir is not None
+
+    def execute(self, context):
+        # 1) 通常パス: ``exit_coma_mode`` の poll が通るならそれに委譲
+        try:
+            if BNAME_OT_exit_coma_mode.poll(context):
+                return bpy.ops.bname.exit_coma_mode("EXEC_DEFAULT")
+        except Exception:  # noqa: BLE001
+            _logger.exception("exit_coma_mode_safe: 通常パス失敗")
+
+        # 2) フォールバック: パスから work_dir を逆引きし、work.blend を開く
+        work_dir, page_id, coma_id = _current_blend_is_coma_blend()
+        if work_dir is None:
+            self.report({"ERROR"}, "コマファイル (cNN.blend) ではありません")
+            return {"CANCELLED"}
+        try:
+            # 念のため現在の cNN.blend に save (上書き保存)
+            try:
+                cur = blend_io.current_mainfile_path()
+                expected_panel = paths.coma_blend_path(work_dir, page_id, coma_id).resolve()
+                if cur is not None and cur == expected_panel:
+                    blend_io.save_current_as(expected_panel)
+            except Exception:  # noqa: BLE001
+                _logger.exception("exit_coma_mode_safe: cNN.blend 保存失敗 (続行)")
+
+            if not blend_io.work_blend_exists(work_dir):
+                self.report(
+                    {"ERROR"},
+                    f"work.blend が見つかりません: {paths.work_blend_path(work_dir)}",
+                )
+                return {"CANCELLED"}
+            blend_io.open_work_blend(work_dir)
+            # load_post が走るので mode/state は自動で同期される。
+            # 念のため現在 scene にも反映 (load_post 前に UI 更新が走る場合)。
+            try:
+                ctx = bpy.context
+                set_mode(MODE_PAGE, ctx)
+                ctx.scene.bname_current_coma_id = ""
+                ctx.scene.bname_current_coma_page_id = ""
+            except Exception:  # noqa: BLE001
+                pass
+            self.report({"INFO"}, "ページ一覧に戻りました")
+            return {"FINISHED"}
+        except Exception as exc:  # noqa: BLE001
+            _logger.exception("exit_coma_mode_safe: work.blend 切替失敗")
+            self.report({"ERROR"}, f"work.blend 切替失敗: {exc}")
+            return {"CANCELLED"}
+
+
 _CLASSES = (
     BNAME_OT_enter_coma_mode,
     BNAME_OT_exit_coma_mode,
+    BNAME_OT_exit_coma_mode_safe,
 )
 
 

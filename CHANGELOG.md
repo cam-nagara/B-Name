@@ -3,6 +3,41 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-30 — コマファイルから戻れない問題の堅牢化 (exit_coma_mode_safe)
+
+ユーザー報告: 「コマをダブルクリックでコマファイルを開いたら、ページ一覧に戻れなくなった」
+
+### 原因の可能性
+- `bname.exit_coma_mode` の poll は `get_mode == MODE_COMA` を要求
+- `BNAME_PT_coma_return` panel poll は `work.loaded and get_mode == MODE_COMA`
+- **load_post の遅延・失敗** で `bname_mode` が同期されないと、ESC も「ページ
+  一覧に戻る」ボタンも poll が通らず、ユーザーが帰り道を完全に失う
+
+### 追加した堅牢化レイヤー
+- **新 operator** `bname.exit_coma_mode_safe` (operators/mode_op.py):
+  - poll: `MODE_COMA` か、または **現在の .blend のパスが `pNNNN/cNN/cNN.blend`
+    形式** であれば通る (=load_post 失敗でも通る)
+  - 通常パスは既存の `bname.exit_coma_mode` に委譲
+  - フォールバックパスは、パスから `work_dir` を逆引きして
+    `blend_io.open_work_blend()` で work.blend を直接開く
+- **3D ビューヘッダー** (ui/coma_return_header.py):
+  - VIEW3D_HT_header に「← ページ一覧へ」ボタンを append
+  - N パネル B-Name タブが閉じていても、または非表示でも、ヘッダーから常時
+    アクセス可能
+- **N パネルパネル** (panels/work_panel.py):
+  - `BNAME_PT_coma_return` の poll を `_current_blend_is_coma_blend()` フォール
+    バック付きに拡張
+  - ボタンを `bname.exit_coma_mode_safe` に切替
+- **ESC キーマップ** (keymap/keymap.py):
+  - `bname.exit_coma_mode` → `bname.exit_coma_mode_safe` に差し替え
+
+### AI 目視 E2E 検証 (Blender 5.1.1 GUI)
+- work.blend → enter_coma_mode → cNN.blend (`p0002/c02/c02.blend`) 遷移確認 OK
+- cNN.blend 中、ヘッダー右端に「← ページ一覧へ」ボタン表示確認 OK
+- N パネル B-Name タブに「ページ一覧に戻る」パネル表示確認 OK
+- `bname.exit_coma_mode_safe` 実行で work.blend へ復帰確認 OK
+  (`mainfile_after = ".../work.blend"`)
+
 ## 2026-04-30 — GP 描画ボタン / Texture Paint 中 SPACE 抑止 / ラスター材質 DITHERED
 
 ユーザー報告 3 件:

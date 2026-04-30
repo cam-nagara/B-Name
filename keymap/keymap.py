@@ -501,9 +501,10 @@ class KeymapState:
         # E → Eraser Hard / Eraser Stroke 切替 (GP描画中のみ実行)
         _add("bname.toggle_eraser_brush", "E")
         # Esc → コマ編集モードを抜けて全ページ一覧 (work.blend) に戻る
-        # poll が MODE_COMA を要求するため、紙面編集モード中は Blender 既定の
-        # Esc 動作が走り (kmi が match しても poll で skip される)、干渉しない。
-        _add("bname.exit_coma_mode", "ESC")
+        # poll が MODE_COMA または「現在の .blend が cNN.blend」を要求する
+        # (堅牢版: load_post 失敗等で bname_mode が同期されていなくても帰れる)。
+        # 紙面編集モード中は両方とも False になり Blender 既定の Esc 動作が走る。
+        _add("bname.exit_coma_mode_safe", "ESC")
 
         # Ctrl + ホイール → 1 ステップズーム (固定)
         kmi = _add("bname.view_zoom_step", "WHEELUPMOUSE", ctrl=True)
@@ -601,6 +602,7 @@ class KeymapState:
             "bname.layer_move_tool",
             "bname.text_tool",
             "bname.exit_coma_mode",
+            "bname.exit_coma_mode_safe",
         }
         target_keys = set(self._BNAME_RESERVED_SINGLE_KEYS)
         disabled = 0
