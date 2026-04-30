@@ -15,6 +15,7 @@ from . import (
     coma_detail_panel,
     coma_list_panel as _legacy_coma_list_panel,
     coma_tools_panel as _legacy_coma_tools_panel,
+    outliner_layer_panel,
     paper_panel,
     tool_panel,
     view_panel,
@@ -29,6 +30,7 @@ _MODULES = (
     coma_camera_panel,
     coma_detail_panel,
     gpencil_panel,
+    outliner_layer_panel,
     export_panel,
 )
 
