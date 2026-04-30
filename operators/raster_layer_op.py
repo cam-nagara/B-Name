@@ -18,7 +18,11 @@ from ..utils.geom import mm_to_m, mm_to_px
 
 _logger = log.get_logger(__name__)
 
-RASTER_Z_LIFT_M = 0.0005
+# ラスター plane を他レイヤー (paper / mask) より手前に確実に表示するための
+# Z リフト (m)。0.5mm では Material Preview / EEVEE Next で z-fight や alpha
+# 競合により描画が見えないケースがあるため 5mm に拡大。Z step (0.0001m) の
+# 50 倍離れるので他の z_index 採番とも衝突しない。
+RASTER_Z_LIFT_M = 0.005
 RASTER_MATERIAL_VERSION = 2
 RASTER_MATERIAL_VERSION_PROP = "bname_raster_material_version"
 RASTER_IMAGE_NODE = "BName Raster Image"
@@ -296,6 +300,11 @@ def ensure_raster_material(entry, image):
         mat.show_transparent_back = True
     except Exception:  # noqa: BLE001
         pass
+    # Blender 5.1 EEVEE Next 互換: surface_render_method を BLENDED に
+    try:
+        mat.surface_render_method = "BLENDED"
+    except (AttributeError, TypeError):
+        pass
     nodes = _ensure_raster_material_nodes(mat)
     tex = nodes["tex"]
     tex.image = image
@@ -350,16 +359,23 @@ def sync_raster_runtime_display(context, entry) -> None:
 
 
 def _ensure_raster_mesh(work, raster_id: str):
+    """ラスター plane Mesh を ensure。常にページキャンバス全体を覆う矩形 (mm).
+
+    paper.canvas_width_mm × canvas_height_mm のページピッタリ。頂点は Mesh
+    ローカル座標で z=RASTER_Z_LIFT_M。Object.location.z の z_index リフトと
+    合算されて Material Preview でも他レイヤーより確実に手前に表示される。
+    """
     mesh = bpy.data.meshes.get(raster_mesh_name(raster_id))
     if mesh is None:
         mesh = bpy.data.meshes.new(raster_mesh_name(raster_id))
     w = mm_to_m(float(work.paper.canvas_width_mm))
     h = mm_to_m(float(work.paper.canvas_height_mm))
+    z = RASTER_Z_LIFT_M
     verts = (
-        (0.0, 0.0, RASTER_Z_LIFT_M),
-        (w, 0.0, RASTER_Z_LIFT_M),
-        (w, h, RASTER_Z_LIFT_M),
-        (0.0, h, RASTER_Z_LIFT_M),
+        (0.0, 0.0, z),
+        (w, 0.0, z),
+        (w, h, z),
+        (0.0, h, z),
     )
     mesh.clear_geometry()
     mesh.from_pydata(verts, [], [(0, 1, 2, 3)])
@@ -717,7 +733,17 @@ class BNAME_OT_raster_layer_add(Operator):
     bl_label = "ラスター描画レイヤーを追加"
     bl_options = {"REGISTER", "UNDO"}
 
-    dpi: IntProperty(name="DPI", default=300, min=30, soft_max=1200)  # type: ignore[valid-type]
+    dpi_preset: EnumProperty(  # type: ignore[valid-type]
+        name="DPI",
+        items=(
+            ("150", "150 dpi", "下描き / 確認用 (軽量)"),
+            ("300", "300 dpi", "標準 (推奨)"),
+            ("600", "600 dpi", "印刷向け (高解像度)"),
+            ("custom", "カスタム", "カスタム値を直接指定"),
+        ),
+        default="300",
+    )
+    dpi: IntProperty(name="カスタム DPI", default=300, min=30, soft_max=1200)  # type: ignore[valid-type]
     bit_depth: EnumProperty(  # type: ignore[valid-type]
         name="階調",
         items=(("gray8", "グレー 8bit", ""), ("gray1", "1bit", "")),
@@ -727,6 +753,24 @@ class BNAME_OT_raster_layer_add(Operator):
     @classmethod
     def poll(cls, context):
         return _raster_collection(context.scene) is not None
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=320)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, "dpi_preset")
+        if self.dpi_preset == "custom":
+            layout.prop(self, "dpi")
+        layout.prop(self, "bit_depth")
+
+    def _resolved_dpi(self) -> int:
+        if self.dpi_preset == "custom":
+            return int(self.dpi)
+        try:
+            return int(self.dpi_preset)
+        except ValueError:
+            return 300
 
     def execute(self, context):
         work = get_work(context)
@@ -744,7 +788,7 @@ class BNAME_OT_raster_layer_add(Operator):
         entry.title = f"ラスター {len(coll)}"
         entry.image_name = raster_image_name(raster_id)
         entry.filepath_rel = raster_filepath_rel(raster_id)
-        entry.dpi = int(self.dpi)
+        entry.dpi = self._resolved_dpi()
         entry.bit_depth = self.bit_depth
         entry.scope = "page"
         entry.parent_kind = "page"

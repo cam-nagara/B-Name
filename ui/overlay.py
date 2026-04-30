@@ -1409,6 +1409,10 @@ def _draw_callback() -> None:
     scene = context.scene
 
     gpu.state.blend_set("ALPHA")
+    # depth_test を有効にして、3D Mesh (raster plane など) との前後関係を
+    # オーバーレイ描画でも考慮する。これがないと用紙背景が常に最前面に
+    # 描画され、Mesh に paint した内容が見えなくなる。
+    gpu.state.depth_test_set("LESS_EQUAL")
     try:
         if (
             (
@@ -1516,6 +1520,11 @@ def _draw_callback() -> None:
         )
     finally:
         gpu.state.blend_set("NONE")
+        # depth_test を元に戻す (他の draw_handler への副作用を避ける)
+        try:
+            gpu.state.depth_test_set("NONE")
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def apply_bname_shading_mode(context=None) -> int:

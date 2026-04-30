@@ -47,7 +47,10 @@ class BNAME_PT_outliner_layers(Panel):
             text="GP レイヤー",
             icon="GREASEPENCIL",
         )
-        col.operator(
+        # ラスターは invoke_props_dialog で DPI 選択ダイアログを開く
+        rast_row = col.row(align=True)
+        rast_row.operator_context = "INVOKE_DEFAULT"
+        rast_row.operator(
             "bname.raster_layer_add",
             text="ラスターレイヤー",
             icon="TEXTURE",

@@ -3,6 +3,36 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-30 — ラスター: DPI 選択 / Z リフト 5mm / overlay depth_test
+
+### 追加
+- `bname.raster_layer_add` operator に **DPI プリセット選択** を追加。
+  150 / 300 / 600 dpi の 3 段プリセット + カスタム値指定。`invoke_props_dialog`
+  で実行前にダイアログ表示。N パネル「ラスターレイヤー」ボタンも
+  `INVOKE_DEFAULT` でこのダイアログを開くように。
+
+### 修正
+- ラスター plane の Z リフト `RASTER_Z_LIFT_M` を 0.5mm → **5mm** に拡大。
+  Material Preview / EEVEE Next で他レイヤー (用紙 / マスク) との z-fight や
+  alpha 競合により paint 内容が見えなくなる問題を回避。
+- `ensure_raster_material` に **EEVEE Next 互換** の
+  `mat.surface_render_method = "BLENDED"` を追加。`blend_method` と併用して
+  Blender 5.1 の Material Preview / Rendered ビューでも透過 paint が
+  期待通りに表示される。
+- **用紙オーバーレイ描画が ラスター Mesh を完全に隠してしまう問題** を解消:
+  `ui/overlay.py._draw_callback` (POST_VIEW) の冒頭で
+  `gpu.state.depth_test_set("LESS_EQUAL")` を呼び、3D Mesh と GPU オーバー
+  レイ描画の前後関係を depth buffer で比較するようにした。これにより
+  ラスター plane (Z=5mm) は用紙オーバーレイ (Z=0) より手前に描画され、
+  paint した内容が見えるようになる。終了時 finally で depth_test を NONE に
+  戻して他 draw_handler への副作用を回避。
+
+E2E:
+- DPI プリセット enum: ["150", "300", "600", "custom"]
+- RASTER_Z_LIFT_M = 0.005
+- raster mesh 頂点が paper サイズ (0,0)→(0.257, 0.364) で z=0.005
+- _draw_callback に depth_test_set 呼出が含まれる
+
 ## 2026-04-30 — ボタン文言整理 / ラスター追加 / キーマップ条件化 / 可視性連動
 
 ### 変更
