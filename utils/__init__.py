@@ -7,6 +7,7 @@ python_deps.ensure_bundled_wheels_on_path()
 from . import handlers, log, page_grid  # noqa: E402,F401 — page_grid はヘルパのみ
 from . import object_naming, outliner_model, layer_object_sync  # noqa: E402,F401
 from . import (  # noqa: E402,F401
+    active_collection_sync,
     active_target,
     balloon_curve_object,
     effect_line_object,
@@ -22,9 +23,11 @@ def register() -> None:
     log.register()
     handlers.register()
     outliner_watch.register()
+    active_collection_sync.register()
 
 
 def unregister() -> None:
+    active_collection_sync.unregister()
     outliner_watch.unregister()
     handlers.unregister()
     try:

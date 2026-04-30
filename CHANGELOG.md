@@ -3,6 +3,35 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-30 — Outliner Collection 選択 → B-Name active page/coma 同期
+
+ユーザー要望: アウトライナーでページ/コマ Collection を選択した時、3D
+ビューポート上で連動して、B-Name としてもそのページ/コマが選択状態に
+なるようにする。
+
+### 追加: `utils/active_collection_sync.py`
+- `bpy.msgbus.subscribe_rna((LayerCollection, "active"), ...)` で
+  Outliner の active Collection 変化を即時検出 (poll 不要、選んだ瞬間に反応)。
+- `depsgraph_update_post` でフォールバック (msgbus が file load 跨ぎ等で
+  失効するケース対策)。
+- `load_post` で msgbus を再購読。
+- 同期処理:
+  - 選ばれた Collection が `bname_kind=="page"` → `work.active_page_index`
+    を更新、`bname_current_coma_id=""`、`bname_active_layer_kind="page"`
+  - `bname_kind=="coma"` (`bname_id="<page_id>:<coma_id>"`) →
+    `work.active_page_index` + `page.active_coma_index` 両方更新、
+    `bname_current_coma_id=<coma_id>`、`bname_active_layer_kind="coma"`
+  - **B-Name 管理外の Collection は無視** (= ユーザーが Blender 標準 Collection
+    を選んでも B-Name 側 active を変更しない、read-only ガード)
+- コマ編集モード (cNN.blend) では同期しない (1 コマ前提)。
+
+### E2E 検証 (Blender 5.1.1, 9 ページ work)
+- Test 1: p0001 page クリック → `active_page_index=0` / kind=page / coma=""  OK
+- Test 2: p0002:c03 coma クリック → `active_page_index=1` /
+  `page.active_coma_index=2` / kind=coma / coma_id=c03  OK
+- Test 3: p0003 page クリック → `active_page_index=2` / coma クリア  OK
+- Test 4: Scene ルート (非 B-Name) クリック → 状態不変  OK
+
 ## 2026-04-30 — コマファイルから戻れない問題の堅牢化 (exit_coma_mode_safe)
 
 ユーザー報告: 「コマをダブルクリックでコマファイルを開いたら、ページ一覧に戻れなくなった」
