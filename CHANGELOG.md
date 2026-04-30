@@ -3,6 +3,51 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-05-01 — バグ #3 修正 (start_side 変更でコマ配下レイヤーが旧位置に取り残される)
+
+### 症状
+- ``paper.start_side`` を ``"right"`` で work_new し、 コマ配下に raster /
+  GP / 効果線レイヤーを作った後、 ``start_side`` を ``"left"`` に切替えると
+  ページの paper_bg は新しい slot 1 の位置 (x=-257mm) へ移動するのに、
+  コマ配下のレイヤー Mesh / GP は world (0, 0, *) のまま残り、 結果として
+  「3 個の paper_bg の右側にもう 1 個の余白用 paper_bg があるように見える」
+  状態になっていた (= 計 4 枚見える)
+- ユーザー報告では paper_bg の問題と認識されていたが、 実体はコマ配下
+  raster Mesh (用紙サイズの白) や GP オブジェクトが page_grid offset を
+  追従せず slot 0 の空白位置 (x=0) で取り残されていたもの
+
+### 原因
+- ``utils/page_grid.apply_page_collection_transforms`` がページ Collection
+  の **直下** Object のみを走査していた (``coll.objects``)
+- B-Name のレイヤー (raster / gp / effect / balloon / image / text) は
+  実際にはコマサブコレクション (``c01`` / ``c02`` …) 配下に置かれている
+  ため、 ``coll.objects`` では拾えず、 ``start_side`` / ``read_direction``
+  変更時に位置が更新されない
+
+### 修正
+- ``utils/page_grid.apply_page_collection_transforms`` をサブコレクション
+  も再帰走査するよう変更 (``coll.all_objects``)
+- Object 種別ごとに位置決めロジックを切り替え:
+  - ``raster`` / ``gp`` / ``effect``: world = ページ grid オフセット
+    (キャンバス全体の頂点座標を持つので)
+  - ``balloon`` / ``image`` / ``text``: world = ページ offset + entry の
+    ``x_mm`` / ``y_mm`` (entry のページローカル座標を保持)
+  - その他 (``master_sketch`` 等): page Collection 直下の場合のみ旧仕様
+    どおり page offset で揃える
+- ``coll.all_objects`` は他ページの Collection に link された Object も
+  含み得るため、 ``bname_parent_key`` から所属ページを引いて、 現在処理
+  中のページと一致するときだけ更新する二重処理ガードを追加
+- Z 軸は ``assign_per_page_z_ranks`` が per-page rank で決めるため、
+  本関数では現在値を保持 (上書きしない)
+
+### 検証 (Blender 5.1.1 実機)
+- 3 ページ作品 + start_side 切替 (right → left → right) の round-trip で、
+  コマ配下のレイヤー Object world 位置が page_grid offset に正しく追従
+- 既存 8 ページ実 work で、 全ページ × 全 kind (raster/gp/effect/balloon/
+  image/text) 計 34 Object について expected と完全一致 (wrong=0)
+- 「余分な空白 paper_bg」がビューポートから消失することをスクリーン
+  ショット比較で確認
+
 ## 2026-05-01 — バグ #1 / #2 修正 (msgbus subscribe / 新規作品ページ番号 default)
 
 ### バグ #1: msgbus subscribe 失敗 (LayerCollection.active が存在しない)

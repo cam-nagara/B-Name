@@ -192,10 +192,11 @@ def _obj_subpage_offset_mm(obj) -> tuple[float, float]:
 
 
 # Grease Pencil オブジェクトを用紙より手前 (z>0) に配置するためのオフセット (m).
-# 紙塗りは overlay (z=0 平面) に描画されるため、GP がそれより上に乗らないと
-# Solid 描画の Z 順で GP が紙の背面になり「線が消える」現象が発生する。
-# 0.001 m = 1 mm 程度上げれば GP が確実に前に来る。
-GP_Z_LIFT_M = 0.001
+# GP Object のベース Z リフト。 現仕様では assign_per_page_z_ranks が
+# page 内 rank ベース (0.1 刻み) で Object.location.z を確定するため、
+# ここでは追加リフト不要 (= 0)。 paper_bg z=0 に対しては rank*0.1 で
+# 自然に上に乗る。
+GP_Z_LIFT_M = 0.0
 
 
 def apply_page_collection_transforms(context, work) -> int:
@@ -208,8 +209,24 @@ def apply_page_collection_transforms(context, work) -> int:
     per-object の subpage offset (見開きの右半分用) があれば grid offset に
     加算する。これにより見開きページで 2 GP (左/右) を正しい位置に並置できる。
 
-    GP オブジェクトは ``GP_Z_LIFT_M`` (+1mm) 持ち上げて配置し、用紙塗り
-    (z=0) より確実に手前に来るようにする。
+    バグ #3 対策: ページ Collection の **直下** だけでなく、コマ
+    サブコレクション (``c01`` / ``c02`` …) や折りたたみフォルダ配下まで
+    再帰的に走査する。 ``start_side`` / ``read_direction`` 変更時に raster
+    / GP / effect レイヤーが旧位置 (例: 単独ページのつもりで slot 0 = x=0)
+    に取り残されて「余分な空白 paper_bg」のように見える問題を解消する。
+
+    Object 種別ごとに位置決めを切り替える:
+      - ``raster`` / ``gp`` / ``effect``: 全キャンバス座標を持つので world
+        位置 = ページ grid オフセット
+      - ``balloon`` / ``image`` / ``text``: entry の ``x_mm`` / ``y_mm`` を
+        ページローカル座標として保持しているため、world = ページ offset +
+        entry オフセット
+      - その他 (``master_sketch`` 等): 旧仕様どおり page Collection 直下に
+        いる場合のみ page offset で揃える。サブコレクション配下に紛れた
+        managed 外 Object (例: 基本枠コマ Mesh) は触らない
+
+    Z 軸は ``assign_per_page_z_ranks`` が per-page rank で決めるため、
+    ここでは現在値を保持する (= 上書きしない)。
     """
     scene = context.scene if context else bpy.context.scene
     if scene is None or work is None:
@@ -217,6 +234,27 @@ def apply_page_collection_transforms(context, work) -> int:
     cols, gap, cw, ch = _resolve_overview_params(scene, work)
     start_side = getattr(work.paper, "start_side", "right")
     read_direction = getattr(work.paper, "read_direction", "left")
+
+    # entry-positioned kinds 用に scene 全体の image_layers を 1 度だけ index 化
+    image_entries: dict[str, object] = {}
+    for entry in getattr(scene, "bname_image_layers", []) or []:
+        eid = str(getattr(entry, "id", "") or "")
+        if eid:
+            image_entries[eid] = entry
+
+    full_canvas_kinds = {"raster", "gp", "effect"}
+    entry_relative_kinds = {"balloon", "image", "text"}
+
+    def _set_xy(obj, x_m: float, y_m: float) -> None:
+        try:
+            loc = obj.location
+            obj.location = (x_m, y_m, loc.z)
+        except Exception:  # noqa: BLE001
+            _logger.exception(
+                "apply_page_collection_transforms: location set failed on %s",
+                obj.name,
+            )
+
     updated = 0
     for i, page_entry in enumerate(work.pages):
         coll = gp_utils.get_page_collection(page_entry.id)
@@ -228,17 +266,73 @@ def apply_page_collection_transforms(context, work) -> int:
         add_x, add_y = page_manual_offset_mm(page_entry)
         ox_mm += add_x
         oy_mm += add_y
-        for obj in coll.objects:
+
+        # ページ内の entry ルックアップを 1 度だけ作る
+        balloon_entries: dict[str, object] = {}
+        text_entries: dict[str, object] = {}
+        for entry in getattr(page_entry, "balloons", []) or []:
+            eid = str(getattr(entry, "id", "") or "")
+            if eid:
+                balloon_entries[eid] = entry
+        for entry in getattr(page_entry, "texts", []) or []:
+            eid = str(getattr(entry, "id", "") or "")
+            if eid:
+                text_entries[eid] = entry
+
+        direct_child_set = {id(o) for o in coll.objects}
+        page_id_str = str(getattr(page_entry, "id", "") or "")
+
+        # サブコレクション (c01, c02, ... ) も含めた全 Object を走査。
+        # Object が他ページの Collection にも link されているケースがあるため、
+        # ``bname_parent_key`` で「自分はこのページに属している」と明示している
+        # Object のみ位置更新する (二重処理防止)。
+        for obj in coll.all_objects:
             sub_x, sub_y = _obj_subpage_offset_mm(obj)
-            # GP は用紙 (z=0) より手前に持ち上げる
-            z = GP_Z_LIFT_M if obj.type == "GREASEPENCIL" else 0.0
-            new_offset = (mm_to_m(ox_mm + sub_x), mm_to_m(oy_mm + sub_y), z)
-            try:
-                obj.location = new_offset
-            except Exception:  # noqa: BLE001
-                _logger.exception(
-                    "apply_page_collection_transforms: location set failed on %s",
-                    obj.name,
+            kind = str(obj.get("bname_kind", "") or "")
+            managed = bool(obj.get("bname_managed", False))
+            parent_key = str(obj.get("bname_parent_key", "") or "")
+            owner_page_id = parent_key.split(":", 1)[0] if parent_key else ""
+            # parent_key がページ ID を持つのに現在処理中のページと違うなら、
+            # 別ページの管轄なのでここでは触らない (そのページの iteration で更新される)
+            if owner_page_id and owner_page_id != page_id_str:
+                continue
+
+            if kind in full_canvas_kinds and managed:
+                _set_xy(
+                    obj,
+                    mm_to_m(ox_mm + sub_x),
+                    mm_to_m(oy_mm + sub_y),
+                )
+                continue
+
+            if kind in entry_relative_kinds and managed:
+                bname_id = str(obj.get("bname_id", "") or "")
+                entry = None
+                if kind == "balloon":
+                    entry = balloon_entries.get(bname_id)
+                elif kind == "text":
+                    entry = text_entries.get(bname_id)
+                elif kind == "image":
+                    entry = image_entries.get(bname_id)
+                if entry is None:
+                    continue
+                ex_mm = float(getattr(entry, "x_mm", 0.0) or 0.0)
+                ey_mm = float(getattr(entry, "y_mm", 0.0) or 0.0)
+                _set_xy(
+                    obj,
+                    mm_to_m(ox_mm + ex_mm + sub_x),
+                    mm_to_m(oy_mm + ey_mm + sub_y),
+                )
+                continue
+
+            # 旧仕様維持: bname_kind が無い page Collection 直下の Object
+            # (master_sketch 等) は page offset に揃える。コマサブ配下の
+            # 未識別 Object (= 基本枠コマ Mesh など) には触らない。
+            if id(obj) in direct_child_set:
+                _set_xy(
+                    obj,
+                    mm_to_m(ox_mm + sub_x),
+                    mm_to_m(oy_mm + sub_y),
                 )
         updated += 1
     return updated
