@@ -137,6 +137,12 @@ def _mirror_image_text_empties(scene, work) -> None:
     try:
         from . import empty_layer_object as elo
 
+        # 旧 Plane 方式の Object/Mesh/Material/Image を掃除 (Empty 化移行)
+        try:
+            elo.cleanup_legacy_plane_objects()
+        except Exception:  # noqa: BLE001
+            _logger.exception("legacy plane cleanup failed")
+
         # image_layers (scene 直下)
         coll = getattr(scene, "bname_image_layers", None) if scene is not None else None
         if coll is not None:

@@ -3,6 +3,30 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-30 — Empty 化の徹底チェック修正 (即時同期 / 表示サイズ / 旧データ掃除)
+
+### 修正
+- `_EMPTY_DISPLAY_SIZE` を 1mm から 5mm に拡大 (3D ビューで点として
+  選択可能なサイズへ)。
+- `outliner_watch._on_depsgraph_update_post` を追加: Empty (image/text)
+  を 3D ビューで G で動かしたとき、5 秒間隔の timer scan を待たずに
+  `entry.x_mm/y_mm` に即時書戻し、オーバーレイ描画位置に連動する。
+  再帰抑止は `los.suppress_sync()` ガード + entry 同値チェックで実施。
+- `utils/empty_layer_object.cleanup_legacy_plane_objects` を追加:
+  旧 Plane 方式 (text_plane_*, image_plane_*, balloon_plane_*) の Object
+  と関連 Mesh / Material / placeholder Image データブロックを自動掃除。
+  `_mirror_image_text_empties` 冒頭で呼び出して Empty 化移行直後の
+  ゴミデータを除去する。
+
+### Blender 5.1 ハンドラ登録
+- `bpy.app.handlers.depsgraph_update_post` に `_on_depsgraph_update_post`
+  を登録/解除。
+
+E2E 確認:
+- 旧 `text_plane_t01` Object を残置した状態から mirror 実行 → 削除確認
+- depsgraph_update_post 経由で Empty.location 変更が即時 entry に反映
+  (timer scan を待たない)
+
 ## 2026-04-30 — 画像 / テキストを Empty Object 化 (オーバーレイ描画方式)
 
 ### 変更

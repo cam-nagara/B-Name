@@ -35,8 +35,9 @@ _logger = log.get_logger(__name__)
 IMAGE_EMPTY_NAME_PREFIX = "image_"
 TEXT_EMPTY_NAME_PREFIX = "text_"
 
-# Empty 表示サイズ (m)。1mm 相当でほぼ点
-_EMPTY_DISPLAY_SIZE = 0.001
+# Empty 表示サイズ (m)。5mm 程度で 3D ビューでも視認可能。
+# 0.001 (1mm) では点として見えず Empty を選択できない問題を回避。
+_EMPTY_DISPLAY_SIZE = 0.005
 _EMPTY_DISPLAY_TYPE = "PLAIN_AXES"
 
 
@@ -182,6 +183,61 @@ def ensure_text_empty_object(
     obj.hide_viewport = not bool(getattr(entry, "visible", True))
     obj.hide_render = not bool(getattr(entry, "visible", True))
     return obj
+
+
+def cleanup_legacy_plane_objects() -> int:
+    """旧 Plane 方式 (text_plane_*, image_plane_*) の Object と関連データを削除.
+
+    Empty Object 化への移行で残された Mesh + Material + Image データブロックも
+    掃除する。戻り値は削除した Object 数。
+    """
+    removed = 0
+    legacy_obj_prefixes = ("text_plane_", "image_plane_", "balloon_plane_")
+    legacy_mesh_prefixes = ("text_mesh_", "image_mesh_", "balloon_mesh_")
+    legacy_mat_prefixes = ("text_mat_", "image_mat_", "balloon_mat_")
+    legacy_image_prefixes = ("BNameText_placeholder_", "BNameBalloon_placeholder_")
+
+    for obj in list(bpy.data.objects):
+        if any(obj.name.startswith(p) for p in legacy_obj_prefixes):
+            try:
+                obj_data = obj.data
+                bpy.data.objects.remove(obj, do_unlink=True)
+                removed += 1
+                if obj_data is not None and getattr(obj_data, "users", 1) == 0:
+                    if isinstance(obj_data, bpy.types.Mesh):
+                        try:
+                            bpy.data.meshes.remove(obj_data)
+                        except Exception:  # noqa: BLE001
+                            pass
+            except Exception:  # noqa: BLE001
+                _logger.exception("legacy plane removal failed: %s", obj.name)
+
+    # orphan Mesh データを掃除
+    for mesh in list(bpy.data.meshes):
+        if any(mesh.name.startswith(p) for p in legacy_mesh_prefixes):
+            if getattr(mesh, "users", 1) == 0:
+                try:
+                    bpy.data.meshes.remove(mesh)
+                except Exception:  # noqa: BLE001
+                    pass
+
+    # 旧 placeholder Image / Material も掃除 (user=0 のもののみ)
+    for mat in list(bpy.data.materials):
+        if any(mat.name.startswith(p) for p in legacy_mat_prefixes):
+            if getattr(mat, "users", 1) == 0:
+                try:
+                    bpy.data.materials.remove(mat)
+                except Exception:  # noqa: BLE001
+                    pass
+    for img in list(bpy.data.images):
+        if any(img.name.startswith(p) for p in legacy_image_prefixes):
+            if getattr(img, "users", 1) == 0:
+                try:
+                    bpy.data.images.remove(img)
+                except Exception:  # noqa: BLE001
+                    pass
+
+    return removed
 
 
 def find_image_entry(scene, image_id: str):

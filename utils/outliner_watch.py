@@ -321,6 +321,38 @@ def _on_load_post(_filepath: str) -> None:
     schedule_watch_timer()
 
 
+@persistent
+def _on_depsgraph_update_post(scene, depsgraph) -> None:
+    """Object.location 変化を即時 entry.x_mm/y_mm へ反映する.
+
+    Empty (image / text) を 3D ビューで G で動かしたとき、5 秒間隔の timer
+    scan を待たずにオーバーレイ描画位置を即時更新するため。
+    再帰抑止: ``los.suppress_sync()`` ガードと entry 同値チェックで.
+    """
+    if los.is_sync_in_progress():
+        return
+    if scene is None:
+        return
+    try:
+        from . import empty_layer_object as elo
+
+        for update in depsgraph.updates:
+            if not update.is_updated_transform:
+                continue
+            obj_id = update.id
+            if not isinstance(obj_id, bpy.types.Object):
+                continue
+            if obj_id.get("bname_kind") not in {"image", "text"}:
+                continue
+            # 名前で生 Object を引き直す (depsgraph の id は eval 版の場合あり)
+            real_obj = bpy.data.objects.get(obj_id.name)
+            if real_obj is None:
+                continue
+            elo.sync_entry_position_from_object(scene, real_obj)
+    except Exception:  # noqa: BLE001
+        _logger.exception("depsgraph_update_post sync failed")
+
+
 def schedule_watch_timer() -> None:
     """timer を起動 (既存 timer は世代カウンタ + 明示 unregister で停止)."""
     global _scan_generation, _active_tick
@@ -363,6 +395,8 @@ def cancel_watch_timer() -> None:
 def register() -> None:
     if _on_load_post not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(_on_load_post)
+    if _on_depsgraph_update_post not in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.append(_on_depsgraph_update_post)
     schedule_watch_timer()
 
 
@@ -371,5 +405,10 @@ def unregister() -> None:
     if _on_load_post in bpy.app.handlers.load_post:
         try:
             bpy.app.handlers.load_post.remove(_on_load_post)
+        except ValueError:
+            pass
+    if _on_depsgraph_update_post in bpy.app.handlers.depsgraph_update_post:
+        try:
+            bpy.app.handlers.depsgraph_update_post.remove(_on_depsgraph_update_post)
         except ValueError:
             pass
