@@ -10,6 +10,7 @@ from . import (
     effect_line_op,
     effect_line_link_op,
     fisheye_op,
+    gp_layer_op,
     gpencil_op,
     image_layer_op,
     io_op,
@@ -71,6 +72,7 @@ _MODULES = (
     preset_op,
     io_op,
     gpencil_op,
+    gp_layer_op,
     view_op,
     shortcut_op,
 )

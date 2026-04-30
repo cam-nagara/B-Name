@@ -6,7 +6,7 @@ python_deps.ensure_bundled_wheels_on_path()
 
 from . import handlers, log, page_grid  # noqa: E402,F401 — page_grid はヘルパのみ
 from . import object_naming, outliner_model, layer_object_sync  # noqa: E402,F401
-from . import outliner_watch  # noqa: E402,F401
+from . import gp_object_layer, outliner_watch  # noqa: E402,F401
 
 
 def register() -> None:
