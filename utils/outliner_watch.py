@@ -108,11 +108,113 @@ def _writeback_raster_parent(scene, obj, new_kind: str, new_key: str) -> bool:
     return True
 
 
-def _scan_once() -> float | None:
-    """1 回分の scan。差分があれば実 entry へ反映する (raster は書戻し対応).
+def _writeback_image_parent(scene, obj, new_kind: str, new_key: str) -> bool:
+    """Outliner D&D を ``BNameImageLayer`` に書き戻す (Phase 3b).
 
-    Returns:
-        次回までの秒数。停止する場合は None。
+    BNameImageLayer.parent_kind は StringProperty (free-form) で、folder も
+    扱える。folder への移動は entry.folder_key 経由で表現する。
+    """
+    image_id = str(obj.get("bname_id", "") or "")
+    if not image_id:
+        return False
+    coll = getattr(scene, "bname_image_layers", None)
+    if coll is None:
+        return False
+    entry = None
+    for e in coll:
+        if str(getattr(e, "id", "") or "") == image_id:
+            entry = e
+            break
+    if entry is None:
+        return False
+
+    # マッピング
+    if new_kind in {"outside", "none"}:
+        new_parent_kind = "none"
+        new_parent_key = ""
+        new_folder_key = ""
+    elif new_kind == "page":
+        new_parent_kind = "page"
+        new_parent_key = new_key
+        new_folder_key = ""
+    elif new_kind == "coma":
+        new_parent_kind = "coma"
+        new_parent_key = new_key
+        new_folder_key = ""
+    elif new_kind == "folder":
+        # folder へ入れた場合は parent_kind を "folder"、folder_key にフォルダ ID。
+        # parent_key は元の page/coma を維持したいが、Outliner からは親は
+        # フォルダ Collection しか分からないので、folder の bname_parent_key
+        # から親の page/coma を引く。
+        new_parent_kind = "folder"
+        new_folder_key = new_key
+        # fold collection の親の bname_id を取って parent_key にする
+        from . import object_naming as on
+
+        folder_coll = on.find_collection_by_bname_id(new_key, kind="folder")
+        if folder_coll is not None:
+            # フォルダ Collection 自体の親 (page or coma) を逆引き
+            for parent_coll in bpy.data.collections:
+                if folder_coll.name in parent_coll.children:
+                    pkind = on.get_kind(parent_coll)
+                    if pkind in {"page", "coma"}:
+                        new_parent_kind = pkind  # 上書き: 実体の親種別
+                        new_parent_key = on.get_bname_id(parent_coll)
+                        break
+            else:
+                new_parent_key = ""
+        else:
+            new_parent_key = ""
+    else:
+        return False
+
+    if (
+        str(getattr(entry, "parent_kind", "") or "") == new_parent_kind
+        and str(getattr(entry, "parent_key", "") or "") == new_parent_key
+        and str(getattr(entry, "folder_key", "") or "") == new_folder_key
+    ):
+        return False
+    with los.suppress_sync():
+        try:
+            entry.parent_kind = new_parent_kind
+        except Exception:  # noqa: BLE001
+            _logger.exception("image writeback: parent_kind set failed")
+            return False
+        try:
+            entry.parent_key = new_parent_key
+        except Exception:  # noqa: BLE001
+            _logger.exception("image writeback: parent_key set failed")
+            return False
+        try:
+            entry.folder_key = new_folder_key
+        except Exception:  # noqa: BLE001
+            _logger.exception("image writeback: folder_key set failed")
+            return False
+        try:
+            obj["bname_parent_key"] = new_parent_key
+            obj["bname_folder_id"] = new_folder_key
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        for area in bpy.context.screen.areas if bpy.context.screen else ():
+            if area.type in {"VIEW_3D", "PROPERTIES"}:
+                area.tag_redraw()
+    except Exception:  # noqa: BLE001
+        pass
+    _logger.info(
+        "image writeback: %s parent → %s/%s folder=%s",
+        image_id, new_parent_kind, new_parent_key, new_folder_key,
+    )
+    return True
+
+
+def _scan_once() -> float | None:
+    """1 回分の scan。差分があれば実 entry へ反映する.
+
+    対応 kind:
+        - raster: BNameRasterLayer.parent_kind/parent_key 書戻し
+        - image: BNameImageLayer.parent_kind/parent_key/folder_key 書戻し
+        - その他 (gp / balloon / text / effect): 警告ログのみ (Phase 4 以降)
     """
     if los.is_sync_in_progress():
         # B-Name operator 実行中は次のスロットで再試行
@@ -127,8 +229,10 @@ def _scan_once() -> float | None:
                 kind = str(obj.get("bname_kind", "") or "")
                 if kind == "raster":
                     _writeback_raster_parent(scene, obj, new_kind, new_key)
+                elif kind == "image":
+                    _writeback_image_parent(scene, obj, new_kind, new_key)
                 else:
-                    # image / gp / balloon / text などは Phase 3b 以降で対応
+                    # gp / balloon / text / effect は Phase 4 以降
                     _logger.info(
                         "outliner watch: %s (kind=%s) → %s/%s "
                         "(write-back 未対応 kind)",
