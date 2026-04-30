@@ -274,6 +274,12 @@ def _bname_on_load_post(filepath_arg) -> None:  # signature: (str,) in Blender h
             _layer_stack.schedule_layer_stack_sync()
         except Exception:  # noqa: BLE001
             _logger.exception("load_post: layer stack sync failed")
+        try:
+            from . import layer_object_sync as _los
+
+            _los.mirror_work_to_outliner(scene, work)
+        except Exception:  # noqa: BLE001
+            _logger.exception("load_post: outliner mirror failed")
         # work.blend / cNN.blend ごとに Scene の整合を補正する。
         try:
             rel = blend_path.resolve().relative_to(work_dir.resolve())
