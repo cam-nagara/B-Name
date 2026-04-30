@@ -47,11 +47,21 @@ class BNAME_OT_outliner_apply_view(bpy.types.Operator):
             for space in area.spaces:
                 if space.type != "OUTLINER":
                     continue
-                # バックアップ (1 度だけ)
-                if "bname_outliner_backup" not in area:
+                current_mode = str(getattr(space, "display_mode", ""))
+                current_sort = bool(getattr(space, "use_sort_alpha", False))
+                # バックアップは「現在が B-Name 表示と一致しないとき」だけ更新する。
+                # これにより:
+                #   - apply→apply (連打): 既に VIEW_LAYER + sort=True なので backup
+                #     は更新されず、初回の値が保持される
+                #   - apply→ユーザー手動変更→apply: 手動変更後の値が backup に
+                #     入り、restore で手動変更後の値に戻せる
+                already_in_bname_view = (
+                    current_mode == "VIEW_LAYER" and current_sort is True
+                )
+                if not already_in_bname_view:
                     area["bname_outliner_backup"] = {
-                        "display_mode": str(getattr(space, "display_mode", "")),
-                        "use_sort_alpha": bool(getattr(space, "use_sort_alpha", False)),
+                        "display_mode": current_mode,
+                        "use_sort_alpha": current_sort,
                     }
                 try:
                     space.display_mode = "VIEW_LAYER"
