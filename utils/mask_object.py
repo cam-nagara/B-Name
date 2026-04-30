@@ -61,7 +61,32 @@ def ensure_masks_collection(scene: bpy.types.Scene) -> Optional[bpy.types.Collec
             root.children.link(coll)
         except Exception:  # noqa: BLE001
             _logger.exception("link masks collection to root failed")
+    # マスク Mesh が viewport に黒い面として描画されると本体レイヤーが見えなく
+    # なるため、Collection ごと viewport から非表示にする。Modifier の target
+    # 参照は hidden でも有効なのでクリッピング機能には影響しない。
+    if scene is not None:
+        try:
+            view_layer = bpy.context.view_layer
+            layer_coll = _find_layer_collection(view_layer.layer_collection, coll)
+            if layer_coll is not None:
+                layer_coll.exclude = False  # Outliner には残す
+                layer_coll.hide_viewport = True
+        except Exception:  # noqa: BLE001
+            _logger.exception("hide masks collection in viewport failed")
     return coll
+
+
+def _find_layer_collection(root_lc, target_coll):
+    """LayerCollection ツリーから target Collection を探す."""
+    if root_lc is None or target_coll is None:
+        return None
+    if root_lc.collection is target_coll:
+        return root_lc
+    for child in root_lc.children:
+        found = _find_layer_collection(child, target_coll)
+        if found is not None:
+            return found
+    return None
 
 
 def _ensure_rect_mesh(name: str, width_m: float, height_m: float) -> bpy.types.Mesh:
@@ -119,6 +144,12 @@ def ensure_page_mask_object(
     obj[PROP_MASK_OWNER_ID] = page_id
     obj[on.PROP_MANAGED] = False  # Outliner mirror 正規化対象外
     obj.hide_render = True  # render には出さない (clip 用 reference のみ)
+    obj.hide_viewport = True  # 3D ビューにも描画しない (Modifier target としてのみ機能)
+    # display_type を BOUNDS にして万一表示されたときも目立たないように
+    try:
+        obj.display_type = "BOUNDS"
+    except Exception:  # noqa: BLE001
+        pass
     # __masks__ Collection に link (他から外す)
     masks_coll = ensure_masks_collection(scene)
     if masks_coll is not None and not any(o is obj for o in masks_coll.objects):
@@ -181,8 +212,13 @@ def ensure_coma_mask_object(
     obj[PROP_MASK_OWNER_ID] = owner_id
     obj[on.PROP_MANAGED] = False
     obj.hide_render = True
+    obj.hide_viewport = True
+    try:
+        obj.display_type = "BOUNDS"
+    except Exception:  # noqa: BLE001
+        pass
     masks_coll = ensure_masks_collection(scene)
-    if masks_coll is not None and obj.name not in masks_coll.objects:
+    if masks_coll is not None and not any(o is obj for o in masks_coll.objects):
         try:
             masks_coll.objects.link(obj)
         except Exception:  # noqa: BLE001

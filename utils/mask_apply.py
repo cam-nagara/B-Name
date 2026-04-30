@@ -5,16 +5,14 @@ Object 側で参照して、コマ枠/ページ枠の外をクリップする。
 
 実装方針:
     - Mesh 系レイヤー (raster / image plane / balloon plane / text plane):
-      Boolean Modifier (Intersect) で実形状クリップ。Modifier は冪等で
-      ensure_*_mask_modifier 関数で保守する。
-    - GP 系レイヤー (gp / effect): GreasePencil v3 の **Mask Modifier** で
-      mask Object の形状内側のみ表示する。
+      Boolean Modifier (Intersect, FAST solver) で実形状クリップ。
+    - GP 系レイヤー (gp / effect): Blender 5.1 GP v3 では外部 Mesh Object
+      をマスク source にする一般 Modifier が無いため、現状は no-op。
+      Phase 5d で `__bname_mask` 内蔵 layer 方式で実装予定。
 
-Boolean は EEVEE Next でも動作する一般 Modifier。GP の Mask Modifier は
-``GreasePencilMaskModifier`` (旧名 ``GP_Mask``) で、5.1 GP v3 でも有効。
-
-mask Object 自体は ``hide_render=True`` だが、Boolean / Mask Modifier の
-target として参照するだけなら hidden でも動作する。
+mask Object 自体は ``hide_render=True`` + ``hide_viewport=True`` で 3D ビュー
+にも描画されない。Modifier の target として参照するだけなら hidden でも
+有効。
 """
 
 from __future__ import annotations
@@ -111,6 +109,10 @@ def apply_mask_to_layer_object(obj: bpy.types.Object) -> None:
         - "<page>:<coma>" 形式 → コママスク Modifier を ensure (ページマスクは外す)
         - "<page>" 形式 → ページマスク Modifier を ensure (コママスクは外す)
         - 空 / outside → どちらも外す
+
+    対応するマスク Object がまだ生成されていない場合は何もせず黙って return。
+    後で ``regenerate_all_masks`` + ``apply_masks_to_all_managed`` を呼べば
+    回復する。
     """
     if obj is None or not on.is_managed(obj):
         return
@@ -120,25 +122,28 @@ def apply_mask_to_layer_object(obj: bpy.types.Object) -> None:
 
     obj_type = getattr(obj, "type", "")
     if obj_type == "MESH":
-        if coma_target is not None:
-            _ensure_boolean_intersect_modifier(obj, MOD_NAME_COMA_MASK, coma_target)
+        if ":" in parent_key:
+            # コマ配下: コマスマスクのみ適用
+            if coma_target is not None:
+                _ensure_boolean_intersect_modifier(obj, MOD_NAME_COMA_MASK, coma_target)
+            else:
+                _remove_modifier_if_present(obj, MOD_NAME_COMA_MASK)
             _remove_modifier_if_present(obj, MOD_NAME_PAGE_MASK)
-        elif page_target is not None and ":" not in parent_key:
-            _ensure_boolean_intersect_modifier(obj, MOD_NAME_PAGE_MASK, page_target)
+        elif parent_key:
+            # ページ直下: ページマスクのみ適用
+            if page_target is not None:
+                _ensure_boolean_intersect_modifier(obj, MOD_NAME_PAGE_MASK, page_target)
+            else:
+                _remove_modifier_if_present(obj, MOD_NAME_PAGE_MASK)
             _remove_modifier_if_present(obj, MOD_NAME_COMA_MASK)
         else:
+            # outside / 空 parent: どちらも外す
             _remove_modifier_if_present(obj, MOD_NAME_COMA_MASK)
             _remove_modifier_if_present(obj, MOD_NAME_PAGE_MASK)
     elif obj_type == "GREASEPENCIL":
-        if coma_target is not None:
-            _ensure_gp_mask_modifier(obj, MOD_NAME_COMA_MASK, coma_target)
-            _remove_modifier_if_present(obj, MOD_NAME_PAGE_MASK)
-        elif page_target is not None and ":" not in parent_key:
-            _ensure_gp_mask_modifier(obj, MOD_NAME_PAGE_MASK, page_target)
-            _remove_modifier_if_present(obj, MOD_NAME_COMA_MASK)
-        else:
-            _remove_modifier_if_present(obj, MOD_NAME_COMA_MASK)
-            _remove_modifier_if_present(obj, MOD_NAME_PAGE_MASK)
+        # GP は Phase 5d で実装。現状は modifier クリーンアップのみ。
+        _ensure_gp_mask_modifier(obj, MOD_NAME_COMA_MASK, coma_target)
+        _ensure_gp_mask_modifier(obj, MOD_NAME_PAGE_MASK, page_target)
 
 
 def apply_masks_to_all_managed(scene: bpy.types.Scene) -> int:

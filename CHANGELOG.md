@@ -3,6 +3,21 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-30 — マスク Object の viewport 非表示 + apply ロジック整理
+
+### 修正
+- マスク Mesh Object (`page_mask_*` / `coma_mask_*`) と `__masks__`
+  Collection を viewport から非表示に。`hide_viewport=True` +
+  `display_type="BOUNDS"` を ensure 時に設定し、`__masks__` Collection
+  自体も LayerCollection 経由で `hide_viewport=True`。マスク Mesh が
+  3D ビューに黒い面として描画されてレイヤーが見えなくなる問題を解消。
+  Modifier の target 参照は hidden でも有効なのでクリッピング機能には
+  影響しない。
+- `apply_mask_to_layer_object`: parent_key 形式を先に判定 ("コマ配下"
+  かつ mask 未生成のときページマスクへフォールバックしない)、論理を
+  整理。GP 系は `_ensure_gp_mask_modifier` で modifier クリーンアップ
+  のみ実行 (Phase 5d まで no-op)。
+
 ## 2026-04-30 — 旧 page Collection 廃止 / コマカット trigger / マスク視覚化
 
 ### 変更
