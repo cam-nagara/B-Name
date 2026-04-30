@@ -11,6 +11,7 @@ from . import (  # noqa: E402,F401
     effect_line_object,
     gp_object_layer,
     image_plane_object,
+    mask_object,
     outliner_watch,
 )
 
