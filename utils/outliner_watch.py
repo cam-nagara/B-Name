@@ -85,6 +85,20 @@ def _writeback_raster_parent(scene, obj, new_kind: str, new_key: str) -> bool:
         except Exception:  # noqa: BLE001
             _logger.exception("raster writeback: parent_key set failed")
             return False
+        # Object 側 custom property も最新化し、Object↔entry の乖離を防ぐ。
+        # update_snapshot は detect_outliner_changes の末尾で呼ばれるが、
+        # bname_parent_key は読みのみで使われるため、明示的に揃える。
+        try:
+            obj["bname_parent_key"] = new_parent_key
+        except Exception:  # noqa: BLE001
+            pass
+    # UIList 再描画 (parent_kind/parent_key には update callback が無いため)
+    try:
+        for area in bpy.context.screen.areas if bpy.context.screen else ():
+            if area.type in {"VIEW_3D", "PROPERTIES"}:
+                area.tag_redraw()
+    except Exception:  # noqa: BLE001
+        pass
     _logger.info(
         "raster writeback: %s parent → %s/%s",
         raster_id,

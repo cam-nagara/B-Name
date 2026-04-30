@@ -423,24 +423,42 @@ def ensure_raster_plane(context, entry, *, mark_missing: bool = False):
         from ..utils import layer_object_sync as _los
 
         # raster の親キーは entry.parent_kind / entry.parent_key を採用。
-        # entry.parent_key が "<page_id>:<coma_id>" 形式ならコマ配下、
-        # "<page_id>" のみならページ直下。空なら outside にしない (ensure_raster_plane
-        # は page 必須なので outside ではない)。
+        # PARENT_KIND_ITEMS = ("none", "page", "coma") のいずれか。"none" は
+        # outside (ページ外) を意味する (ユーザーが意図的に outside に置いた
+        # raster を尊重する)。
         entry_parent_key = str(getattr(entry, "parent_key", "") or "")
         entry_parent_kind = str(getattr(entry, "parent_kind", "") or "page")
-        if entry_parent_kind not in {"page", "coma", "folder", "outside", "none"}:
-            entry_parent_kind = "page"
-        if not entry_parent_key:
-            entry_parent_key = str(getattr(page, "id", "") or "")
-            entry_parent_kind = "page"
+        if entry_parent_kind == "none":
+            stamp_parent_kind = "outside"
+            stamp_parent_key = ""
+        elif entry_parent_kind == "coma" and entry_parent_key:
+            stamp_parent_kind = "coma"
+            stamp_parent_key = entry_parent_key
+        else:
+            # page or 不正値の fallback
+            stamp_parent_kind = "page"
+            stamp_parent_key = entry_parent_key or str(getattr(page, "id", "") or "")
+
+        # BNameRasterLayer には z_index フィールドが無いため、scene 内の
+        # raster 配列での index に 10 を掛けて sequential な z_index を採番。
+        # これにより複数 raster が異なる prefix を持ち、Outliner alpha sort で
+        # 順序破綻しない。
+        z_index = 0
+        coll = getattr(context.scene, "bname_raster_layers", None)
+        if coll is not None:
+            for i, e in enumerate(coll):
+                if str(getattr(e, "id", "") or "") == raster_id:
+                    z_index = (i + 1) * 10
+                    break
+
         _los.stamp_layer_object(
             obj,
             kind="raster",
             bname_id=str(raster_id),
             title=str(getattr(entry, "title", "") or raster_id),
-            z_index=int(getattr(entry, "z_index", 0) or 0),
-            parent_kind=entry_parent_kind,
-            parent_key=entry_parent_key,
+            z_index=z_index,
+            parent_kind=stamp_parent_kind,
+            parent_key=stamp_parent_key,
             scene=context.scene,
         )
     except Exception:  # noqa: BLE001
