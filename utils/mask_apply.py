@@ -52,8 +52,14 @@ def _resolve_page_mask_object(parent_key: str) -> Optional[bpy.types.Object]:
 def _ensure_boolean_intersect_modifier(
     obj: bpy.types.Object, mod_name: str, target: bpy.types.Object
 ) -> None:
-    """Mesh Object に Boolean Intersect Modifier を ensure (target 形状で切抜)."""
-    if obj is None or target is None or obj.type != "MESH":
+    """Mesh / Curve Object に Boolean Intersect Modifier を ensure.
+
+    Curve は Blender 5.1 では Boolean Modifier 非対応のため、Mesh のみ
+    付与する。Curve のマスクは別経路 (overlay 側 scissor or shape 制御)。
+    """
+    if obj is None or target is None:
+        return
+    if obj.type != "MESH":
         return
     mod = obj.modifiers.get(mod_name)
     if mod is None:
@@ -66,6 +72,20 @@ def _ensure_boolean_intersect_modifier(
         mod.operation = "INTERSECT"
         mod.solver = "FAST"
         mod.object = target
+        # 反映を確実にするため depsgraph を更新
+        try:
+            view_layer = bpy.context.view_layer
+            if view_layer is not None:
+                view_layer.update()
+        except Exception:  # noqa: BLE001
+            pass
+        # 万一 object pointer が None のままなら再代入 + name 経由
+        try:
+            mod_re = obj.modifiers.get(mod_name)
+            if mod_re is not None and getattr(mod_re, "object", None) is None:
+                mod_re.object = target
+        except Exception:  # noqa: BLE001
+            pass
     except Exception:  # noqa: BLE001
         _logger.exception("mask_apply: boolean modifier setup failed")
 

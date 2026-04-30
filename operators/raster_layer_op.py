@@ -807,8 +807,14 @@ class BNAME_OT_raster_layer_add(Operator):
         entry.dpi = self._resolved_dpi()
         entry.bit_depth = self.bit_depth
         entry.scope = "page"
-        entry.parent_kind = "page"
-        entry.parent_key = page.id
+        # アクティブな階層 (コマ選択中ならコマ、そうでなければページ) を反映
+        from ..utils import active_target as _at
+
+        parent_kind, parent_key, _resolved_page = _at.resolve_active_target(
+            context, prefer_page=page
+        )
+        entry.parent_kind = parent_kind
+        entry.parent_key = parent_key or page.id
         context.scene.bname_active_raster_layer_index = len(coll) - 1
         context.scene.bname_active_layer_kind = "raster"
         if ensure_raster_plane(context, entry) is None:

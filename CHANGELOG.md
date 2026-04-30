@@ -3,6 +3,46 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-30 — アクティブ階層に応じた parent 解決 / マスク targets 強化
+
+### 追加
+- `utils/active_target.py` 新設: 各種レイヤー作成 op で「ユーザーが今選択
+  している階層 (page/coma)」を統一して取得するヘルパ
+  (`resolve_active_target`)。優先順位: scene.bname_current_coma_id →
+  page.active_coma_index → page 直下。
+
+### 修正
+- ラスター作成 (`bname.raster_layer_add`) で entry.parent_kind を強制 "page"
+  にしていた問題を修正。`active_target.resolve_active_target` を呼んで、
+  **アクティブコマがあればコマ配下、なければページ配下** に作成される。
+- GP / 効果線の `_resolve_active_coma` ベースのロジックを `active_target`
+  ヘルパに統一。挙動は同一だがコード重複を削減。
+
+### マスク (Boolean Modifier) 強化
+- `utils/mask_apply._ensure_boolean_intersect_modifier` で Modifier 作成後に
+  `view_layer.update()` を呼んで depsgraph に反映を強制。`mod.object` が
+  None のままになる場合は名前経由で再代入する fallback を追加。
+
+### 1 ページ完全フロー徹底チェック (E2E)
+- Case 1 (active_coma=-1): raster → parent_kind="page", parent_key="p0001"
+  ✓ p0001 Collection 配下
+- Case 2 (page.active_coma_index=0=c01): raster → parent_kind="coma",
+  parent_key="p0001:c01" ✓ c01 Collection 配下
+- Case 3 (page.active_coma_index=1=c02): raster → parent_kind="coma",
+  parent_key="p0001:c02" ✓ c02 Collection 配下
+- Case 4 (scene.bname_current_coma_id="c01"): raster → parent_kind="coma",
+  parent_key="p0001:c01" ✓ c01 Collection 配下
+
+### 範囲外クリップの実装状況
+- **raster (Mesh)**: Boolean Modifier (Intersect) で実装済。コマ配下なら
+  コママスク、ページ直下ならページマスクを target に。
+- **GP / 効果線**: `__bname_mask` 内蔵 layer 方式で実装済 (Phase 5d)。
+- **画像 / テキスト (Empty + オーバーレイ描画)**: 描画はオーバーレイで行う
+  ため Boolean Modifier 適用不可。オーバーレイ側 GPU scissor によるコマ枠
+  クリップは Phase 5e の課題として保留。
+- **フキダシ (Curve)**: Curve は Blender 5.1 で Boolean Modifier 非対応。
+  クリップは Phase 5e 課題。
+
 ## 2026-04-30 — ラスター描画フロー徹底チェック: 重複生成バグ修正 / 自動 Paint モード
 
 ### 重大バグ修正

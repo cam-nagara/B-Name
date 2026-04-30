@@ -110,16 +110,12 @@ class BNAME_OT_gp_layer_create_per_object(bpy.types.Operator):
 
     def execute(self, context):
         scene = context.scene
-        page_id, coma_id, _coma_title = _resolve_active_coma(context)
-        if not page_id:
+        from ..utils import active_target as _at
+
+        parent_kind, parent_key, page = _at.resolve_active_target(context)
+        if page is None:
             self.report({"WARNING"}, "アクティブページが見つかりません")
             return {"CANCELLED"}
-        if coma_id:
-            parent_kind = "coma"
-            parent_key = f"{page_id}:{coma_id}"
-        else:
-            parent_kind = "page"
-            parent_key = page_id
         bname_id = _make_gp_bname_id()
         obj = gpol.create_layer_gp_object(
             scene=scene,

@@ -85,14 +85,12 @@ class BNAME_OT_effect_line_create_object(bpy.types.Operator):
 
     def execute(self, context):
         scene = context.scene
-        page_id, coma_id = _resolve_active_coma(context)
-        if not page_id:
+        from ..utils import active_target as _at
+
+        parent_kind, parent_key, page = _at.resolve_active_target(context)
+        if page is None:
             self.report({"WARNING"}, "アクティブページが見つかりません")
             return {"CANCELLED"}
-        if coma_id:
-            parent_kind, parent_key = "coma", f"{page_id}:{coma_id}"
-        else:
-            parent_kind, parent_key = "page", page_id
         bname_id = _make_effect_bname_id()
         obj = elo.create_effect_line_object(
             scene=scene,
