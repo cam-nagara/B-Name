@@ -25,9 +25,11 @@ def register() -> None:
     handlers.register()
     outliner_watch.register()
     active_collection_sync.register()
+    paper_bg_object.register()
 
 
 def unregister() -> None:
+    paper_bg_object.unregister()
     active_collection_sync.unregister()
     outliner_watch.unregister()
     handlers.unregister()

@@ -224,6 +224,13 @@ class BNAME_OT_gp_layer_draw_enter(Operator):
                 bpy.ops.object.mode_set(mode="OBJECT")
         except Exception:  # noqa: BLE001
             pass
+        # paper_bg を隠して raycast 干渉を回避 (raster paint と同じ事情)
+        try:
+            from ..utils import paper_bg_object as _pbg
+
+            _pbg.set_paper_bg_visible(False)
+        except Exception:  # noqa: BLE001
+            _logger.exception("paper_bg hide failed (gp draw enter)")
         try:
             bpy.ops.object.mode_set(mode="PAINT_GREASE_PENCIL")
         except Exception as exc:  # noqa: BLE001
@@ -271,6 +278,13 @@ class BNAME_OT_gp_layer_draw_exit(Operator):
         except Exception as exc:  # noqa: BLE001
             self.report({"WARNING"}, f"Object モードへ戻せません: {exc}")
             return {"CANCELLED"}
+        # paint 終了 → paper_bg を再表示
+        try:
+            from ..utils import paper_bg_object as _pbg
+
+            _pbg.set_paper_bg_visible(True)
+        except Exception:  # noqa: BLE001
+            _logger.exception("paper_bg show failed (gp draw exit)")
         return {"FINISHED"}
 
 

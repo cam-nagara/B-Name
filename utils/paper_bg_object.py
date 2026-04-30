@@ -233,3 +233,74 @@ def regenerate_all_paper_bgs(scene: bpy.types.Scene, work) -> int:
             except Exception:  # noqa: BLE001
                 pass
     return count
+
+
+def set_paper_bg_visible(visible: bool) -> int:
+    """全 paper_bg の hide_viewport を切替.
+
+    Texture Paint / Grease Pencil Paint モード中は paper_bg が ray cast に
+    干渉して active raster mesh の UV 取得が失敗 → 「何も描けない」現象が
+    起きる。paint モード入退出時にこの関数で表示切替する。
+
+    Returns: 切替えた Object 数。
+    """
+    count = 0
+    for obj in bpy.data.objects:
+        if obj.get(PROP_BG_KIND) != "page":
+            continue
+        try:
+            obj.hide_viewport = not visible
+            count += 1
+        except Exception:  # noqa: BLE001
+            pass
+    return count
+
+
+# ---------- mode watcher: paint モード中は自動で paper_bg を隠す ----------
+
+_PAINT_MODES = frozenset({
+    "PAINT_TEXTURE",
+    "PAINT_VERTEX",
+    "PAINT_WEIGHT",
+    "SCULPT",
+    "PAINT_GREASE_PENCIL",
+    "EDIT_GREASE_PENCIL",
+    "SCULPT_GREASE_PENCIL",
+    "VERTEX_GREASE_PENCIL",
+    "WEIGHT_GREASE_PENCIL",
+})
+
+_LAST_PAINT_HIDDEN: bool = False
+
+
+def _on_depsgraph_update_post(scene, depsgraph) -> None:
+    """``bpy.context.mode`` が paint 系のとき自動で paper_bg を hide.
+
+    ユーザーが B-Name の operator を経由せず Tab / Pie menu / mode dropdown
+    などから直接 Texture Paint / GP Paint に入った場合でも、 raycast 干渉
+    で「何も描けない」状態にならないように自動でガード。
+    """
+    global _LAST_PAINT_HIDDEN
+    try:
+        mode = getattr(bpy.context, "mode", "OBJECT")
+        in_paint = mode in _PAINT_MODES
+        if in_paint and not _LAST_PAINT_HIDDEN:
+            set_paper_bg_visible(False)
+            _LAST_PAINT_HIDDEN = True
+        elif not in_paint and _LAST_PAINT_HIDDEN:
+            set_paper_bg_visible(True)
+            _LAST_PAINT_HIDDEN = False
+    except Exception:  # noqa: BLE001
+        _logger.exception("paper_bg mode watcher failed")
+
+
+def register() -> None:
+    if _on_depsgraph_update_post not in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.append(_on_depsgraph_update_post)
+
+
+def unregister() -> None:
+    try:
+        bpy.app.handlers.depsgraph_update_post.remove(_on_depsgraph_update_post)
+    except (ValueError, RuntimeError):
+        pass

@@ -937,6 +937,15 @@ class BNAME_OT_raster_layer_paint_enter(Operator):
             except Exception:  # noqa: BLE001
                 pass
         force_active_brush_grayscale(context)
+        # paper_bg Mesh を一時的に隠す: opaque な paper_bg が raycast に
+        # 干渉して active raster mesh の UV 取得が失敗する (= 描けない) のを
+        # 防ぐ。Texture Paint 中は raster mesh のみが ray 対象になる。
+        try:
+            from ..utils import paper_bg_object as _pbg
+
+            _pbg.set_paper_bg_visible(False)
+        except Exception:  # noqa: BLE001
+            _logger.exception("paper_bg hide failed (paint enter)")
         try:
             bpy.ops.object.mode_set(mode="TEXTURE_PAINT")
         except Exception as exc:  # noqa: BLE001
@@ -982,6 +991,13 @@ class BNAME_OT_raster_layer_paint_exit(Operator):
         except Exception as exc:  # noqa: BLE001
             self.report({"WARNING"}, f"Objectモードへ戻せません: {exc}")
             return {"CANCELLED"}
+        # paint 終了 → paper_bg を再表示して用紙白を復元
+        try:
+            from ..utils import paper_bg_object as _pbg
+
+            _pbg.set_paper_bg_visible(True)
+        except Exception:  # noqa: BLE001
+            _logger.exception("paper_bg show failed (paint exit)")
         return {"FINISHED"}
 
 

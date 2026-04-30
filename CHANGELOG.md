@@ -3,6 +3,44 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-30 — paint 中だけ paper_bg を自動 hide (描けない問題解消)
+
+ユーザー報告: 「ラスターレイヤーに何も描けない」(paper_bg 化後)
+
+### 原因
+paper_bg を opaque な Mesh にしたため、用紙白がきれいに表示される一方、
+**Texture Paint / GP Paint の raycast に paper_bg が干渉**し、active raster
+mesh の UV 取得が失敗 → stroke が image に書かれない症状。
+
+paper_bg は z=0、raster は z=0.005 で raster が手前にあるが、Blender 5.1
+の Image Paint raycast は active mesh 以外も対象とする実装で、隣接面
+ヒット時の挙動が壊れる。
+
+### 修正
+- ``utils/paper_bg_object.set_paper_bg_visible(visible)`` 追加: 全 paper_bg の
+  ``hide_viewport`` を一括切替する関数
+- ``utils/paper_bg_object._on_depsgraph_update_post`` 追加: ``bpy.context.mode``
+  を監視し、paint 系モード (``PAINT_TEXTURE`` / ``PAINT_GREASE_PENCIL`` /
+  ``SCULPT`` 等) のとき paper_bg を自動 hide、Object モードに戻ると自動
+  show する mode watcher。Tab / Pie menu 等で B-Name の operator を経由
+  しないモード切替にも対応。
+- ``operators/raster_layer_op.BNAME_OT_raster_layer_paint_enter/exit``:
+  明示的にも ``set_paper_bg_visible(False/True)`` を呼んで即時反映
+- ``operators/gp_layer_op.BNAME_OT_gp_layer_draw_enter/exit``: 同上
+- ``utils/__init__`` で ``paper_bg_object.register/unregister`` を呼出
+
+### 挙動
+- Object モード: paper_bg 表示 (用紙白の上にラスター paint が見える)
+- Paint モード: paper_bg 非表示 (raycast 干渉なし、stroke が raster mesh に
+  正しく書込まれる)、 ビューポート背景色 (グレー) が見える
+  → paint 終了で paper_bg 復活し用紙白の上に paint 結果が表示される
+
+### E2E 検証 OK (Blender 5.1.1)
+- mode reset 時 paper_bg 9 → 9 visible
+- ``raster_layer_paint_enter`` → mode=``PAINT_TEXTURE`` / paper_bg 9→0 hide
+- ``raster_layer_paint_exit`` → mode=``OBJECT`` / paper_bg 0→9 show
+- AI 目視: paint 中の viewport は raster paint が見える状態 (paper_bg 隠れ)
+
 ## 2026-04-30 — ラスター paint のジラジラノイズ撤廃 (paper_bg 実 Mesh 化)
 
 ユーザー報告: 「ラスターレイヤーに描くと、ザラザラとしたノイズのように
