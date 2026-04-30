@@ -16,6 +16,7 @@ from . import (  # noqa: E402,F401
     mask_apply,
     mask_object,
     outliner_watch,
+    paper_bg_object,
 )
 
 

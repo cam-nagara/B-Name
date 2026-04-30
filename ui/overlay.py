@@ -1004,7 +1004,9 @@ def _draw_page_overlay(
     safe_r = _translate_rect(rects.safe, ox_mm, oy_mm)
     bleed_r = _translate_rect(rects.bleed, ox_mm, oy_mm)
 
-    _draw_canvas_fill_only(paper, rects, ox_mm, oy_mm)
+    # 用紙白背景は paper_bg_object.py の opaque な Mesh が表示するため、
+    # ここでは GPU 塗りを描かない。GPU で描くと BLENDED ラスター paint を
+    # 上から覆い隠す問題があった (旧バグ)。
 
     # セーフライン外オーバーレイ (全ページに表示)
     # 仕様: 常に乗算合成相当 + alpha 100%。

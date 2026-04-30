@@ -197,6 +197,16 @@ def mirror_work_to_outliner(scene: bpy.types.Scene, work) -> None:
         # 画像 / テキストの Empty Object を ensure (オーバーレイ描画と並列)
         _mirror_image_text_empties(scene, work)
 
+        # 用紙背景 (opaque Mesh) を全ページ分 ensure。BLENDED ラスター
+        # 材質の depth 不在を補い、ラスター paint の上に被さらないように
+        # する。GPU overlay 用紙塗りの代替。
+        try:
+            from . import paper_bg_object as _pbg
+
+            _pbg.regenerate_all_paper_bgs(scene, work)
+        except Exception:  # noqa: BLE001
+            _logger.exception("mirror paper backgrounds failed")
+
         for folder in getattr(work, "layer_folders", []):
             folder_id = str(getattr(folder, "id", "") or "")
             if not folder_id:

@@ -3,6 +3,48 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-30 — ラスター paint のジラジラノイズ撤廃 (paper_bg 実 Mesh 化)
+
+ユーザー報告: 「ラスターレイヤーに描くと、ザラザラとしたノイズのように
+なってしまう。ズームをするたびにそれが蠢く。」
+
+### 原因 (私の前回の設計判断ミス)
+直前のコミットでラスター材質を `surface_render_method="DITHERED"` +
+`blend_method="CLIP"` に切替えた。これは「BLENDED は depth buffer に
+書込まないため overlay 用紙塗りに隠される」問題を解決する目的だったが、
+DITHERED は **alpha-clip + dither pattern** を使うため、画面上の dither
+がスクリーン空間で固定されて、ビュー変換のたびにパターンが動いて
+ジラジラ見える致命的な副作用があった。テクスチャペイントの自然な
+alpha 合成にならない。
+
+### 採用解 (正しい設計)
+ラスター材質は **BLENDED** (滑らかな alpha 合成) に戻し、用紙白背景は
+**実 Mesh** で表現する:
+
+- 新ファイル ``utils/paper_bg_object.py``:
+  - 各ページ用に opaque な Mesh Plane (`page_paper_bg_<page_id>`) を生成
+  - material は ``BName_PaperBackground`` (Emission node, opaque)
+  - z=0 に配置 (ラスター z=0.005 の下)
+  - ``__papers__`` Collection 配下に集約 (`hide_select=True` で誤選択防止、
+    `hide_render=True` で B-Name export 時に焼込まれない)
+  - opaque 材質は **depth buffer に書込む** ため、BLENDED ラスター
+    (z=0.005) は paper_bg の上に正しく alpha 合成される
+- ``utils/layer_object_sync.mirror_work_to_outliner`` で
+  `paper_bg_object.regenerate_all_paper_bgs(scene, work)` を呼んで
+  全ページの paper_bg を ensure
+- ``operators/raster_layer_op.ensure_raster_material``:
+  `blend_method="BLEND"` / `surface_render_method="BLENDED"` に戻す
+- ``ui/overlay.py._draw_canvas_fill_only`` 呼出を削除
+  (paper_bg Mesh が代替するため GPU 塗りは不要)
+
+### AI 目視 E2E 検証 (Blender 5.1.1 GUI, 9 ページ overview)
+- 全ページの用紙が真っ白で滑らかに表示 ✓
+- ジラジラ noise pattern 完全消滅 ✓
+- 既存ラスター paint (page 005/004 の線、cube の影) 正常表示 ✓
+- ページ枠線 (cyan)、トンボ、ページ番号、active highlight も正しく重畳 ✓
+- ラスター材質 9 件すべて `BLEND` / `BLENDED` に復帰確認 ✓
+- `__papers__` Collection に 9 ページ分の paper_bg Mesh 確認 ✓
+
 ## 2026-04-30 — Outliner ⇔ B-Name 双方向同期 / 枠線カット master_sketch 抑制 / 開始ページ UI
 
 ### 1. 逆方向同期 (B-Name → Outliner) 追加
