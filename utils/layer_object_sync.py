@@ -132,6 +132,36 @@ def apply_z_index(obj: bpy.types.Object, z_index: int) -> None:
 # ---------- 作品全体の mirror 同期 (Phase 0 の中核) ----------
 
 
+def _mirror_image_text_empties(scene, work) -> None:
+    """全 BNameImageLayer / BNameTextEntry に対応する Empty Object を ensure."""
+    try:
+        from . import empty_layer_object as elo
+
+        # image_layers (scene 直下)
+        coll = getattr(scene, "bname_image_layers", None) if scene is not None else None
+        if coll is not None:
+            for entry in coll:
+                parent_key = str(getattr(entry, "parent_key", "") or "")
+                page_id = parent_key.split(":", 1)[0] if parent_key else ""
+                page = None
+                for p in getattr(work, "pages", []):
+                    if str(getattr(p, "id", "") or "") == page_id:
+                        page = p
+                        break
+                if page is None and len(work.pages) > 0:
+                    page = work.pages[0]
+                if page is None:
+                    continue
+                elo.ensure_image_empty_object(scene=scene, entry=entry, page=page)
+
+        # texts (page.texts)
+        for page in getattr(work, "pages", []):
+            for entry in getattr(page, "texts", []):
+                elo.ensure_text_empty_object(scene=scene, entry=entry, page=page)
+    except Exception:  # noqa: BLE001
+        _logger.exception("mirror image/text empties failed")
+
+
 def mirror_work_to_outliner(scene: bpy.types.Scene, work) -> None:
     """``work`` の page/coma/folder 配列から Collection 階層を生成・整合.
 
@@ -158,6 +188,9 @@ def mirror_work_to_outliner(scene: bpy.types.Scene, work) -> None:
                     continue
                 coma_title = str(getattr(coma, "title", "") or coma_id)
                 om.ensure_coma_collection(scene, page_id, coma_id, coma_title)
+        # 画像 / テキストの Empty Object を ensure (オーバーレイ描画と並列)
+        _mirror_image_text_empties(scene, work)
+
         for folder in getattr(work, "layer_folders", []):
             folder_id = str(getattr(folder, "id", "") or "")
             if not folder_id:

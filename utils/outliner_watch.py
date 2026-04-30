@@ -160,6 +160,54 @@ def _resolve_parent_kind_key_folder(new_kind: str, new_key: str) -> tuple[str, s
     return "", "", ""
 
 
+def _writeback_empty_layer_parent(
+    scene, obj, kind: str, new_kind: str, new_key: str
+) -> bool:
+    """画像 / テキスト Empty の Outliner D&D を entry に書戻す.
+
+    BNameImageLayer / BNameTextEntry の parent_kind / parent_key / folder_key
+    を更新し、オーバーレイ描画でこの所属に基づく親子追従が反映されるように
+    する。
+    """
+    from . import empty_layer_object as elo
+
+    bid = str(obj.get("bname_id", "") or "")
+    if not bid:
+        return False
+    if kind == "image":
+        entry = elo.find_image_entry(scene, bid)
+        page = None
+    else:  # text
+        page, entry = elo.find_text_entry(scene, bid)
+    if entry is None:
+        return False
+    new_pk, new_pkey, new_fk = _resolve_parent_kind_key_folder(new_kind, new_key)
+    if not new_pk:
+        return False
+    if (
+        str(getattr(entry, "parent_kind", "") or "") == new_pk
+        and str(getattr(entry, "parent_key", "") or "") == new_pkey
+        and str(getattr(entry, "folder_key", "") or "") == new_fk
+    ):
+        return False
+    with los.suppress_sync():
+        try:
+            entry.parent_kind = new_pk
+            entry.parent_key = new_pkey
+            entry.folder_key = new_fk
+            obj["bname_parent_key"] = new_pkey
+            obj["bname_folder_id"] = new_fk
+            los.update_snapshot(obj)
+        except Exception:  # noqa: BLE001
+            _logger.exception("%s writeback failed", kind)
+            return False
+    _logger.info(
+        "%s writeback: %s parent → %s/%s folder=%s",
+        kind, bid, new_pk, new_pkey, new_fk,
+    )
+    return True
+
+
 def _writeback_effect_parent(scene, obj, new_kind: str, new_key: str) -> bool:
     """効果線 GP Object の Outliner D&D を反映 (Phase 5b).
 
@@ -234,12 +282,25 @@ def _scan_once() -> float | None:
                     _writeback_raster_parent(scene, obj, new_kind, new_key)
                 elif kind in {"effect", "effect_legacy", "gp"}:
                     _writeback_effect_parent(scene, obj, new_kind, new_key)
+                elif kind in {"image", "text"}:
+                    _writeback_empty_layer_parent(scene, obj, kind, new_kind, new_key)
                 else:
                     _logger.info(
                         "outliner watch: %s (kind=%s) → %s/%s "
                         "(write-back 未対応 kind)",
                         obj.name, kind, new_kind, new_key,
                     )
+        # Empty Object (image/text) の location 変化を entry.x_mm/y_mm に
+        # 書戻し (オーバーレイ描画位置に連動)
+        try:
+            from . import empty_layer_object as elo
+
+            for obj in on.iter_managed_objects():
+                k = on.get_kind(obj)
+                if k in {"image", "text"}:
+                    elo.sync_entry_position_from_object(scene, obj)
+        except Exception:  # noqa: BLE001
+            _logger.exception("empty location → entry sync failed")
     except Exception:  # noqa: BLE001
         _logger.exception("outliner watch scan failed")
     return SCAN_INTERVAL_SECONDS

@@ -40,12 +40,13 @@ class BNAME_PT_outliner_layers(Panel):
 
         # 新規レイヤー作成
         box = layout.box()
-        box.label(text="新規レイヤー作成", icon="ADD")
+        box.label(text="新規レイヤー作成 / Outliner 登録", icon="ADD")
         col = box.column(align=True)
         col.operator("bname.gp_layer_create_per_object", icon="GREASEPENCIL")
         col.operator("bname.effect_line_create_object", icon="LIGHT")
         col.operator("bname.balloons_to_curve_all", icon="MESH_CIRCLE")
-        col.operator("bname.texts_to_plane_all", icon="FONT_DATA")
+        col.operator("bname.images_to_empty_all", icon="IMAGE_DATA")
+        col.operator("bname.texts_to_empty_all", icon="FONT_DATA")
 
         # オーバーレイ表示切替 (Phase 3c)
         box = layout.box()

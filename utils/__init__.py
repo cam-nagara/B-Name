@@ -9,11 +9,11 @@ from . import object_naming, outliner_model, layer_object_sync  # noqa: E402,F40
 from . import (  # noqa: E402,F401
     balloon_curve_object,
     effect_line_object,
+    empty_layer_object,
     gp_object_layer,
     mask_apply,
     mask_object,
     outliner_watch,
-    text_plane_object,
 )
 
 

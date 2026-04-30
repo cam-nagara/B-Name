@@ -3,6 +3,49 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-30 — 画像 / テキストを Empty Object 化 (オーバーレイ描画方式)
+
+### 変更
+画像レイヤーとテキストを Outliner 上 **Empty Object** として登録する方式に
+変更。実際の絵柄/文字描画は既存の B-Name 独自オーバーレイが担当する。
+画像生成や Pillow 転写を回避してメモリ消費と編集応答性を改善する。
+
+### 設計上の整合
+- **export pipeline (`io/export_pipeline.py`)** は元々 PropertyGroup
+  (BNameImageLayer / BNameTextEntry) を直接読んで Pillow で合成しているため、
+  Empty 化しても **PNG / PSD レンダリング結果は不変**。全ページ出力時にも
+  画像/テキストは正しく描画される。
+- Outliner 上の D&D / 親子関係 / 表示 ON/OFF / マスク Modifier 対象としての
+  機能は Empty で得られる。
+
+### 追加
+- `utils/empty_layer_object.py` 新設:
+    - `ensure_image_empty_object` / `ensure_text_empty_object`: `bname_kind`
+      stamp + Outliner mirror へ link。`empty_display_type='PLAIN_AXES'` +
+      小さい display_size で原点マーカー表示。
+    - `sync_entry_position_from_object`: Empty.location が変わったら
+      対応 entry.x_mm/y_mm に書戻し。オーバーレイ描画位置に連動する。
+- `operators/balloon_text_curve_op.py` に operator を追加:
+    - `bname.images_to_empty_all`: 全画像レイヤーを Empty として登録
+    - `bname.texts_to_empty_all`: 全テキストを Empty として登録
+- watch (`utils/outliner_watch.py`) に `_writeback_empty_layer_parent` と
+  Empty.location → entry 位置同期処理を追加。Outliner D&D で image/text
+  Empty が別コマ等へ移ると entry の parent_kind / parent_key / folder_key
+  が書戻る。
+- `utils/layer_object_sync._mirror_image_text_empties`: mirror 実行時に
+  全 image / text entry に対応する Empty を ensure (load_post / 保存時 /
+  reparent 完了時に自動追従)。
+
+### 削除
+- `utils/text_plane_object.py` 削除 (Plane + Image Texture 方式は廃止)。
+- 旧 `bname.texts_to_plane_all` operator は `bname.texts_to_empty_all` への
+  エイリアスとして残置 (panel 経由の旧呼出を壊さないため)。
+
+### Phase 3c との関係
+オーバーレイ表示切替 (`bname_overlay_enabled`) を OFF にすると Empty の
+原点マーカーだけが残り「データ構造の確認モード」として機能する。
+ON のときは画像 / テキストはオーバーレイ経由で従来どおり高速描画される。
+
 ## 2026-04-30 — Phase 3c / 4c / 5d: 残発展課題を実装
 
 ### 追加 (Phase 5d: GP コマ/ページマスク)
