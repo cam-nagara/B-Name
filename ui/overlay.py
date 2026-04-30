@@ -1394,6 +1394,12 @@ def _draw_callback() -> None:
     work = get_work(context)
     if work is None or not work.loaded:
         return
+    # B-Name オーバーレイ全体の表示切替 (Phase 3c: Object 表示モード時は OFF)
+    scene_root = context.scene
+    if scene_root is not None and not bool(
+        getattr(scene_root, "bname_overlay_enabled", True)
+    ):
+        return
     mode = get_mode(context)
     is_page_browser = page_browser.is_page_browser_area(context)
     if mode == MODE_COMA and not is_page_browser:
@@ -1663,6 +1669,12 @@ def _draw_callback_pixel() -> None:
     context = bpy.context
     work = get_work(context)
     if work is None or not work.loaded:
+        return
+    # オーバーレイ表示切替 (Phase 3c)
+    scene_root = context.scene
+    if scene_root is not None and not bool(
+        getattr(scene_root, "bname_overlay_enabled", True)
+    ):
         return
     paper = work.paper
     rects = overlay_shared.compute_paper_rects(paper)

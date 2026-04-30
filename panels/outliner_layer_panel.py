@@ -44,6 +44,21 @@ class BNAME_PT_outliner_layers(Panel):
         col = box.column(align=True)
         col.operator("bname.gp_layer_create_per_object", icon="GREASEPENCIL")
         col.operator("bname.effect_line_create_object", icon="LIGHT")
+        col.operator("bname.balloons_to_curve_all", icon="MESH_CIRCLE")
+        col.operator("bname.texts_to_plane_all", icon="FONT_DATA")
+
+        # オーバーレイ表示切替 (Phase 3c)
+        box = layout.box()
+        scene = context.scene
+        enabled = bool(getattr(scene, "bname_overlay_enabled", True))
+        box.label(text="オーバーレイ表示", icon="OVERLAY")
+        row = box.row()
+        row.operator(
+            "bname.overlay_toggle",
+            text="ON" if enabled else "OFF",
+            icon="HIDE_OFF" if enabled else "HIDE_ON",
+            depress=enabled,
+        )
 
         # マスク
         box = layout.box()

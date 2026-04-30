@@ -3,6 +3,43 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-30 — Phase 3c / 4c / 5d: 残発展課題を実装
+
+### 追加 (Phase 5d: GP コマ/ページマスク)
+- `utils/mask_apply._ensure_gp_internal_mask`: グリースペンシル v3 の
+  `GreasePencilLayer.use_masks` + `mask_layers` 機構を使い、**同じ GP Object
+  内に `__bname_mask` という名前のマスクレイヤーを自動生成**して、
+  コマ/ページマスク Mesh の各 Face を閉じストロークとして描き写す。
+  全コンテンツレイヤーで `use_masks=True` を立て、`mask_layers` に
+  `__bname_mask` を登録する。マスクレイヤー自体は `hide=True` で見えない。
+- 親 Collection 変更時にマスクストロークも追従して再生成。
+
+### 追加 (Phase 4c: フキダシ Curve / テキスト Plane)
+- `utils/balloon_curve_object.py` 新設: `BNameBalloonEntry` から
+  `outline_for_entry` で得た輪郭点列を Bezier Curve として生成。
+  `dimensions="2D"` + `fill_mode="BOTH"` + `bevel_depth` で線幅を再現。
+  rect/ellipse/cloud/fluffy/thorn 等の Meldex 共通形状に対応。
+- `utils/text_plane_object.py` 新設: `BNameTextEntry` の本文を typography
+  (`typography.export_renderer.render_to_image` + Pillow) で透過 PNG に
+  描画し、Plane Object の Image Texture material に貼り付ける。Pillow 不在
+  環境では placeholder (1×1 透明) にフォールバック。
+- `operators/balloon_text_curve_op.py` 新設:
+    - `bname.balloons_to_curve_all`
+    - `bname.texts_to_plane_all`
+
+### 追加 (Phase 3c: オーバーレイ表示切替)
+- `bpy.types.Scene.bname_overlay_enabled` (BoolProperty, default True) を
+  追加。`ui/overlay.py._draw_callback` / `_draw_callback_pixel` の冒頭で
+  この値を見て早期 return し、B-Name 独自 GPU オーバーレイ全体を ON/OFF。
+- `operators/overlay_toggle_op.py` 新設 (`bname.overlay_toggle`)。
+- `panels/outliner_layer_panel.py` に「オーバーレイ表示」ボックスと
+  ON/OFF トグルボタンを追加。OFF にすると raster Mesh / balloon Curve /
+  text Plane などの Blender 標準 Object 描画のみが見える状態になる。
+
+### 残課題 (実装後)
+- 大規模負荷試験 (例: 100 ページ × 30 GP Object 規模での Outliner 応答 /
+  描画モード切替 / Undo/Redo の実測): すべての必要機能が整ってから実施。
+
 ## 2026-04-30 — マスク Object の viewport 非表示 + apply ロジック整理
 
 ### 修正
