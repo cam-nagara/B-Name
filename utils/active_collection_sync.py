@@ -41,6 +41,10 @@ _OWNER = object()
 # 直近で同期した (page_id, coma_id) をキャッシュして頻繁な書込みを抑制
 _LAST_SYNCED: tuple[str, str] = ("", "")
 
+# depsgraph_update_post 内で発火させた書込みが、Blender 側 depsgraph 更新を
+# 経由してまた _on_depsgraph_update_post を呼ぶループを防ぐ再入禁止フラグ。
+_SYNCING: bool = False
+
 
 def _resolve_active_collection(context) -> Optional[bpy.types.Collection]:
     """``view_layer.active_layer_collection.collection`` を取得 (None セーフ)."""
@@ -79,7 +83,9 @@ def _sync_from_active_collection(context=None) -> None:
 
     呼出は冪等で、active が変わっていなければ何もしない (early return)。
     """
-    global _LAST_SYNCED
+    global _LAST_SYNCED, _SYNCING
+    if _SYNCING:
+        return
     try:
         ctx = context or bpy.context
         if ctx is None:
@@ -134,46 +140,66 @@ def _sync_from_active_collection(context=None) -> None:
                 new_page_id,
             )
             return
-        if int(getattr(work, "active_page_index", -1)) != page_idx:
-            try:
-                work.active_page_index = page_idx
-            except Exception:  # noqa: BLE001
-                _logger.exception("active_page_index 設定失敗")
 
-        page = work.pages[page_idx]
-
-        # page.active_coma_index 更新
-        if new_coma_id:
-            coma_idx = _resolve_coma_index(page, new_coma_id)
-            if coma_idx >= 0 and int(getattr(page, "active_coma_index", -1)) != coma_idx:
-                try:
-                    page.active_coma_index = coma_idx
-                except Exception:  # noqa: BLE001
-                    _logger.exception("active_coma_index 設定失敗")
-        # scene.bname_current_coma_id (active_target が参照する) を反映。
-        # work.blend (overview) では「マウスホバー/操作対象コマ」の意味で使う。
+        # ここから書込み開始 → depsgraph 再入禁止
+        _SYNCING = True
         try:
-            scene.bname_current_coma_id = new_coma_id
-        except Exception:  # noqa: BLE001
-            pass
+            if int(getattr(work, "active_page_index", -1)) != page_idx:
+                try:
+                    work.active_page_index = page_idx
+                except Exception:  # noqa: BLE001
+                    _logger.exception("active_page_index 設定失敗")
 
-        # active layer kind を反映
-        if hasattr(scene, "bname_active_layer_kind"):
+            page = work.pages[page_idx]
+
+            # page.active_coma_index 更新:
+            # - coma 選択時: 該当 index に
+            # - page 選択時: -1 (= 「ページ直下選択」を意味する)。-1 にしないと
+            #   active_target が前回の active_coma_index を引き継ぎ、ページ
+            #   選択したのにコマ配下にレイヤーが作られてしまう。
+            if new_coma_id:
+                coma_idx = _resolve_coma_index(page, new_coma_id)
+                if coma_idx >= 0 and int(getattr(page, "active_coma_index", -1)) != coma_idx:
+                    try:
+                        page.active_coma_index = coma_idx
+                    except Exception:  # noqa: BLE001
+                        _logger.exception("active_coma_index 設定失敗")
+            else:
+                if int(getattr(page, "active_coma_index", -1)) != -1:
+                    try:
+                        page.active_coma_index = -1
+                    except Exception:  # noqa: BLE001
+                        _logger.exception("active_coma_index リセット失敗")
+
+            # scene.bname_current_coma_id (active_target が参照する) を反映。
             try:
-                scene.bname_active_layer_kind = "coma" if new_coma_id else "page"
+                if str(getattr(scene, "bname_current_coma_id", "") or "") != new_coma_id:
+                    scene.bname_current_coma_id = new_coma_id
             except Exception:  # noqa: BLE001
                 pass
 
-        _LAST_SYNCED = (new_page_id, new_coma_id)
-        _logger.info(
-            "active collection sync: kind=%s page=%s coma=%s → "
-            "active_page_index=%d active_coma_index=%d",
-            kind, new_page_id, new_coma_id,
-            page_idx,
-            int(getattr(page, "active_coma_index", -1)),
-        )
+            # active layer kind を反映
+            if hasattr(scene, "bname_active_layer_kind"):
+                desired_kind = "coma" if new_coma_id else "page"
+                try:
+                    if str(getattr(scene, "bname_active_layer_kind", "") or "") != desired_kind:
+                        scene.bname_active_layer_kind = desired_kind
+                except Exception:  # noqa: BLE001
+                    pass
+
+            _LAST_SYNCED = (new_page_id, new_coma_id)
+            _logger.info(
+                "active collection sync: kind=%s page=%s coma=%s → "
+                "active_page_index=%d active_coma_index=%d",
+                kind, new_page_id, new_coma_id,
+                page_idx,
+                int(getattr(page, "active_coma_index", -1)),
+            )
+        finally:
+            _SYNCING = False
     except Exception:  # noqa: BLE001
         _logger.exception("active collection sync failed")
+        _SYNCING = False
 
 
 def _msgbus_callback() -> None:

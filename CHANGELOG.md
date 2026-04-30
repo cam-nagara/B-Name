@@ -3,6 +3,41 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-30 — active_collection_sync 徹底チェック修正
+
+直前の Outliner→B-Name 同期実装を徹底チェックして 2 件の問題を修正。
+
+### Issue 1 (重要): page クリック時に active_coma_index がリセットされない
+- 旧挙動: page Collection クリック → `bname_current_coma_id=""` のみ設定
+- 問題: `page.active_coma_index` が前回の coma 値を保持し続ける
+  → `active_target.resolve_active_target` の優先順位 2 番目
+  (`page.active_coma_index >= 0`) が刺さって、コマ配下にレイヤーが
+  作られてしまう
+- 再現: c03 クリック (active_coma=2) → page クリック → resolve_active_target が
+  `("coma", "p0002:c03")` を返す
+- 修正: page Collection クリック時に `page.active_coma_index = -1` も
+  設定 (`-1` は coma_op.py 等で既に「ページ直下」を意味する慣習値)
+- 検証後: page クリック → `active_coma=-1` / `resolve → ("page", "p0002")` ✓
+
+### Issue 2: depsgraph_update_post の再入ループ可能性
+- 旧挙動: 同期処理内で `work.active_page_index` 等を書込むと depsgraph が
+  更新され、`_on_depsgraph_update_post` がまた発火する可能性
+- 修正: モジュールレベル `_SYNCING: bool` フラグで再入禁止。書込み開始時
+  に True、finally で False に戻す。`_LAST_SYNCED` キャッシュとの二重
+  ガードでループ完全防止
+
+### 副次的改善
+- Property write は実際に値が変わる場合のみ実行 (depsgraph 発火を最小化):
+  `if str(scene.bname_current_coma_id) != new_coma_id: scene.bname_current_coma_id = new_coma_id`
+  と書換え (同様に `bname_active_layer_kind` も)
+
+### E2E 再検証 OK
+- click c03: active_coma=2, coma_id="c03"
+- click p0002 page: active_coma=**-1**, coma_id=""
+- resolve after page click: parent_kind="page", parent_key="p0002" ✓
+- click c01: active_coma=0, coma_id="c01", resolve → ("coma", "p0002:c01") ✓
+- 再入ガード: `_SYNCING=True` 中の呼出で active_page_index 不変 ✓
+
 ## 2026-04-30 — Outliner Collection 選択 → B-Name active page/coma 同期
 
 ユーザー要望: アウトライナーでページ/コマ Collection を選択した時、3D
