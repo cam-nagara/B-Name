@@ -272,6 +272,35 @@ def _writeback_balloon_parent(scene, obj, new_kind: str, new_key: str) -> bool:
     return True
 
 
+def _writeback_effect_parent(scene, obj, new_kind: str, new_key: str) -> bool:
+    """効果線 GP Object の Outliner D&D を反映 (Phase 5b).
+
+    効果線は実 entry を持たず、Object custom property
+    (``bname_parent_key``) のみが正。watch 検出時に Object 側を最新化する
+    だけで write-back 完了。
+    """
+    new_pk, new_pkey, new_fk = _resolve_parent_kind_key_folder(new_kind, new_key)
+    if not new_pk:
+        return False
+    if (
+        str(obj.get("bname_parent_key", "") or "") == new_pkey
+        and str(obj.get("bname_folder_id", "") or "") == new_fk
+    ):
+        return False
+    with los.suppress_sync():
+        try:
+            obj["bname_parent_key"] = new_pkey
+            obj["bname_folder_id"] = new_fk
+        except Exception:  # noqa: BLE001
+            _logger.exception("effect writeback failed")
+            return False
+    _logger.info(
+        "effect writeback: %s parent → %s/%s folder=%s",
+        obj.get("bname_id", ""), new_pk, new_pkey, new_fk,
+    )
+    return True
+
+
 def _writeback_text_parent(scene, obj, new_kind: str, new_key: str) -> bool:
     """``BNameTextEntry`` を Outliner D&D に追従させる (Phase 4)."""
     from . import balloon_text_plane as btp
@@ -336,6 +365,8 @@ def _scan_once() -> float | None:
                     _writeback_balloon_parent(scene, obj, new_kind, new_key)
                 elif kind == "text":
                     _writeback_text_parent(scene, obj, new_kind, new_key)
+                elif kind in {"effect", "effect_legacy", "gp"}:
+                    _writeback_effect_parent(scene, obj, new_kind, new_key)
                 else:
                     _logger.info(
                         "outliner watch: %s (kind=%s) → %s/%s "
