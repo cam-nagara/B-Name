@@ -22,7 +22,7 @@ raster plane / GP Object) の生成は ``utils/layer_object_sync.py`` から呼�
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Iterable, Optional
 
 import bpy
 
@@ -38,14 +38,22 @@ ROOT_COLLECTION_NAME = "B-Name"
 OUTSIDE_BNAME_ID = "__outside__"
 
 
+ROOT_BNAME_ID = "__root__"
+
+
 def ensure_root_collection(scene: bpy.types.Scene) -> bpy.types.Collection:
     """``B-Name`` ルート Collection を確保し scene に link.
 
-    既存の同名 Collection が見つかればそれを採用し、`bname_managed` を立てる。
+    まず ``bname_id="__root__"`` で逆引き、見つからなければ名前 ``B-Name`` で
+    既存 Collection を再利用、それも無ければ新規作成。これによりユーザーが
+    別目的で ``B-Name`` 名の Collection を作っていても、bname_id 同一の
+    管理下 Collection を優先採用する。
     """
-    coll = bpy.data.collections.get(ROOT_COLLECTION_NAME)
+    coll = on.find_collection_by_bname_id(ROOT_BNAME_ID, kind="root")
     if coll is None:
-        coll = bpy.data.collections.new(ROOT_COLLECTION_NAME)
+        coll = bpy.data.collections.get(ROOT_COLLECTION_NAME)
+        if coll is None:
+            coll = bpy.data.collections.new(ROOT_COLLECTION_NAME)
     if scene is not None:
         scene_coll = scene.collection
         if coll.name not in scene_coll.children:
@@ -56,7 +64,7 @@ def ensure_root_collection(scene: bpy.types.Scene) -> bpy.types.Collection:
     on.stamp_identity(
         coll,
         kind="root",
-        bname_id="__root__",
+        bname_id=ROOT_BNAME_ID,
         title=ROOT_COLLECTION_NAME,
         z_index=0,
     )
@@ -76,11 +84,7 @@ def ensure_outside_collection(scene: bpy.types.Scene) -> bpy.types.Collection:
         title="ページ外",
         z_index=0,
     )
-    if existing.name not in root.children:
-        try:
-            root.children.link(existing)
-        except Exception:  # noqa: BLE001
-            _logger.exception("link outside collection to root failed")
+    _normalize_collection_parent(existing, root, scene)
     on.assign_canonical_name(
         existing, kind="outside", z_index=0, sub_id="outside", title="ページ外"
     )
@@ -106,11 +110,9 @@ def ensure_page_collection(
         title=title or page_id,
         z_index=on.page_id_to_z_number(page_id),
     )
-    if coll.name not in root.children:
-        try:
-            root.children.link(coll)
-        except Exception:  # noqa: BLE001
-            _logger.exception("link page collection failed")
+    # 既に scene.collection 直下や別の Collection 配下に置かれている場合も
+    # root 直下のみへ正規化する。
+    _normalize_collection_parent(coll, root, scene)
     on.assign_canonical_name(
         coll,
         kind="page",
@@ -149,7 +151,7 @@ def ensure_coma_collection(
         parent_key=page_id,
     )
     # 既存の親リンクが page_coll でなければ正規化 (Phase 0-2 はページ間移動を拒否)
-    _normalize_collection_parent(coll, page_coll)
+    _normalize_collection_parent(coll, page_coll, scene)
     on.assign_canonical_name(
         coll,
         kind="coma",
@@ -188,7 +190,7 @@ def ensure_folder_collection(
     )
     parent_coll = _resolve_parent_collection(scene, parent_kind, parent_key)
     if parent_coll is not None:
-        _normalize_collection_parent(coll, parent_coll)
+        _normalize_collection_parent(coll, parent_coll, scene)
     on.assign_canonical_name(
         coll,
         kind="folder",
@@ -214,33 +216,65 @@ def _resolve_parent_collection(
     return None
 
 
+def _iter_potential_parent_collections(
+    scene: Optional[bpy.types.Scene],
+) -> Iterable[bpy.types.Collection]:
+    """child Collection を引いてくる可能性のある親候補を列挙.
+
+    ``bpy.data.collections`` には ``scene.collection`` が **含まれない**
+    ため、scene 直下に link されたケースを検出するには明示的に追加する。
+    """
+    seen: set[int] = set()
+    if scene is not None:
+        sc = scene.collection
+        if sc is not None:
+            seen.add(id(sc))
+            yield sc
+    for c in bpy.data.collections:
+        if id(c) in seen:
+            continue
+        seen.add(id(c))
+        yield c
+
+
 def _normalize_collection_parent(
-    child: bpy.types.Collection, expected_parent: bpy.types.Collection
+    child: bpy.types.Collection,
+    expected_parent: bpy.types.Collection,
+    scene: Optional[bpy.types.Scene] = None,
 ) -> None:
     """``child`` を ``expected_parent`` 直下のみに置く (B-Name 管理に限る).
 
     管理外 Collection (``bname_managed`` False) は触らない。
+    scene.collection を含めて走査するため、ユーザーが Outliner で
+    シーン直下に D&D したケースも検出する。
     """
     if not on.is_managed(child):
         return
     if on.should_skip_normalize(child):
         return
     # 既に正しい親に居て、他に link されていなければ何もしない
-    parents = [c for c in bpy.data.collections if child.name in c.children]
+    parents = [
+        c
+        for c in _iter_potential_parent_collections(scene)
+        if child.name in c.children
+    ]
     if expected_parent in parents and len(parents) == 1:
         return
     # 既存リンクをすべて外し、expected_parent のみにつける
     for p in parents:
+        if p is expected_parent:
+            continue
         try:
             p.children.unlink(child)
         except Exception:  # noqa: BLE001
             pass
-    try:
-        expected_parent.children.link(child)
-    except Exception:  # noqa: BLE001
-        _logger.exception(
-            "normalize parent failed: %s -> %s", child.name, expected_parent.name
-        )
+    if expected_parent not in parents:
+        try:
+            expected_parent.children.link(child)
+        except Exception:  # noqa: BLE001
+            _logger.exception(
+                "normalize parent failed: %s -> %s", child.name, expected_parent.name
+            )
 
 
 def link_object_to_parent(
@@ -264,7 +298,8 @@ def link_object_to_parent(
         return None
 
     # 既存の B-Name 管理 Collection への link を全部外す (`bname_no_normalize`
-    # が立っていれば触らない)
+    # が立っていれば触らない)。scene.collection は管理外扱いなので残す
+    # (ユーザーの意図的多重 link を尊重)。
     if not on.should_skip_normalize(obj):
         for coll in list(bpy.data.collections):
             if coll == target:
@@ -311,6 +346,7 @@ def find_managed_parent_collection(
     """``obj`` が現在 link されている B-Name 管理 Collection の 1 つを返す.
 
     複数あれば最初に見つかったもの (`§5.3` 正規化前提)。
+    scene.collection は管理外なのでここでは見ない。
     """
     for coll in bpy.data.collections:
         if not on.is_managed(coll):

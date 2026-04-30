@@ -121,8 +121,12 @@ def mirror_work_to_outliner(scene: bpy.types.Scene, work) -> None:
     """``work`` の page/coma/folder 配列から Collection 階層を生成・整合.
 
     既存 Collection は ``bname_id`` で逆引きして再利用する。
+    work が未ロード (``loaded`` False) の場合は何もしない (Outliner に
+    意味のない空の B-Name 階層を作らない)。
     """
     if scene is None or work is None:
+        return
+    if not bool(getattr(work, "loaded", False)):
         return
     with suppress_sync():
         om.ensure_root_collection(scene)
@@ -146,6 +150,11 @@ def mirror_work_to_outliner(scene: bpy.types.Scene, work) -> None:
             title = str(getattr(folder, "title", "") or folder_id)
             parent_key_raw = str(getattr(folder, "parent_key", "") or "")
             parent_kind, parent_key = _split_folder_parent(parent_key_raw)
+            # NOTE: 現状の BNameLayerFolder には z_order フィールドが無い。
+            # Phase 1 で z_order を実フィールド化するか、layer_stack の
+            # 順序から導出する。それまでは 0 fallback で複数フォルダが
+            # F0000 prefix に潰れるが、bname_id で識別できるので機能上の
+            # 問題はない (alpha sort では `.001` 自動付加で揺れる)。
             z_index = int(getattr(folder, "z_order", 0) or 0)
             om.ensure_folder_collection(
                 scene,

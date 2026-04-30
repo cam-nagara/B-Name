@@ -15,4 +15,8 @@ def register() -> None:
 
 def unregister() -> None:
     handlers.unregister()
+    try:
+        layer_object_sync.clear_snapshots()
+    except Exception:  # noqa: BLE001
+        pass
     log.unregister()

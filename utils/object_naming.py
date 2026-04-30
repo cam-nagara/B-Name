@@ -123,12 +123,13 @@ def parse_canonical_name(name: str) -> Optional[tuple[str, str, str]]:
     """``L0040__text__セリフ本文`` を ``(prefix_id, sub_id, title)`` に分解.
 
     解析できない場合 (ユーザーが prefix を完全に潰した場合など) は None。
-    Blender 自動付加の ``.001`` 等は除去してから解析する。
+
+    Blender 自動付加の ``.001`` `.002` はここでは除去しない。タイトル末尾に
+    ユーザーが意図して `.123` を入れたケースを誤除去しないため。Object 同定は
+    ``bname_id`` custom property で行うので、Blender の自動付加サフィックスは
+    parse 結果に含まれていても支障がない。
     """
-    base = name.rsplit(".", 1)[0] if name.count(".") and name.rsplit(".", 1)[
-        -1
-    ].isdigit() else name
-    parts = base.split("__", 2)
+    parts = name.split("__", 2)
     if len(parts) < 3:
         return None
     prefix_id, sub_id, title = parts[0], parts[1], parts[2]
