@@ -7,10 +7,8 @@ python_deps.ensure_bundled_wheels_on_path()
 from . import handlers, log, page_grid  # noqa: E402,F401 — page_grid はヘルパのみ
 from . import object_naming, outliner_model, layer_object_sync  # noqa: E402,F401
 from . import (  # noqa: E402,F401
-    balloon_text_plane,
     effect_line_object,
     gp_object_layer,
-    image_plane_object,
     mask_object,
     outliner_watch,
 )

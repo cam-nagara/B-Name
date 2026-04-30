@@ -721,8 +721,6 @@ class BNAME_OT_gpencil_master_mode_set(bpy.types.Operator):
 
 
 _CLASSES = (
-    BNAME_UL_layer_stack,
-    BNAME_PT_layer_stack,
     BNAME_OT_gpencil_master_ensure,
     BNAME_OT_gpencil_master_mode_set,
     BNAME_PT_gpencil,

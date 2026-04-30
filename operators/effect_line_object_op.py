@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 
 import bpy
-from bpy.props import BoolProperty, IntProperty, StringProperty
+from bpy.props import IntProperty, StringProperty
 
 from ..utils import effect_line_object as elo
 from ..utils import log
@@ -117,66 +117,8 @@ class BNAME_OT_effect_line_create_object(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class BNAME_OT_effect_line_migrate_master_dryrun(bpy.types.Operator):
-    bl_idname = "bname.effect_line_migrate_master_dryrun"
-    bl_label = "master 効果線移行プラン (dry-run)"
-    bl_description = (
-        "BName_EffectLines に含まれる layer を Object 化したときの計画を表示。"
-    )
-    bl_options = {"REGISTER"}
-
-    def execute(self, context):
-        page_id, coma_id = _resolve_active_coma(context)
-        if not page_id or not coma_id:
-            self.report({"WARNING"}, "アクティブコマを選択してください")
-            return {"CANCELLED"}
-        plan = elo.migrate_master_effect_lines_to_objects(
-            scene=context.scene,
-            parent_kind="coma",
-            parent_key=f"{page_id}:{coma_id}",
-            dry_run=True,
-        )
-        self.report(
-            {"INFO"},
-            f"移行対象 {len(plan['would_migrate'])}, スキップ {len(plan['skipped'])} (dry-run)",
-        )
-        _logger.info("effect line migrate dry-run: %s", plan)
-        return {"FINISHED"}
-
-
-class BNAME_OT_effect_line_migrate_master(bpy.types.Operator):
-    bl_idname = "bname.effect_line_migrate_master"
-    bl_label = "master 効果線を Object 群へ移行"
-    bl_description = "BName_EffectLines の各 layer を新 GP Object 群へ展開 (元 layer は残置)。"
-    bl_options = {"REGISTER", "UNDO"}
-
-    confirm: BoolProperty(name="確認済み", default=False)  # type: ignore[valid-type]
-
-    def execute(self, context):
-        if not self.confirm:
-            self.report({"WARNING"}, "confirm=True で実行してください")
-            return {"CANCELLED"}
-        page_id, coma_id = _resolve_active_coma(context)
-        if not page_id or not coma_id:
-            self.report({"WARNING"}, "アクティブコマを選択してください")
-            return {"CANCELLED"}
-        plan = elo.migrate_master_effect_lines_to_objects(
-            scene=context.scene,
-            parent_kind="coma",
-            parent_key=f"{page_id}:{coma_id}",
-            dry_run=False,
-        )
-        self.report(
-            {"INFO"},
-            f"効果線 layer を {len(plan['migrated'])} 個の Object に移行 (skip {len(plan['skipped'])})",
-        )
-        return {"FINISHED"}
-
-
 _CLASSES = (
     BNAME_OT_effect_line_create_object,
-    BNAME_OT_effect_line_migrate_master_dryrun,
-    BNAME_OT_effect_line_migrate_master,
 )
 
 

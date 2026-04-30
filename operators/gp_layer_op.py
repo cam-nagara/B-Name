@@ -17,7 +17,7 @@ from __future__ import annotations
 import uuid
 
 import bpy
-from bpy.props import BoolProperty, IntProperty, StringProperty
+from bpy.props import IntProperty, StringProperty
 
 from ..utils import gp_object_layer as gpol
 from ..utils import log
@@ -151,88 +151,8 @@ class BNAME_OT_gp_layer_create_per_object(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class BNAME_OT_gp_layer_migrate_master_dryrun(bpy.types.Operator):
-    """master GP の layer 数を確認 (実害なし)."""
-
-    bl_idname = "bname.gp_layer_migrate_master_dryrun"
-    bl_label = "master GP 移行プラン (dry-run)"
-    bl_description = (
-        "master GP (bname_master_sketch) に含まれる GP layer を Object 化した"
-        "場合の計画を表示します。実際の移行は行いません。"
-    )
-    bl_options = {"REGISTER"}
-
-    def execute(self, context):
-        scene = context.scene
-        page_id, coma_id, _ = _resolve_active_coma(context)
-        if not page_id or not coma_id:
-            self.report({"WARNING"}, "アクティブコマを選択してください")
-            return {"CANCELLED"}
-        plan = gpol.migrate_master_gp_layers_to_objects(
-            scene=scene,
-            parent_kind="coma",
-            parent_key=f"{page_id}:{coma_id}",
-            dry_run=True,
-        )
-        n = len(plan["would_migrate"])
-        skipped = len(plan["skipped"])
-        self.report(
-            {"INFO"},
-            f"移行対象 {n} layer, スキップ {skipped} (dry-run)。詳細はコンソール。",
-        )
-        _logger.info("gp migrate dry-run plan: %s", plan)
-        return {"FINISHED"}
-
-
-class BNAME_OT_gp_layer_migrate_master(bpy.types.Operator):
-    """master GP の各 layer を新 GP Object 群へ展開 (元 layer は残置)."""
-
-    bl_idname = "bname.gp_layer_migrate_master"
-    bl_label = "master GP を Object へ移行"
-    bl_description = (
-        "master GP (bname_master_sketch) の各 GP layer を新 GP Object として"
-        "アクティブコマ直下に展開します。元 layer は残置 (可逆性のため)。"
-        "既に移行済みの layer はスキップされます。"
-    )
-    bl_options = {"REGISTER", "UNDO"}
-
-    confirm: BoolProperty(  # type: ignore[valid-type]
-        name="確認済み",
-        default=False,
-        description="True を指定して実行します (UI 経由で操作するときは確認ダイアログを通す想定)",
-    )
-
-    def execute(self, context):
-        if not self.confirm:
-            self.report(
-                {"WARNING"},
-                "確認チェックが必要です。dry-run で計画を確認してから実行してください。",
-            )
-            return {"CANCELLED"}
-        scene = context.scene
-        page_id, coma_id, _ = _resolve_active_coma(context)
-        if not page_id or not coma_id:
-            self.report({"WARNING"}, "アクティブコマを選択してください")
-            return {"CANCELLED"}
-        plan = gpol.migrate_master_gp_layers_to_objects(
-            scene=scene,
-            parent_kind="coma",
-            parent_key=f"{page_id}:{coma_id}",
-            dry_run=False,
-        )
-        n = len(plan["migrated"])
-        skipped = len(plan["skipped"])
-        self.report(
-            {"INFO"},
-            f"GP layer を {n} 個の Object に移行しました (スキップ {skipped})。",
-        )
-        return {"FINISHED"}
-
-
 _CLASSES = (
     BNAME_OT_gp_layer_create_per_object,
-    BNAME_OT_gp_layer_migrate_master_dryrun,
-    BNAME_OT_gp_layer_migrate_master,
 )
 
 

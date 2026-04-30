@@ -1,20 +1,6 @@
-"""1 GP Object = 1 B-Name レイヤー モデル (Phase 2).
+"""1 GP Object = 1 B-Name レイヤー モデル.
 
-計画書 ``docs/outliner_object_layer_plan_2026-04-30.md`` Phase 2 を実装。
-
-現状の master GP (``bname_master_sketch``) は「作品全体で 1 GP Object 内部に
-複数 GP layer」モデル。Phase 2 では「1 GP Object = 1 B-Name レイヤー」の
-新モデルを **追加で** 提供する。既存 master GP は残置し、後方互換を維持する。
-
-責務:
-    - 新 GP Object をコマ Collection 直下に生成し、B-Name 安定 ID を stamp。
-    - 既存 master GP の各 layer を新 GP Object 群へ展開する operator を支援
-      する関数 (``migrate_master_gp_layers_to_objects``)。
-    - 可逆性: 移行先 GP Object に ``bname_migrated_from_layer`` メタを残し、
-      元 master GP の layer は削除しない (ユーザーが手動で削除する想定)。
-
-依存: utils.gpencil (低レベル GP API), utils.outliner_model, utils.object_naming,
-utils.layer_object_sync。
+新規 GP Object をコマ Collection 直下に生成し、B-Name 安定 ID を stamp する。
 """
 
 from __future__ import annotations
@@ -27,15 +13,11 @@ from . import gpencil as gp_utils
 from . import layer_object_sync as los
 from . import log
 from . import object_naming as on
-from . import outliner_model as om
 
 _logger = log.get_logger(__name__)
 
-# 新モデル GP Object の data 名 prefix。識別と list 走査用。
+# 新モデル GP Object の data 名 prefix
 PER_LAYER_GP_DATA_PREFIX = "BName_LayerGP_"
-
-# 移行先 Object に付ける退避メタ (可逆性確保)
-PROP_MIGRATED_FROM = "bname_migrated_from_layer"
 
 
 def _resolve_unique_data_name(base: str) -> str:
@@ -127,88 +109,3 @@ def create_layer_gp_object(
     return obj
 
 
-def list_master_gp_layers() -> list[bpy.types.GreasePencilLayer]:
-    """既存 master GP の layer 一覧を返す (移行候補)."""
-    master = gp_utils.get_master_gpencil()
-    if master is None:
-        return []
-    layers = getattr(master.data, "layers", None)
-    if layers is None:
-        return []
-    return list(layers)
-
-
-def migrate_master_gp_layers_to_objects(
-    *,
-    scene: bpy.types.Scene,
-    parent_kind: str,
-    parent_key: str,
-    base_z_index: int = 100,
-    z_step: int = 10,
-    dry_run: bool = True,
-) -> dict:
-    """master GP の各 layer を新 GP Object 群へ展開する (Phase 2 マイグレーション).
-
-    可逆性: 元の master GP layer は削除しない。生成された Object には
-    ``bname_migrated_from_layer = "<元 layer 名>"`` を付け、追跡可能にする。
-
-    既存 layer の strokes は **コピーしない** (Phase 2 範囲外、Phase 3 で
-    実装)。空の GP Object を作って構造のみ移行する。
-
-    Args:
-        parent_kind / parent_key: 移行先のコマ。
-        base_z_index: 移行 Object の開始 z_index (大きいほど前面)。
-        z_step: layer 1 つあたりの z_index 増分。
-        dry_run: True なら何もせず計画のみ返す。
-
-    Returns:
-        ``{"would_migrate": [...], "migrated": [...], "skipped": [...]}``
-    """
-    plan = {"would_migrate": [], "migrated": [], "skipped": []}
-    layers = list_master_gp_layers()
-    if not layers:
-        return plan
-
-    z = base_z_index
-    scope_token = parent_key.replace(":", "_") if parent_key else "default"
-    for layer in layers:
-        layer_name = str(getattr(layer, "name", "") or "")
-        if not layer_name:
-            plan["skipped"].append({"reason": "no name", "z_index": z})
-            # skip でも z は進める。連番を保ち、2 回目 migrate で新 layer が
-            # 既存 Object と z_index 衝突するのを防ぐ。
-            z += z_step
-            continue
-        # parent (page/coma) スコープ込みで bname_id を一意化
-        bname_id = f"gp_master_{scope_token}_{layer_name}"
-        existing = on.find_object_by_bname_id(bname_id, kind="gp")
-        if existing is not None:
-            plan["skipped"].append(
-                {
-                    "layer": layer_name,
-                    "reason": "already migrated",
-                    "obj": existing.name,
-                    "z_index": z,
-                }
-            )
-            z += z_step
-            continue
-        plan["would_migrate"].append(
-            {"layer": layer_name, "bname_id": bname_id, "z_index": z}
-        )
-        if not dry_run:
-            obj = create_layer_gp_object(
-                scene=scene,
-                bname_id=bname_id,
-                title=layer_name,
-                z_index=z,
-                parent_kind=parent_kind,
-                parent_key=parent_key,
-            )
-            if obj is not None:
-                obj[PROP_MIGRATED_FROM] = layer_name
-                plan["migrated"].append(
-                    {"layer": layer_name, "obj": obj.name, "z_index": z}
-                )
-        z += z_step
-    return plan
