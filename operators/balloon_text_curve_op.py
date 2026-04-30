@@ -18,8 +18,8 @@ _logger = log.get_logger(__name__)
 
 class BNAME_OT_balloons_to_curve_all(bpy.types.Operator):
     bl_idname = "bname.balloons_to_curve_all"
-    bl_label = "全フキダシを Curve として生成"
-    bl_description = "全 page.balloons を Bezier Curve Object として生成します。"
+    bl_label = "全フキダシを再生成"
+    bl_description = "全 page.balloons を Bezier Curve として再生成します。"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -47,7 +47,7 @@ class BNAME_OT_images_to_empty_all(bpy.types.Operator):
     """画像レイヤーを Empty Object として Outliner に登録 (描画はオーバーレイ)."""
 
     bl_idname = "bname.images_to_empty_all"
-    bl_label = "全画像レイヤーを Empty として登録"
+    bl_label = "全画像レイヤーを再登録"
     bl_description = (
         "画像レイヤーを Outliner 上の Empty Object として登録します。"
         "実際の絵柄は B-Name 独自オーバーレイで描画され、export pipeline は "
@@ -95,7 +95,7 @@ class BNAME_OT_texts_to_empty_all(bpy.types.Operator):
     """テキストレイヤーを Empty Object として Outliner に登録 (描画はオーバーレイ)."""
 
     bl_idname = "bname.texts_to_empty_all"
-    bl_label = "全テキストを Empty として登録"
+    bl_label = "全テキストを再登録"
     bl_description = (
         "テキストを Outliner 上の Empty Object として登録します。実際の文字は "
         "B-Name 独自オーバーレイで描画され、export pipeline は PropertyGroup "

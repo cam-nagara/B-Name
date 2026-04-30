@@ -3,6 +3,39 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-30 — ボタン文言整理 / ラスター追加 / キーマップ条件化 / 可視性連動
+
+### 変更
+- **新規レイヤー作成セクションのボタン文言**: 「Object として」「Curve と
+  して」「Empty として」のような実装詳細表記をすべて削除。
+    - `bname.gp_layer_create_per_object`: "新 GP レイヤーを作成"
+    - `bname.effect_line_create_object`: "新 効果線レイヤーを作成"
+    - `bname.balloons_to_curve_all`: "全フキダシを再生成"
+    - `bname.images_to_empty_all`: "全画像レイヤーを再登録"
+    - `bname.texts_to_empty_all`: "全テキストを再登録"
+- N パネル「新規レイヤー作成」に **ラスターレイヤー** ボタン
+  (`bname.raster_layer_add`) を追加。
+
+### 修正
+- **キーマップを N パネルの B-Name タブが現在アクティブな場合のみ有効化**:
+  `keymap/keymap.py._watch_bname_tab` の判定に `_bname_tab_is_active()` を
+  追加。`Region.active_panel_category` を見て他アドオンタブ表示中は B-Name
+  ショートカットを無効化し、Blender 既定キーが復活する。`Region.active_
+  panel_category` 取得不可な環境では sidebar が開いていれば有効化と
+  fallback。
+- **Outliner で Collection の目アイコンを切るとオーバーレイ描画も連動
+  非表示に**: `ui/overlay_visibility.py` を拡張。`page_visible(page)` /
+  `coma_visible(panel, page=...)` で対応 LayerCollection の `exclude` /
+  `hide_viewport`、Collection 自身の `hide_viewport` も判定。これにより
+  Outliner で `p0001` や `c01` を非表示にすると、用紙枠/コマ枠/フキダシ/
+  テキスト/効果線のオーバーレイ描画もすべて非表示になる。
+
+E2E 確認:
+- 全 operator bl_label に "として" 表記が無いことを確認
+- p0001 LayerCollection を hide_viewport=True にして page_visible=False、
+  c01 LayerCollection を hide_viewport=True にして coma_visible=False
+- _bname_tab_is_active 関数登録
+
 ## 2026-04-30 — レイヤー詳細設定ダイアログを Object 選択ベースに刷新
 
 ### 追加

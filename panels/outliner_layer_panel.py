@@ -40,13 +40,38 @@ class BNAME_PT_outliner_layers(Panel):
 
         # 新規レイヤー作成
         box = layout.box()
-        box.label(text="新規レイヤー作成 / Outliner 登録", icon="ADD")
+        box.label(text="新規レイヤー作成", icon="ADD")
         col = box.column(align=True)
-        col.operator("bname.gp_layer_create_per_object", icon="GREASEPENCIL")
-        col.operator("bname.effect_line_create_object", icon="LIGHT")
-        col.operator("bname.balloons_to_curve_all", icon="MESH_CIRCLE")
-        col.operator("bname.images_to_empty_all", icon="IMAGE_DATA")
-        col.operator("bname.texts_to_empty_all", icon="FONT_DATA")
+        col.operator(
+            "bname.gp_layer_create_per_object",
+            text="GP レイヤー",
+            icon="GREASEPENCIL",
+        )
+        col.operator(
+            "bname.raster_layer_add",
+            text="ラスターレイヤー",
+            icon="TEXTURE",
+        )
+        col.operator(
+            "bname.effect_line_create_object",
+            text="効果線レイヤー",
+            icon="LIGHT",
+        )
+        col.operator(
+            "bname.balloons_to_curve_all",
+            text="フキダシ (全件再生成)",
+            icon="MESH_CIRCLE",
+        )
+        col.operator(
+            "bname.images_to_empty_all",
+            text="画像レイヤー (全件再登録)",
+            icon="IMAGE_DATA",
+        )
+        col.operator(
+            "bname.texts_to_empty_all",
+            text="テキスト (全件再登録)",
+            icon="FONT_DATA",
+        )
 
         # アクティブレイヤーの詳細設定
         box = layout.box()

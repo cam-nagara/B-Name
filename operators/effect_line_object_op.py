@@ -66,7 +66,7 @@ class BNAME_OT_effect_line_create_object(bpy.types.Operator):
     """新規効果線 GP Object を作成."""
 
     bl_idname = "bname.effect_line_create_object"
-    bl_label = "新 効果線レイヤーを Object として作成"
+    bl_label = "新 効果線レイヤーを作成"
     bl_description = (
         "アクティブコマ直下に新 effect GP Object を生成し、Outliner 階層に登録"
         "します (Phase 5b)。"

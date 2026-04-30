@@ -84,7 +84,7 @@ class BNAME_OT_gp_layer_create_per_object(bpy.types.Operator):
     """新規 GP Object を 1 レイヤーとしてアクティブコマに作成 (Phase 2)."""
 
     bl_idname = "bname.gp_layer_create_per_object"
-    bl_label = "新 GP レイヤーを Object として作成"
+    bl_label = "新 GP レイヤーを作成"
     bl_description = (
         "アクティブコマ直下に新規 GP Object を生成し、B-Name 安定 ID を付与"
         "して Outliner 階層に登録します (Phase 2: 1 GP Object = 1 B-Name "

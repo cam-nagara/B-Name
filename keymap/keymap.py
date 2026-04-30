@@ -750,7 +750,12 @@ def _watch_bname_tab() -> Optional[float]:
         from ..preferences import get_preferences
 
         prefs = get_preferences()
-        enabled = True if prefs is None else bool(prefs.keymap_enabled)
+        keymap_pref_enabled = True if prefs is None else bool(prefs.keymap_enabled)
+        # N パネルで B-Name タブが現在アクティブな area が 1 つでもあれば有効化、
+        # それ以外は他アドオンタブを開いている状態と判断して無効化する。
+        # preferences.keymap_enabled が False の場合は常時 False。
+        tab_active = _bname_tab_is_active()
+        enabled = bool(keymap_pref_enabled and tab_active)
 
         # キーマップ未作成 (register 時に wm/addon keyconfig が None だった等) なら再試行
         if not state.bname_items:
@@ -762,17 +767,55 @@ def _watch_bname_tab() -> Optional[float]:
                 )
 
         if enabled:
-            # set_bname_items_active は内部で変化判定付き = 冪等なので毎 tick 呼んで OK
             state.set_bname_items_active(True)
             if not state.enabled and state.bname_items:
-                # override_defaults は状態遷移時のみ (既存 saved リストの重複登録を避ける)
                 state.override_defaults()
         elif state.enabled:
             state.restore_defaults()
             state.set_bname_items_active(False)
+        else:
+            # state.enabled は既に False。kmi も False を維持させる。
+            state.set_bname_items_active(False)
     except Exception:  # noqa: BLE001
         _logger.exception("watch_bname_tab failed")
     return _WATCH_INTERVAL
+
+
+def _bname_tab_is_active() -> bool:
+    """N パネル sidebar で B-Name タブが現在アクティブな area が 1 つでもあるか.
+
+    ``Region.active_panel_category`` を使う (Blender 5.x では実装済)。
+    region が見つからない / 未対応 Blender なら True を返して挙動を維持
+    (アドオン全有効化と同等) し、ユーザーの作業を妨げない。
+    """
+    try:
+        wm = bpy.context.window_manager
+        if wm is None:
+            return True
+        for window in wm.windows:
+            screen = getattr(window, "screen", None)
+            if screen is None:
+                continue
+            for area in screen.areas:
+                if area.type != "VIEW_3D":
+                    continue
+                space = area.spaces.active
+                # sidebar 自体が閉じているなら B-Name タブは表示されていない
+                if not bool(getattr(space, "show_region_ui", False)):
+                    continue
+                for region in area.regions:
+                    if region.type != "UI":
+                        continue
+                    cat = getattr(region, "active_panel_category", None)
+                    if cat is None:
+                        # Blender が active_panel_category を返さない環境では
+                        # sidebar が開いているなら有効と判断
+                        return True
+                    if str(cat) == "B-Name":
+                        return True
+    except Exception:  # noqa: BLE001
+        return True
+    return False
 
 
 def _register_watcher() -> None:
