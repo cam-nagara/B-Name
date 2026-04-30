@@ -89,53 +89,76 @@ def _ensure_image_datablock(filepath: str, image_id: str) -> Optional[bpy.types.
 
 
 def _ensure_image_material(image_id: str, image: bpy.types.Image) -> bpy.types.Material:
-    """Image plane 用の最小マテリアルを ensure (alpha=0 で初期化)."""
+    """Image plane 用の最小マテリアルを ensure.
+
+    既存ノードがある場合は **再利用** し、Image だけ最新に差し替える。
+    ノードが揃っていない場合のみ全構築する。これにより Phase 3c で
+    ユーザーが Mix Shader Fac=1 (可視) に切替えた状態が、entry の再 ensure
+    で 0 にリセットされない。
+    """
     name = image_material_name(image_id)
     mat = bpy.data.materials.get(name)
+    is_new = mat is None
     if mat is None:
         mat = bpy.data.materials.new(name)
     mat.use_nodes = True
     nt = mat.node_tree
     nodes = nt.nodes
     links = nt.links
-    # 既存ノードクリア (ensure 再実行で重複させない)
-    for n in list(nodes):
-        if n.name in {NODE_IMAGE_TEXTURE, NODE_PRINCIPLED, NODE_TRANSPARENT, NODE_MIX, NODE_OUTPUT}:
-            nodes.remove(n)
-    # 既定の Principled / Output が残っているなら撤去
-    for n in list(nodes):
-        if n.bl_idname in {"ShaderNodeBsdfPrincipled", "ShaderNodeOutputMaterial"} and n.name not in {
-            NODE_PRINCIPLED, NODE_OUTPUT,
-        }:
-            nodes.remove(n)
 
-    img_node = nodes.new("ShaderNodeTexImage")
-    img_node.name = NODE_IMAGE_TEXTURE
-    img_node.image = image
-    img_node.location = (-400, 0)
+    # 既存 B-Name 管理ノードを取得 (再利用)
+    img_node = nodes.get(NODE_IMAGE_TEXTURE)
+    transparent = nodes.get(NODE_TRANSPARENT)
+    principled = nodes.get(NODE_PRINCIPLED)
+    mix = nodes.get(NODE_MIX)
+    output = nodes.get(NODE_OUTPUT)
 
-    transparent = nodes.new("ShaderNodeBsdfTransparent")
-    transparent.name = NODE_TRANSPARENT
-    transparent.location = (-200, -200)
+    needs_rebuild = (
+        img_node is None or transparent is None or principled is None
+        or mix is None or output is None
+    )
 
-    principled = nodes.new("ShaderNodeBsdfPrincipled")
-    principled.name = NODE_PRINCIPLED
-    principled.location = (-200, 0)
+    if needs_rebuild:
+        # 不完全な状態の B-Name ノードと、既定で生成された Principled/Output
+        # をすべて取り除いてから再構築する。
+        for n in list(nodes):
+            if n.name in {NODE_IMAGE_TEXTURE, NODE_PRINCIPLED, NODE_TRANSPARENT, NODE_MIX, NODE_OUTPUT}:
+                nodes.remove(n)
+        for n in list(nodes):
+            if n.bl_idname in {"ShaderNodeBsdfPrincipled", "ShaderNodeOutputMaterial"}:
+                nodes.remove(n)
 
-    mix = nodes.new("ShaderNodeMixShader")
-    mix.name = NODE_MIX
-    mix.location = (50, 0)
-    # alpha=0 で完全透明 (Phase 3b: overlay と二重描画させない)
-    mix.inputs[0].default_value = 0.0
+        img_node = nodes.new("ShaderNodeTexImage")
+        img_node.name = NODE_IMAGE_TEXTURE
+        img_node.location = (-400, 0)
 
-    output = nodes.new("ShaderNodeOutputMaterial")
-    output.name = NODE_OUTPUT
-    output.location = (250, 0)
+        transparent = nodes.new("ShaderNodeBsdfTransparent")
+        transparent.name = NODE_TRANSPARENT
+        transparent.location = (-200, -200)
 
-    links.new(img_node.outputs["Color"], principled.inputs["Base Color"])
-    links.new(transparent.outputs["BSDF"], mix.inputs[1])
-    links.new(principled.outputs["BSDF"], mix.inputs[2])
-    links.new(mix.outputs["Shader"], output.inputs["Surface"])
+        principled = nodes.new("ShaderNodeBsdfPrincipled")
+        principled.name = NODE_PRINCIPLED
+        principled.location = (-200, 0)
+
+        mix = nodes.new("ShaderNodeMixShader")
+        mix.name = NODE_MIX
+        mix.location = (50, 0)
+        # 新規生成時のみ Fac=0 (overlay と二重描画させない)。
+        # 既存マテリアルを再利用する場合はユーザー設定を保持する。
+        mix.inputs[0].default_value = 0.0
+
+        output = nodes.new("ShaderNodeOutputMaterial")
+        output.name = NODE_OUTPUT
+        output.location = (250, 0)
+
+        links.new(img_node.outputs["Color"], principled.inputs["Base Color"])
+        links.new(transparent.outputs["BSDF"], mix.inputs[1])
+        links.new(principled.outputs["BSDF"], mix.inputs[2])
+        links.new(mix.outputs["Shader"], output.inputs["Surface"])
+
+    # Image は毎回最新値に差し替える (filepath 変更等を反映)。
+    if img_node.image is not image:
+        img_node.image = image
 
     # blend_method は Blender 5.x の EEVEE Next でも有効。shadow_method は
     # 5.x で削除されたため設定しない。
@@ -227,8 +250,11 @@ def ensure_image_plane_object(
     obj.location.y = y_m
     # z は stamp_layer_object 内で z_index から計算される
 
-    # 6. Phase 3b: 既定 invisible 表示扱い (overlay と二重描画させない)
-    obj[PROP_VISIBLE_VIA_OBJECT] = False
+    # 6. Phase 3b: 既定 invisible 表示扱い (overlay と二重描画させない)。
+    # 既にプロパティが立っているなら値を保持 (Phase 3c でユーザーが切替えた
+    # 設定を ensure 再実行で潰さないため)。
+    if PROP_VISIBLE_VIA_OBJECT not in obj.keys():
+        obj[PROP_VISIBLE_VIA_OBJECT] = False
 
     # 7. parent kind/key の解決 (BNameImageLayer の parent_kind は文字列)
     entry_parent_kind = str(getattr(entry, "parent_kind", "") or "page")
