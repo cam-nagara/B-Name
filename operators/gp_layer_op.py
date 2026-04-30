@@ -1,15 +1,8 @@
-"""Phase 2: 1 GP Object = 1 B-Name レイヤー operators.
-
-計画書 Phase 2 を実装する。既存 ``operators/gpencil_op.py`` (master GP 中心)
-を残したまま、新モデル用の operator を別ファイルで提供する。
+"""1 GP Object = 1 B-Name レイヤー operators.
 
 提供 operator:
     - ``bname.gp_layer_create_per_object``: 現在のアクティブコマ直下に新規
       GP Object を生成し、Outliner Collection 階層に正規 link する。
-    - ``bname.gp_layer_migrate_master_dryrun``: master GP のレイヤー数を
-      report する (実害なし)。
-    - ``bname.gp_layer_migrate_master``: master GP の各 layer を新 GP Object
-      群へ展開する。既存 layer は削除しない (可逆性のため)。
 """
 
 from __future__ import annotations

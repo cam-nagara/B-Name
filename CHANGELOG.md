@@ -3,6 +3,84 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-30 — Outliner 中心レイヤー管理へ全面移行
+
+### 追加
+- Outliner Object/Collection ベースのレイヤー管理基盤
+  (`utils/object_naming.py`, `utils/outliner_model.py`,
+  `utils/layer_object_sync.py`, `utils/outliner_watch.py`):
+    - B-Name 安定 ID を Object/Collection の custom property
+      (`bname_kind` / `bname_id` / `bname_managed` / `bname_parent_key`/
+      `bname_folder_id` / `bname_z_index` / `bname_title`) に保持。
+    - ルート Collection `B-Name`、`outside`、ページ Collection、
+      コマ Collection、汎用フォルダ Collection を mirror で生成。
+    - 5 秒間隔 timer scan + 再帰抑止 guard + 差分キャッシュで Outliner
+      D&D を低負荷で検出し、raster / 効果線 / GP の Object 親を実 entry
+      へ書戻し。
+- ページ / コマ Collection のシンプル名命名 (`p0001` / `c01`) と
+  カラータグ設定 (ページ=紫 COLOR_06、コマ=水色 COLOR_05)。`outside` も
+  シンプル名へ変更。
+- `bname.coma_renumber_active_page` operator: アクティブページのコマ ID を
+  順番通り c01, c02, ... に再採番。Outliner Collection の bname_id も追従。
+- `bname.gp_layer_create_per_object` operator: 1 GP Object = 1 B-Name
+  レイヤー モデルで新規 GP Object をアクティブコマ直下に生成。
+- `bname.effect_line_create_object` operator: 効果線 GP Object を生成。
+- `bname.outliner_apply_view` / `bname.outliner_restore_view` operator:
+  Outliner エディタを VIEW_LAYER + alpha sort 表示に切替/復元。B-Name 管理
+  マーカー (`bname_outliner_managed`) を立てた area のみ復元対象。
+- `bname.mask_regenerate_all` / `bname.mask_remove_orphans` operator:
+  ページ / コマ mask Mesh Object を `__masks__` Collection に集約生成・
+  孤立掃除。
+- `bname.repair_hierarchy` operator: B-Name 階層整合性の自動修復
+  (mirror 再走 + 空 bname_id への uuid 割当 + 重複 ID の managed=False
+  降格 + マスク再生成 + snapshot 再収集)。
+- `BNAME_PT_outliner_layers` (N パネル「Outliner レイヤー」): Outliner
+  表示切替 / 新規レイヤー作成 / マスク管理 / 整合性修復 / コマ ID 再採番
+  ボタンを集約。
+
+### 変更
+- `utils/handlers.py` の load_post / save_pre で
+  `mirror_work_to_outliner` を呼び出し、Collection 階層を最新化。コマ blend
+  (cNN/cNN.blend) では `prepare_coma_blend_scene` 前に mirror が走らない
+  ようにスキップ。
+- `utils/layer_reparent.reparent_selected` の完了時に mirror を再走させて
+  Outliner 階層を即時反映。
+- `operators/raster_layer_op.ensure_raster_plane`: raster plane に B-Name
+  安定 ID を stamp し、Outliner mirror 配下に取り込み。`parent_key` に
+  `pNNNN:cNN` 形式が来ても page を正しく解決。
+
+### 削除
+- `BNAME_PT_layer_stack` / `BNAME_UL_layer_stack` (UIList ベースの
+  レイヤーリスト)。Outliner 中心管理に一本化。
+- 後方互換用の Object 化 operator 群 (`bname.image_layer_to_object` /
+  `image_layers_all_to_object` / `balloon_to_object` / `balloons_all_to_object` /
+  `text_to_object` / `texts_all_to_object`) と関連ヘルパ
+  (`utils/image_plane_object.py`, `utils/balloon_text_plane.py`)。
+- master GP / 効果線 master の移行 operator 群
+  (`bname.gp_layer_migrate_master_dryrun` / `gp_layer_migrate_master` /
+  `effect_line_migrate_master_dryrun` / `effect_line_migrate_master`) と
+  関連ヘルパ (migrate 関数、可逆性メタ `bname_migrated_from_layer` /
+  `bname_migrated_from_effect_layer`、`register_master_effect_object`)。
+- watch の image / balloon / text write-back (overlay 描画専用で Object
+  化対象外のため不要)。
+
+### Blender 5.1.1 実機検証で確認した実装上の制約
+- Object/Collection 名は 255 バイト上限。日本語タイトルでは prefix を
+  含めて約 80 字で内部切詰め。`utils/object_naming._truncate_utf8` で
+  UTF-8 安全に切詰め、`bname_title_truncated` フラグを立てる。
+- `CollectionObjects` / `CollectionChildren` に `move()` メソッドが無い
+  ため、Collection 内の表示順は名前 prefix と alpha sort で表現する。
+- `Material.shadow_method` は EEVEE Next で削除済み。設定しない。
+- Library override / linked Object は名前変更不可なので `assign_canonical_name`
+  で早期 return。
+
+### テスト (Blender 5.1.1 background)
+- アドオン register/unregister 成功
+- mock work + 実 work.bname での Outliner 階層生成、kind 別 z_index
+  分離、coma renumber、カラータグ反映を検証
+- 全 6 バッチの全行精密監査 (高 22 / 中 37 / 低 9 件) を 24 件の修正へ
+  集約済み
+
 ## 2026-04-30 — 汎用レイヤーフォルダを追加
 
 ### 追加
