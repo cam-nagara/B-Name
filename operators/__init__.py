@@ -32,6 +32,7 @@ from . import (
     coma_op,
     coma_camera_op,
     coma_picker,  # noqa: F401 — ヘルパのみ (register 対象外)
+    coma_renumber_op,
     coma_vertex_edit_op,
     preset_op,
     raster_layer_op,
@@ -52,6 +53,7 @@ _MODULES = (
     coma_op,
     coma_edit_op,
     coma_camera_op,
+    coma_renumber_op,
     coma_vertex_edit_op,
     coma_knife_cut_op,
     coma_edge_move_op,

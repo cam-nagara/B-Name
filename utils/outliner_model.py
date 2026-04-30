@@ -37,6 +37,34 @@ ROOT_COLLECTION_NAME = "B-Name"
 # 突合に使う。
 OUTSIDE_BNAME_ID = "__outside__"
 
+# ページ / コマ Collection の color_tag (Blender 標準の COLOR_01..08)
+# 紫 = COLOR_06、水色 (青) = COLOR_05
+PAGE_COLOR_TAG = "COLOR_06"
+COMA_COLOR_TAG = "COLOR_05"
+
+
+def _set_collection_name_safe(coll: bpy.types.Collection, desired: str) -> None:
+    """Collection 名を desired に揃える。既に同名なら no-op、不可なら無視."""
+    if not desired:
+        return
+    if coll.name == desired:
+        return
+    try:
+        coll.name = desired
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _set_collection_color_tag(coll: bpy.types.Collection, tag: str) -> None:
+    """color_tag を設定 (Blender 5.x で対応可)."""
+    if not tag:
+        return
+    try:
+        if getattr(coll, "color_tag", None) != tag:
+            coll.color_tag = tag
+    except Exception:  # noqa: BLE001
+        pass
+
 
 ROOT_BNAME_ID = "__root__"
 
@@ -85,9 +113,8 @@ def ensure_outside_collection(scene: bpy.types.Scene) -> bpy.types.Collection:
         z_index=0,
     )
     _normalize_collection_parent(existing, root, scene)
-    on.assign_canonical_name(
-        existing, kind="outside", z_index=0, sub_id="outside", title="ページ外"
-    )
+    # シンプル名: "outside" (alpha sort で o は p の前に来る)
+    _set_collection_name_safe(existing, "outside")
     return existing
 
 
@@ -113,13 +140,9 @@ def ensure_page_collection(
     # 既に scene.collection 直下や別の Collection 配下に置かれている場合も
     # root 直下のみへ正規化する。
     _normalize_collection_parent(coll, root, scene)
-    on.assign_canonical_name(
-        coll,
-        kind="page",
-        z_index=on.page_id_to_z_number(page_id),
-        sub_id=page_id,
-        title=title or page_id,
-    )
+    # シンプル名 (page_id 直接) + 紫カラータグ
+    _set_collection_name_safe(coll, page_id)
+    _set_collection_color_tag(coll, PAGE_COLOR_TAG)
     return coll
 
 
@@ -139,9 +162,9 @@ def ensure_coma_collection(
     coma_bname_id = f"{page_id}:{coma_id}"
     coll = on.find_collection_by_bname_id(coma_bname_id, kind="coma")
     if coll is None:
-        z = on.coma_id_to_z_number(coma_id) * 10  # コマは 10 単位で隙間を確保
-        canonical, _ = on.make_canonical_name("coma", z, coma_id, title or coma_id)
-        coll = bpy.data.collections.new(canonical)
+        # 新規生成は coma_id を直接名前に。Blender が同名衝突時に .001 を
+        # 付加するが、bname_id で逆引きするので問題ない。
+        coll = bpy.data.collections.new(coma_id)
     on.stamp_identity(
         coll,
         kind="coma",
@@ -152,13 +175,9 @@ def ensure_coma_collection(
     )
     # 既存の親リンクが page_coll でなければ正規化 (Phase 0-2 はページ間移動を拒否)
     _normalize_collection_parent(coll, page_coll, scene)
-    on.assign_canonical_name(
-        coll,
-        kind="coma",
-        z_index=on.coma_id_to_z_number(coma_id) * 10,
-        sub_id=coma_id,
-        title=title or coma_id,
-    )
+    # シンプル名 (coma_id 直接) + 水色カラータグ
+    _set_collection_name_safe(coll, coma_id)
+    _set_collection_color_tag(coll, COMA_COLOR_TAG)
     return coll
 
 
@@ -175,10 +194,8 @@ def ensure_folder_collection(
         return None
     coll = on.find_collection_by_bname_id(folder_id, kind="folder")
     if coll is None:
-        canonical, _ = on.make_canonical_name(
-            "folder", z_index, folder_id, title or folder_id
-        )
-        coll = bpy.data.collections.new(canonical)
+        # シンプル名: title 優先、なければ folder_id
+        coll = bpy.data.collections.new(title or folder_id)
     on.stamp_identity(
         coll,
         kind="folder",
@@ -191,13 +208,7 @@ def ensure_folder_collection(
     parent_coll = _resolve_parent_collection(scene, parent_kind, parent_key)
     if parent_coll is not None:
         _normalize_collection_parent(coll, parent_coll, scene)
-    on.assign_canonical_name(
-        coll,
-        kind="folder",
-        z_index=z_index,
-        sub_id=folder_id,
-        title=title or folder_id,
-    )
+    _set_collection_name_safe(coll, title or folder_id)
     return coll
 
 

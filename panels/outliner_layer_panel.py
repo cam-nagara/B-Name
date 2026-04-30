@@ -91,7 +91,11 @@ class BNAME_PT_outliner_layers(Panel):
         # 整合性修復
         box = layout.box()
         box.label(text="整合性", icon="CHECKMARK")
-        box.operator("bname.repair_hierarchy", icon="MODIFIER_DATA")
+        col = box.column(align=True)
+        col.operator("bname.repair_hierarchy", icon="MODIFIER_DATA")
+        col.operator(
+            "bname.coma_renumber_active_page", icon="LINENUMBERS_ON"
+        )
 
 
 _CLASSES = (BNAME_PT_outliner_layers,)
