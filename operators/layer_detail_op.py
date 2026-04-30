@@ -20,15 +20,28 @@ _logger = log.get_logger(__name__)
 
 
 def _resolve_active_managed_object(context) -> Optional[bpy.types.Object]:
-    """active_object が B-Name 管理対象なら返す."""
+    """B-Name 管理下のレイヤー Object を解決する.
+
+    優先順位: active_object → selected_objects → selected_ids (Outliner) →
+    view_layer.active。Outliner で選択中の Object も拾えるよう全経路を確認する。
+    """
     obj = getattr(context, "active_object", None)
-    if obj is None:
-        obj = getattr(getattr(context, "view_layer", None), "active", None)
-    if obj is None:
-        return None
-    if not on.is_managed(obj):
-        return None
-    return obj
+    if obj is not None and on.is_managed(obj):
+        return obj
+    selected = getattr(context, "selected_objects", None) or ()
+    for o in selected:
+        if on.is_managed(o):
+            return o
+    selected_ids = getattr(context, "selected_ids", None) or ()
+    for sid in selected_ids:
+        if isinstance(sid, bpy.types.Object) and on.is_managed(sid):
+            return sid
+    view_layer = getattr(context, "view_layer", None)
+    if view_layer is not None:
+        active = getattr(view_layer, "active", None)
+        if active is not None and on.is_managed(active):
+            return active
+    return None
 
 
 def _find_image_entry(scene, bid: str):

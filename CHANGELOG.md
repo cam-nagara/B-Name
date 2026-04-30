@@ -3,6 +3,29 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-30 — 右クリックメニュー: Outliner 選択も拾う / メニュー append 範囲拡大
+
+### 修正
+ユーザー報告「右クリックメニューが出ない / 出ても『対象未選択』のみ」に対応。
+
+- `ui/context_menu._active_managed_object` の解決順序を拡張:
+    1. `context.active_object` (3D ビュー active)
+    2. `context.selected_objects` の最初の管理 Object
+    3. `context.selected_ids` (Outliner 選択 ID)
+    4. `view_layer.active` (Outliner active)
+  これにより **Outliner で選択中の Object** も右クリックメニューで認識される。
+- Outliner の append 先メニューを 4 種に拡大: `OUTLINER_MT_object` /
+  `OUTLINER_MT_collection` / `OUTLINER_MT_context_menu` / `OUTLINER_MT_asset`。
+  Object/Collection いずれを右クリックしても B-Name サブメニューが出る。
+- Outliner 側のサブメニュー差し込みは active 解決前に常時行うように変更
+  (空白部分の右クリックでも B-Name メニューを出す)。
+- `operators/layer_detail_op._resolve_active_managed_object` も同じ解決順序
+  に揃えて、Outliner 選択から `bname.layer_detail_open` を実行可能に。
+
+E2E (Blender 5.1.1 background):
+- active_object 経由 / selected_objects 経由で B-Name 管理 Object を解決可能
+- 4 つの OUTLINER_MT_* クラスが全て取得可能 (append 先確認)
+
 ## 2026-04-30 — ラスター: DPI 選択 / Z リフト 5mm / overlay depth_test
 
 ### 追加

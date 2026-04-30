@@ -15,14 +15,35 @@ from ..utils import object_naming as on
 
 
 def _active_managed_object(context):
+    """B-Name 管理下のレイヤー Object を解決する.
+
+    優先順位:
+        1. ``context.active_object`` (3D ビューでの選択)
+        2. ``context.selected_objects`` の最初の管理 Object
+        3. ``context.selected_ids`` (Outliner 選択) の最初の管理 Object
+        4. ``view_layer.active`` (Outliner の active)
+    """
+    # 1. 3D ビューの active_object
     obj = getattr(context, "active_object", None)
-    if obj is None:
-        view_layer = getattr(context, "view_layer", None)
-        if view_layer is not None:
-            obj = getattr(view_layer, "active", None)
-    if obj is None or not on.is_managed(obj):
-        return None
-    return obj
+    if obj is not None and on.is_managed(obj):
+        return obj
+    # 2. selected_objects (3D ビューや Outliner で選択中)
+    selected = getattr(context, "selected_objects", None) or ()
+    for o in selected:
+        if on.is_managed(o):
+            return o
+    # 3. selected_ids (Outliner の context で利用可能)
+    selected_ids = getattr(context, "selected_ids", None) or ()
+    for sid in selected_ids:
+        if isinstance(sid, bpy.types.Object) and on.is_managed(sid):
+            return sid
+    # 4. view_layer.active (Outliner の active)
+    view_layer = getattr(context, "view_layer", None)
+    if view_layer is not None:
+        active = getattr(view_layer, "active", None)
+        if active is not None and on.is_managed(active):
+            return active
+    return None
 
 
 def _draw_layer_commands(layout, context) -> None:
@@ -126,10 +147,11 @@ def _draw_in_object_context(self, context):
 
 
 def _draw_in_outliner_context(self, context):
-    """Outliner Object 右クリックメニューに B-Name サブメニューを差し込む."""
-    obj = _active_managed_object(context)
-    if obj is None:
-        return
+    """Outliner 右クリックメニューに B-Name サブメニューを差し込む.
+
+    Outliner では Object 未選択でも常にサブメニューを出す (選択中の場合は
+    詳細設定が有効、未選択は案内ラベルのみ)。
+    """
     self.layout.separator()
     self.layout.menu(
         BNAME_MT_object_context.bl_idname,
@@ -144,17 +166,27 @@ _CLASSES = (
 )
 
 
+# Outliner の append 候補メニュー (Blender 5.1 で存在するもののみ append される)
+_OUTLINER_MENUS = (
+    "OUTLINER_MT_object",
+    "OUTLINER_MT_collection",
+    "OUTLINER_MT_context_menu",
+    "OUTLINER_MT_asset",
+)
+
+
 def register() -> None:
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.VIEW3D_MT_object_context_menu.append(_draw_in_object_context)
-    # Outliner にも同じメニューを追加
-    outliner_menu = getattr(bpy.types, "OUTLINER_MT_object", None)
-    if outliner_menu is not None:
-        outliner_menu.append(_draw_in_outliner_context)
-    outliner_ctx = getattr(bpy.types, "OUTLINER_MT_context_menu", None)
-    if outliner_ctx is not None:
-        outliner_ctx.append(_draw_in_outliner_context)
+    # Outliner の各種右クリックメニューにも同じサブメニューを差し込む
+    for menu_name in _OUTLINER_MENUS:
+        menu = getattr(bpy.types, menu_name, None)
+        if menu is not None:
+            try:
+                menu.append(_draw_in_outliner_context)
+            except (AttributeError, TypeError):
+                pass
 
 
 def unregister() -> None:
@@ -162,16 +194,12 @@ def unregister() -> None:
         bpy.types.VIEW3D_MT_object_context_menu.remove(_draw_in_object_context)
     except (ValueError, AttributeError):
         pass
-    outliner_menu = getattr(bpy.types, "OUTLINER_MT_object", None)
-    if outliner_menu is not None:
+    for menu_name in _OUTLINER_MENUS:
+        menu = getattr(bpy.types, menu_name, None)
+        if menu is None:
+            continue
         try:
-            outliner_menu.remove(_draw_in_outliner_context)
-        except (ValueError, AttributeError):
-            pass
-    outliner_ctx = getattr(bpy.types, "OUTLINER_MT_context_menu", None)
-    if outliner_ctx is not None:
-        try:
-            outliner_ctx.remove(_draw_in_outliner_context)
+            menu.remove(_draw_in_outliner_context)
         except (ValueError, AttributeError):
             pass
     for cls in reversed(_CLASSES):
