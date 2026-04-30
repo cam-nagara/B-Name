@@ -9,7 +9,7 @@
   → dither pattern がズームでジラジラ動く
 
 正解: ページごとに **opaque な Mesh Plane** を z=0 に置く。
-- opaque 材質は depth を書く → ラスター Mesh (z=0.005, BLENDED) は
+- opaque 材質は depth を書く → ラスター Mesh (z=0.1, BLENDED) は
   その上に正しく alpha 合成される
 - ズームしてもパターン揺らぎなし
 - Blender 標準のレンダリングフローに乗るため副作用が少ない
@@ -185,7 +185,7 @@ def ensure_paper_bg_for_page(
         ox_mm, oy_mm = _pg.page_total_offset_mm(work, scene, page_index)
         obj.location.x = mm_to_m(ox_mm)
         obj.location.y = mm_to_m(oy_mm)
-        # z は 0 に固定 (raster は z=0.005 の上)
+        # z は 0 に固定 (raster は z=0.1 の上)
         obj.location.z = 0.0
     except Exception:  # noqa: BLE001
         _logger.exception("paper_bg page offset 失敗")

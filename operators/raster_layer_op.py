@@ -19,10 +19,9 @@ from ..utils.geom import mm_to_m, mm_to_px
 _logger = log.get_logger(__name__)
 
 # ラスター plane を他レイヤー (paper / mask) より手前に確実に表示するための
-# Z リフト (m)。0.5mm では Material Preview / EEVEE Next で z-fight や alpha
-# 競合により描画が見えないケースがあるため 5mm に拡大。Z step (0.0001m) の
-# 50 倍離れるので他の z_index 採番とも衝突しない。
-RASTER_Z_LIFT_M = 0.005
+# Z リフト (m)。0.005 (5mm) では近すぎたため 0.1 刻み (100mm) に拡大。
+# レイヤー間の Z 差を明確化し、 EEVEE Next の z-fight や alpha 競合を回避する。
+RASTER_Z_LIFT_M = 0.1
 RASTER_MATERIAL_VERSION = 2
 RASTER_MATERIAL_VERSION_PROP = "bname_raster_material_version"
 RASTER_IMAGE_NODE = "BName Raster Image"

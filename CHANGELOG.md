@@ -3,6 +3,31 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-30 — レイヤー Z リフトを 0.1 刻みに拡大
+
+ユーザー要望: 「レイヤーを Z 方向に浮かせる場合は、0.005 では近すぎるので、
+0.1 刻みにしてください。」
+
+### 変更
+- ``utils/layer_object_sync.BNAME_Z_STEP_M``: 0.0001 (= 0.1mm) → **0.1**
+  (= 100mm)。1 z_index あたりの Z オフセット
+- ``operators/raster_layer_op.RASTER_Z_LIFT_M``: 0.005 (= 5mm) → **0.1**
+  (= 100mm)。ラスター mesh のベース Z リフト
+- ``utils/page_grid.GP_Z_LIFT_M``: 0.001 (= 1mm) → **0.1** (= 100mm)。
+  GP Object のベース Z リフト
+- paper_bg は z=0 に固定 (用紙基準)
+
+### 効果
+- レイヤー間の Z 差が 0.1 (100mm) で明確に分離
+- EEVEE Next の z-fight や alpha 競合が起きにくくなる
+- z_index ベースの Object location は z_index×0.1 (例: z_index=10 → z=1.0m)
+- ``z_for_index(10) = 1.0`` / ``z_for_index(100) = 10.0`` を確認
+
+### E2E 検証 OK
+- ``BNAME_Z_STEP_M = 0.1`` / ``RASTER_Z_LIFT_M = 0.1`` / ``GP_Z_LIFT_M = 0.1``
+- 既存 raster Object の z が 0.005 → 0.1 に再計算で更新
+- paper_bg は z=0 維持 (用紙基準は不動)
+
 ## 2026-04-30 — paint 中だけ paper_bg を自動 hide (描けない問題解消)
 
 ユーザー報告: 「ラスターレイヤーに何も描けない」(paper_bg 化後)

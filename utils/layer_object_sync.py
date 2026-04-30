@@ -104,8 +104,10 @@ def prune_snapshots(valid_bname_ids: set[str]) -> int:
 
 # ---------- Z 座標と prefix (計画書 §4.2) ----------
 
-# 1 z_index あたりの Z 座標オフセット (m)。0.1mm。
-BNAME_Z_STEP_M = 0.0001
+# 1 z_index あたりの Z 座標オフセット (m)。0.1 (= 100mm)。
+# 0.005 (= 5mm) では近すぎてレイヤーが視覚的に重なって見づらいため、
+# 0.1 刻みで明確に離す。
+BNAME_Z_STEP_M = 0.1
 
 
 def z_for_index(z_index: int) -> float:
