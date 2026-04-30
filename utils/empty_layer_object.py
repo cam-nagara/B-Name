@@ -41,6 +41,35 @@ _EMPTY_DISPLAY_SIZE = 0.005
 _EMPTY_DISPLAY_TYPE = "PLAIN_AXES"
 
 
+def _resolve_page_offset(scene, page) -> tuple[float, float]:
+    """page の page_grid world オフセット (mm) を取得.
+
+    bpy_struct ラッパは `is` 比較で別 instance を返すケースがあるため、
+    page.id 文字列で逆引きする。
+    """
+    if scene is None or page is None:
+        return (0.0, 0.0)
+    work = getattr(scene, "bname_work", None)
+    if work is None:
+        return (0.0, 0.0)
+    target_id = str(getattr(page, "id", "") or "")
+    if not target_id:
+        return (0.0, 0.0)
+    page_idx = -1
+    for i, p in enumerate(getattr(work, "pages", [])):
+        if str(getattr(p, "id", "") or "") == target_id:
+            page_idx = i
+            break
+    if page_idx < 0:
+        return (0.0, 0.0)
+    try:
+        from . import page_grid as _pg
+
+        return _pg.page_total_offset_mm(work, scene, page_idx)
+    except Exception:  # noqa: BLE001
+        return (0.0, 0.0)
+
+
 def _resolve_parent_for_entry(entry, page, folder_id: str) -> tuple[str, str, str]:
     entry_parent_kind = str(getattr(entry, "parent_kind", "") or "page")
     entry_parent_key = str(getattr(entry, "parent_key", "") or "")
@@ -84,6 +113,7 @@ def _stamp_and_link(
     folder_id: str,
     scene: bpy.types.Scene,
 ) -> None:
+    # Empty は entry.x_mm/y_mm を独自管理するので page_grid offset は適用しない
     los.stamp_layer_object(
         obj,
         kind=kind,
@@ -94,6 +124,7 @@ def _stamp_and_link(
         parent_key=parent_key,
         folder_id=folder_id,
         scene=scene,
+        apply_page_offset=False,
     )
 
 
@@ -112,8 +143,10 @@ def ensure_image_empty_object(
         return None
     obj_name = f"{IMAGE_EMPTY_NAME_PREFIX}{image_id}"
     obj = _ensure_empty_object(obj_name)
-    obj.location.x = mm_to_m(float(getattr(entry, "x_mm", 0.0) or 0.0))
-    obj.location.y = mm_to_m(float(getattr(entry, "y_mm", 0.0) or 0.0))
+    # ページローカル座標 (mm) + page_grid オフセット (mm) を world 座標に
+    ox_mm, oy_mm = _resolve_page_offset(scene, page)
+    obj.location.x = mm_to_m(float(getattr(entry, "x_mm", 0.0) or 0.0) + ox_mm)
+    obj.location.y = mm_to_m(float(getattr(entry, "y_mm", 0.0) or 0.0) + oy_mm)
     stamp_kind, stamp_key, stamp_folder = _resolve_parent_for_entry(
         entry, page, folder_id
     )
@@ -156,8 +189,10 @@ def ensure_text_empty_object(
         return None
     obj_name = f"{TEXT_EMPTY_NAME_PREFIX}{text_id}"
     obj = _ensure_empty_object(obj_name)
-    obj.location.x = mm_to_m(float(getattr(entry, "x_mm", 0.0) or 0.0))
-    obj.location.y = mm_to_m(float(getattr(entry, "y_mm", 0.0) or 0.0))
+    # ページローカル座標 (mm) + page_grid オフセット (mm) を world 座標に
+    ox_mm, oy_mm = _resolve_page_offset(scene, page)
+    obj.location.x = mm_to_m(float(getattr(entry, "x_mm", 0.0) or 0.0) + ox_mm)
+    obj.location.y = mm_to_m(float(getattr(entry, "y_mm", 0.0) or 0.0) + oy_mm)
     stamp_kind, stamp_key, stamp_folder = _resolve_parent_for_entry(
         entry, page, folder_id
     )

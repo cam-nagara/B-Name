@@ -241,6 +241,32 @@ def _split_folder_parent(parent_key_raw: str) -> tuple[str, str]:
 # ---------- Object 側ミラー (画像 / raster / GP の 3 種を Phase 0 で対応) ----------
 
 
+def _resolve_page_world_offset_mm(scene, parent_key: str) -> tuple[float, float]:
+    """parent_key の page 部分から page_grid の world オフセット (mm) を取得."""
+    if scene is None or not parent_key:
+        return (0.0, 0.0)
+    page_id = parent_key.split(":", 1)[0] if parent_key else ""
+    if not page_id:
+        return (0.0, 0.0)
+    work = getattr(scene, "bname_work", None)
+    if work is None:
+        return (0.0, 0.0)
+    pages = list(getattr(work, "pages", []))
+    page_idx = -1
+    for i, p in enumerate(pages):
+        if str(getattr(p, "id", "") or "") == page_id:
+            page_idx = i
+            break
+    if page_idx < 0:
+        return (0.0, 0.0)
+    try:
+        from . import page_grid as _pg
+
+        return _pg.page_total_offset_mm(work, scene, page_idx)
+    except Exception:  # noqa: BLE001
+        return (0.0, 0.0)
+
+
 def stamp_layer_object(
     obj: bpy.types.Object,
     *,
@@ -252,11 +278,19 @@ def stamp_layer_object(
     parent_key: str,
     folder_id: str = "",
     scene: Optional[bpy.types.Scene] = None,
+    apply_page_offset: bool = True,
 ) -> None:
     """既存の Object に B-Name メタデータを書き込み、所属 Collection を整合.
 
     呼出側は既に ``bpy.data.objects.new()`` 等で Object を生成済みであることを
     前提とする。ここでは custom property 設定と link 整合を行う。
+
+    ``apply_page_offset=True`` (既定) の場合、parent_key から所属ページを引いて
+    page_grid 経由の world X/Y オフセットを Object.location.x/y に設定する。
+    Mesh / Curve 頂点をページローカル座標で持っているレイヤーが、Page Browser
+    モードの page グリッド上で正しい位置に重なるようにするため。
+    オーバーレイ描画系で entry.x_mm/y_mm を独自管理する Empty レイヤーは
+    apply_page_offset=False を渡して Object.location を別途制御する。
     """
     on.stamp_identity(
         obj,
@@ -271,6 +305,18 @@ def stamp_layer_object(
         obj, kind=kind, z_index=z_index, sub_id=kind, title=title
     )
     apply_z_index(obj, z_index)
+    # page world オフセットを X/Y に反映 (apply_z_index は Z のみ触る)
+    if apply_page_offset and scene is not None:
+        try:
+            from .geom import mm_to_m as _mm_to_m
+
+            ox_mm, oy_mm = _resolve_page_world_offset_mm(scene, parent_key)
+            loc = obj.location
+            obj.location = (
+                _mm_to_m(ox_mm), _mm_to_m(oy_mm), loc.z
+            )
+        except Exception:  # noqa: BLE001
+            _logger.exception("stamp_layer_object: page offset 設定失敗")
     if scene is not None:
         om.link_object_to_parent(
             scene, obj, parent_kind=parent_kind, parent_key=parent_key, folder_id=folder_id

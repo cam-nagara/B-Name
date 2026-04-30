@@ -200,7 +200,33 @@ def ensure_balloon_curve_object(
         parent_key=stamp_key,
         folder_id=stamp_folder,
         scene=scene,
+        # entry.x_mm/y_mm をページローカル座標として独自管理し、その値に
+        # page_grid のオフセットを加算して world 座標とする。
+        apply_page_offset=False,
     )
+    # ページオフセットを entry.x_mm/y_mm に加算して world 位置を決定
+    try:
+        from . import page_grid as _pg
+        from .geom import mm_to_m as _mm_to_m
+
+        work = getattr(scene, "bname_work", None)
+        page_idx = -1
+        if work is not None:
+            target_id = str(getattr(page, "id", "") or "")
+            for i, p in enumerate(getattr(work, "pages", [])):
+                if str(getattr(p, "id", "") or "") == target_id:
+                    page_idx = i
+                    break
+        if page_idx >= 0:
+            ox_mm, oy_mm = _pg.page_total_offset_mm(work, scene, page_idx)
+            obj.location.x = _mm_to_m(
+                float(getattr(entry, "x_mm", 0.0) or 0.0) + ox_mm
+            )
+            obj.location.y = _mm_to_m(
+                float(getattr(entry, "y_mm", 0.0) or 0.0) + oy_mm
+            )
+    except Exception:  # noqa: BLE001
+        _logger.exception("balloon: page world offset 加算失敗")
     obj.hide_viewport = not bool(getattr(entry, "visible", True))
     obj.hide_render = not bool(getattr(entry, "visible", True))
     return obj

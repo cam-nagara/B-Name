@@ -444,6 +444,8 @@ def ensure_raster_plane(context, entry, *, mark_missing: bool = False):
     obj.hide_render = not bool(getattr(entry, "visible", True))
     coll = gp_utils.ensure_page_collection(context.scene, page.id)
     _link_object_to_collection_only(obj, coll)
+    # 注意: page world offset の location 設定は stamp_layer_object 側で
+    # apply_page_offset=True により自動適用される (この後 stamp が呼ばれる)。
 
     # Phase 3a: raster Object に B-Name 安定 ID と parent を stamp し、
     # Outliner mirror の管理下に取り込む。Phase 1 で実装した

@@ -3,6 +3,37 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-30 — レイヤー Object の world 位置を page_grid と一致させる
+
+### 重大バグ修正
+ユーザー報告: 「ラスターレイヤーが存在しない右ページに描画される」
+
+原因: ラスター/Empty/Curve の Object location が **page_grid 配置オフセット
+を反映していなかった** ため、scene world 原点付近に出現していた。複数ページ
+モードでは各ページが world X 方向にずれて配置されるが (例: p0002 が
+X=-544mm)、レイヤー Object はオフセットが適用されず world (0, 0) に置かれて
+いた。結果として「用紙の右隣の存在しない領域」に描画される現象。
+
+### 修正
+- `utils/layer_object_sync.stamp_layer_object` に `apply_page_offset`
+  パラメータ (default=True) を追加。`parent_key` から所属ページを引き、
+  `page_grid.page_total_offset_mm` で取得した world offset を Object の
+  location.x/y に設定する。
+- `utils/empty_layer_object.ensure_image_empty_object` /
+  `ensure_text_empty_object`: entry.x_mm/y_mm に page_grid offset を加算して
+  world 座標を決定 (Empty は entry 独自管理のため stamp は
+  `apply_page_offset=False`)。
+- `utils/balloon_curve_object.ensure_balloon_curve_object`: 同様に
+  entry.x_mm/y_mm にオフセット加算。
+- ページ逆引きは bpy_struct identity ではなく **page.id 文字列** で行うよう
+  修正 (Blender の bpy ラッパ問題で `is` 比較が効かないケースに対応)。
+
+### E2E (3 ページ + p0002 アクティブ)
+- `page_total_offset_mm(p0002)` = (-544, 0) mm
+- raster Object.location = (-544, 0, 0.001) m → **p0002 用紙と完全一致**
+- image Empty entry (x_mm=10, y_mm=20) → location = (-534, 20) mm
+  (page offset + entry 座標)
+
 ## 2026-04-30 — アクティブ階層に応じた parent 解決 / マスク targets 強化
 
 ### 追加
