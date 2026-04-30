@@ -3,6 +3,78 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-05-01 — バグ #1 / #2 修正 (msgbus subscribe / 新規作品ページ番号 default)
+
+### バグ #1: msgbus subscribe 失敗 (LayerCollection.active が存在しない)
+
+#### 症状
+- アドオン register / .blend load 直後に毎回 stderr に
+  ``TypeError: subscribe_rna: struct LayerCollection does not contain property active``
+  が出力される
+- 機能自体は ``depsgraph_update_post`` フォールバックで動作中だったが、
+  ログ汚染と無効な購読が残っていた
+
+#### 原因
+- Blender 5.1.1 の ``bpy.types.LayerCollection`` には ``active``
+  プロパティが存在しない (B-Name が想定していた API は廃止 / 元々別名)
+- ``utils/active_collection_sync.py`` の ``_resubscribe_msgbus()`` で
+  ``msgbus.subscribe_rna((bpy.types.LayerCollection, "active"), ...)``
+  が常に TypeError
+
+#### 修正
+- 購読対象キーを ``(bpy.types.ViewLayer, "active_layer_collection")``
+  に変更。Outliner クリック時に変化する正しい RNA プロパティを購読する。
+- 失敗時のログを ``_logger.exception(...)`` → ``_logger.debug(...)``
+  に降格 (msgbus は best-effort、depsgraph フォールバックで同期は維持)
+
+#### 検証 (Blender 5.1.1)
+- ``LayerCollection.active`` プロパティの非存在を確認 (旧キーで TypeError 再現)
+- 新キー ``ViewLayer.active_layer_collection`` での ``subscribe_rna``
+  成功を確認
+
+### バグ #2: 新規作品の page_number_start / page_number_end が不自然な default
+
+#### 症状
+- ``bname.work_new`` で新規作品を作ると、シーンに前作品の値
+  (例: ``page_number_start=3`` / ``page_number_end=9``) が残ってしまうケースが
+  報告されており、作品情報パネルの「ページ数 開始 / 終了」に反映されて
+  混乱の原因となっていた
+
+#### 原因
+- ``BNameWorkInfo.page_number_*`` の default は既に 1 だったが、
+  PropertyGroup は Scene にぶら下がるため、前作品 (start=3, end=9 等) の値が
+  保持されたまま新規作成が走るケースで、``_apply_phase1_defaults`` の
+  reset 中に ``update`` callback (``_on_page_number_range_changed``) が
+  中間状態で発火して ``ensure_pages_for_number_range`` を起動する経路があり、
+  最終状態の決定性が低かった
+- 加えて、初期ページ (1 ページ) 生成後に end を実ページ数 (= 1) へ
+  明示同期させる処理がなく、callback 経由で間接的に決まるだけだった
+
+#### 修正
+- ``core/work_info.py``: ``suppress_page_number_range_update``
+  コンテキストマネージャを追加。``_page_range_update_depth`` を一時的に
+  インクリメントして callback の発火を抑止できる
+- ``operators/work_op.py``: ``_apply_phase1_defaults`` のページ番号 reset
+  を ``with suppress_page_number_range_update():`` でラップ。
+  callback 干渉なしに ``page_number_start = 1`` / ``page_number_end = 1``
+  を強制セット
+- ``operators/work_op.py``: ``BNAME_OT_work_new.execute`` の初期ページ
+  登録後に ``page_range.sync_end_number_to_page_count(work)`` を明示呼び出し。
+  最終状態が常に ``start=1, end=len(work.pages)`` に確定する保険
+
+#### 検証 (Blender 5.1.1)
+| 操作 | start | end | pages |
+|---|---:|---:|---:|
+| 初期状態 | 1 | 1 | 0 |
+| 手動で pre-contaminate (3, 9) | 3 | 9 | 0 |
+| **work_new 実行** | **1** | **1** | **1** |
+| +1 page | 1 | 2 | 2 |
+| +3 pages | 1 | 4 | 4 |
+| -1 page | 1 | 3 | 3 |
+
+- ページ追加/削除で end が自動追従する点は ``page_op._sync_page_number_range``
+  経由で従来通り維持
+
 ## 2026-04-30 — 汎用レイヤーフォルダを追加
 
 ### 追加
