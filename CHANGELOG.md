@@ -3,6 +3,44 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-30 — レイヤー詳細設定ダイアログを Object 選択ベースに刷新
+
+### 追加
+- `operators/layer_detail_op.py` 新設:
+    - `bname.layer_detail_open`: 選択中 (active_object) の B-Name 管理レイヤー
+      Object の `bname_kind` / `bname_id` から対応 entry を逆引きし、kind ごと
+      のフィールド (image / raster / balloon / text / gp / effect) を
+      `invoke_props_dialog` で編集可能に表示。`bname_managed=True` の Object
+      を選択しているときのみ poll が通る。
+
+### 変更 (ui/context_menu.py 全面刷新)
+- 旧 UIList ベース (`active_stack_item`) の参照を **Object 選択ベース**
+  (`active_object` の `bname_kind`) に切替え。UIList を廃止した整合性を確保。
+- `BNAME_MT_layer_context` (新規): Outliner / 3D ビュー / 各ツール (フキダシ/
+  テキスト/効果線/Object/枠線) の右クリックポップアップから直接呼び出せる
+  サブメニュー。「詳細設定」「リンク複製 (effect のみ)」「親変更は Outliner
+  で D&D」の案内を表示。
+- `BNAME_MT_object_context`: 3D ビュー Object 右クリック (`VIEW3D_MT_object_
+  context_menu`) **と Outliner Object 右クリック (`OUTLINER_MT_object` /
+  `OUTLINER_MT_context_menu`)** の両方に `_draw_in_object_context` /
+  `_draw_in_outliner_context` を append。アクティブ Object が B-Name 管理対象
+  のときのみ B-Name サブメニューを差し込む。
+- 旧 `BNAME_MT_selection_context` は `_draw_layer_commands` を呼ぶ薄いラッパ
+  として残置。既存ツール (`balloon_op` / `text_op` / `effect_line_op` /
+  `coma_edge_move_op` / `object_tool_op`) の `bpy.ops.wm.call_menu(name=
+  "BNAME_MT_selection_context")` 呼出をそのまま動作させる。
+
+### UI
+- `panels/outliner_layer_panel.py` に「アクティブレイヤー > 詳細設定を開く」
+  ボックスを追加。N パネルからもダイアログを呼び出せる。
+
+E2E 確認:
+- `bname.layer_detail_open` 登録、image Empty を active にして poll=True、
+  active 無しで poll=False
+- `BNAME_MT_layer_context` / `BNAME_MT_object_context` /
+  `BNAME_MT_selection_context` 全 menu 登録
+- VIEW3D_MT_object_context_menu / OUTLINER_MT_object のクラス参照取得 OK
+
 ## 2026-04-30 — Empty 化の徹底チェック修正 (即時同期 / 表示サイズ / 旧データ掃除)
 
 ### 修正

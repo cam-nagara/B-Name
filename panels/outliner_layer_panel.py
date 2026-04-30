@@ -48,6 +48,11 @@ class BNAME_PT_outliner_layers(Panel):
         col.operator("bname.images_to_empty_all", icon="IMAGE_DATA")
         col.operator("bname.texts_to_empty_all", icon="FONT_DATA")
 
+        # アクティブレイヤーの詳細設定
+        box = layout.box()
+        box.label(text="アクティブレイヤー", icon="OBJECT_DATA")
+        box.operator("bname.layer_detail_open", text="詳細設定を開く", icon="PREFERENCES")
+
         # オーバーレイ表示切替 (Phase 3c)
         box = layout.box()
         scene = context.scene
