@@ -104,18 +104,30 @@ def prune_snapshots(valid_bname_ids: set[str]) -> int:
 
 # ---------- Z 座標と prefix (計画書 §4.2) ----------
 
-# 1 z_index あたりの Z 座標オフセット (m)。0.1 (= 100mm)。
-# 0.005 (= 5mm) では近すぎてレイヤーが視覚的に重なって見づらいため、
-# 0.1 刻みで明確に離す。
+# 1 ページ内のレイヤー 1 段あたりの Z オフセット (m)。0.1 (= 100mm)。
+# **ページごとにリセット**して、各ページで rank 1, 2, 3, ... と順序を振る。
+# rank 1 = z=0.1, rank 2 = z=0.2, ... 用紙 (paper_bg, z=0) は常に最下段。
+# 旧仕様では z_index (10, 100, 1000+) をそのまま乗じていたため、 高 z_index
+# レイヤー (フキダシ z_index=1010) が world z=101m に飛んでいた。
 BNAME_Z_STEP_M = 0.1
 
 
 def z_for_index(z_index: int) -> float:
-    return float(z_index) * BNAME_Z_STEP_M
+    """旧 API: z_index ベースの Z 値 (mirror_work_to_outliner 内では
+    使われず、 ``assign_per_page_z_ranks`` の per-page rank が最終的な
+    location.z を確定する)。stamp 直後の暫定値として残す。"""
+    # 0.1 刻みだと z_index=1000+ で破綻するため、 0.0001 (0.1mm) を使う。
+    # 最終 location.z は assign_per_page_z_ranks が上書きするので、 ここの
+    # 値はクリッピング順序のシード以外には影響しない。
+    return float(z_index) * 0.0001
 
 
 def apply_z_index(obj: bpy.types.Object, z_index: int) -> None:
-    """Object の ``location.z`` と name prefix を ``z_index`` から再生成."""
+    """Object の ``location.z`` (暫定) と name prefix を ``z_index`` から再生成.
+
+    最終的な ``location.z`` は ``assign_per_page_z_ranks`` で page 単位に
+    rank ベースで上書きされる。
+    """
     obj[on.PROP_Z_INDEX] = int(z_index)
     try:
         loc = obj.location
@@ -129,6 +141,76 @@ def apply_z_index(obj: bpy.types.Object, z_index: int) -> None:
         on.assign_canonical_name(
             obj, kind=kind, z_index=int(z_index), sub_id=kind, title=title
         )
+
+
+def _resolve_page_id_for_object(obj: bpy.types.Object) -> str:
+    """Object が属するページの id を ``bname_parent_key`` から解決.
+
+    parent_key の形式:
+        - ``""`` → outside (ページなし)
+        - ``"pNNNN"`` → page 直下
+        - ``"pNNNN:cNN"`` → coma 配下 (コロン左側がページ)
+        - その他 (folder_xxx) → folder Collection を引いて再帰解決
+    """
+    parent_key = str(obj.get("bname_parent_key", "") or "")
+    if not parent_key:
+        return ""
+    if ":" in parent_key:
+        # pNNNN:cNN 形式 (coma)
+        return parent_key.split(":", 1)[0]
+    # pNNNN 形式 (page 直下)
+    if parent_key.startswith("p") or parent_key.startswith("P"):
+        return parent_key
+    # folder の場合: Collection から親を辿る
+    from . import object_naming as _on
+
+    folder_coll = _on.find_collection_by_bname_id(parent_key, kind="folder")
+    if folder_coll is not None:
+        pkey = str(folder_coll.get("bname_parent_key", "") or "")
+        if pkey:
+            if ":" in pkey:
+                return pkey.split(":", 1)[0]
+            if pkey.startswith("p") or pkey.startswith("P"):
+                return pkey
+    return ""
+
+
+def assign_per_page_z_ranks(scene, work) -> int:
+    """各ページごとにレイヤーの ``location.z`` を rank * 0.1 でリセット.
+
+    重なり順 (z_index 昇順) でページ内 rank=1,2,3,... を振り、 z=0.1, 0.2,
+    0.3, ... を割当てる。 用紙 (paper_bg z=0) を最下段とし、 ページ間で
+    Z は独立 (page 1 と page 2 のレイヤーは Z=0.1 から共に始まる)。
+
+    旧実装の z_index*0.1 では z_index=1010 のフキダシが z=101m に飛んで
+    view_all 時に用紙が消える問題があったため、 per-page rank に変更。
+    """
+    if scene is None or work is None or not getattr(work, "loaded", False):
+        return 0
+
+    page_groups: dict[str, list] = {}
+    for obj in bpy.data.objects:
+        if not bool(obj.get(on.PROP_MANAGED, False)):
+            continue
+        page_id = _resolve_page_id_for_object(obj)
+        if not page_id:
+            continue
+        z_index = int(obj.get(on.PROP_Z_INDEX, 0) or 0)
+        page_groups.setdefault(page_id, []).append((z_index, obj))
+
+    updated = 0
+    for page_id, items in page_groups.items():
+        items.sort(key=lambda x: (x[0], x[1].name))  # z_index 昇順, tie は name
+        for rank, (_zi, obj) in enumerate(items, start=1):
+            new_z = rank * BNAME_Z_STEP_M
+            try:
+                loc = obj.location
+                if abs(loc.z - new_z) > 1e-6:
+                    obj.location = (loc.x, loc.y, new_z)
+                    updated += 1
+            except Exception:  # noqa: BLE001
+                pass
+    return updated
 
 
 # ---------- 作品全体の mirror 同期 (Phase 0 の中核) ----------
@@ -230,6 +312,13 @@ def mirror_work_to_outliner(scene: bpy.types.Scene, work) -> None:
                 parent_key=parent_key,
                 z_index=z_index,
             )
+
+        # 最後にページごとの Z rank を再計算 (page 内 0.1 刻み、 ページ間
+        # は独立)。 paper_bg は z=0、 各レイヤーは z=0.1, 0.2, 0.3, ...
+        try:
+            assign_per_page_z_ranks(scene, work)
+        except Exception:  # noqa: BLE001
+            _logger.exception("assign_per_page_z_ranks failed")
 
 
 def _split_folder_parent(parent_key_raw: str) -> tuple[str, str]:

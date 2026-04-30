@@ -3,6 +3,47 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-05-01 — Z リフト 0.1 刻み (重なり順) を **ページ毎リセット** 仕様に修正
+
+ユーザー再確認: 「Z リフト 0.1 は重なり順の問題、 ページごとにリセット
+されるもの」
+
+### 問題
+旧仕様 ``BNAME_Z_STEP_M = 0.1`` (z_index × 0.1 を Object.location.z に
+セット) では、 z_index が大きいレイヤー (フキダシ z_index=1010 →
+z=101m) で world Z が極端に高くなり、 ``view_all`` 時にすべての用紙
+が極小に圧縮される副作用があった。 ユーザー意図は「ページ内のレイヤー
+重なり順」であって z_index ベースではなかった。
+
+### 修正
+- ``utils/layer_object_sync.py`` に ``assign_per_page_z_ranks(scene, work)``
+  追加: ページごとに B-Name 管理 Object を z_index 昇順でソートし、
+  ``Object.location.z = rank * 0.1`` (rank=1, 2, 3, ...) を割当てる。
+  ページ間で Z は **独立** (page 1 / page 2 のレイヤーは Z=0.1 から
+  共に始まる)
+- ``mirror_work_to_outliner`` の最後で ``assign_per_page_z_ranks`` 呼出
+- ``z_for_index`` は per-page rank が確定するまでの暫定値生成に格下げ
+  (0.0001 単位の細かい seed)
+- ``RASTER_Z_LIFT_M`` を 0.1 → 0.0 に戻し (Mesh 頂点 z lift 不要、
+  Object.location.z で per-page rank が確定)
+- ``GP_Z_LIFT_M`` を 0.1 → 0.0 に戻し (同上)
+- ``_resolve_page_id_for_object``: ``bname_parent_key`` (``pNNNN`` /
+  ``pNNNN:cNN`` 形式) からページを解決
+
+### E2E 検証 OK (Blender 5.1.1, p0001 内 22 レイヤー)
+| レイヤー | z_index | location.z |
+|---|---|---|
+| image (×8) | 10 | 0.1〜0.8 |
+| raster (×2) | 60, 70 | 0.9, 1.0 |
+| gp (×2) | 100 | 1.1, 1.2 |
+| effect (×2) | 200 | 1.3, 1.4 |
+| balloon | 1010 | 1.5 |
+| text (×7) | 2010 | 1.6〜2.2 |
+
+最大 z=2.2m → 旧 z=101m から大幅改善。 ``view_all`` 時に用紙が
+画面に収まる正常状態を回復。 ページ間は独立 (page 1 / page 2 で
+それぞれ z=0.1 から rank 開始)。
+
 ## 2026-04-30 — 全機能 AI 目視チェックで検出した 2 件のバグ修正
 
 全機能を一つ一つ AI 目視で動作確認した中で 2 件の重大バグを発見・修正。

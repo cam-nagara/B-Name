@@ -18,10 +18,12 @@ from ..utils.geom import mm_to_m, mm_to_px
 
 _logger = log.get_logger(__name__)
 
-# ラスター plane を他レイヤー (paper / mask) より手前に確実に表示するための
-# Z リフト (m)。0.005 (5mm) では近すぎたため 0.1 刻み (100mm) に拡大。
-# レイヤー間の Z 差を明確化し、 EEVEE Next の z-fight や alpha 競合を回避する。
-RASTER_Z_LIFT_M = 0.1
+# ラスター Mesh の頂点 Z リフト (m)。
+# 旧仕様では Mesh 頂点に z オフセットを焼き込んでいたが、 現仕様では
+# **Object.location.z** を ``assign_per_page_z_ranks`` で page 内 rank
+# (0.1 刻み) に振り直すため、 Mesh 頂点側の Z リフトは不要 (= 0)。
+# Mesh ローカル z=0 + Object.location.z = rank*0.1 で自然な重なり順を実現。
+RASTER_Z_LIFT_M = 0.0
 RASTER_MATERIAL_VERSION = 2
 RASTER_MATERIAL_VERSION_PROP = "bname_raster_material_version"
 RASTER_IMAGE_NODE = "BName Raster Image"
