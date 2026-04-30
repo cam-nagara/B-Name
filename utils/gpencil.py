@@ -51,7 +51,12 @@ ROOT_COLLECTION_NAME = "B-Name"
 
 
 def page_collection_name(page_id: str) -> str:
-    return f"page_{page_id}"
+    """ページ Collection 名 = page_id 直接.
+
+    旧仕様では ``page_{id}`` (例: ``page_p0001``) を使っていたが、Outliner
+    mirror 統一により ``p0001`` のシンプル名に統合 (2026-04-30)。
+    """
+    return str(page_id) if page_id else ""
 
 
 def page_gp_object_name(page_id: str) -> str:
@@ -414,15 +419,62 @@ def _is_linked_anywhere_in_scene(scene, collection) -> bool:
 
 
 def ensure_page_collection(scene, page_id: str):
-    """``B-Name/page_NNNN`` Collection を取得/生成して返す."""
+    """ページ Collection を Outliner mirror 経由で取得/生成して返す.
+
+    新仕様: ``utils.outliner_model.ensure_page_collection`` に委譲し、
+    bname_id で安定逆引きされる ``p0001`` 形式 Collection を返す。
+    旧 ``page_p0001`` 名で生成されていた残置 Collection も移行のため
+    リネームを試みる。
+    """
+    from . import outliner_model as om
+
+    if scene is not None and page_id:
+        # 旧名残置 Collection があれば mirror 統合のため bname_id を立てて取り込む
+        old_name = f"page_{page_id}"
+        old_coll = bpy.data.collections.get(old_name)
+        if old_coll is not None:
+            # bname_id "page_id" を持つ管理 Collection が既に別にあれば、
+            # 旧 Collection の中身を新側へ移し替える前に mirror で新側を ensure。
+            new_coll = om.ensure_page_collection(scene, page_id)
+            if new_coll is not None and new_coll is not old_coll:
+                # 旧 Collection の Object/子 Collection を新側へ移送
+                for obj in list(old_coll.objects):
+                    try:
+                        if obj.name not in new_coll.objects:
+                            new_coll.objects.link(obj)
+                        old_coll.objects.unlink(obj)
+                    except Exception:  # noqa: BLE001
+                        pass
+                for child in list(old_coll.children):
+                    try:
+                        if child.name not in new_coll.children:
+                            new_coll.children.link(child)
+                        old_coll.children.unlink(child)
+                    except Exception:  # noqa: BLE001
+                        pass
+                # 残置 Collection を root から外し、データブロックも削除
+                root = ensure_root_collection(scene)
+                if old_coll.name in root.children:
+                    try:
+                        root.children.unlink(old_coll)
+                    except Exception:  # noqa: BLE001
+                        pass
+                try:
+                    bpy.data.collections.remove(old_coll)
+                except Exception:  # noqa: BLE001
+                    pass
+            return new_coll
+        return om.ensure_page_collection(scene, page_id)
+    # フォールバック (scene 不明時)
     root = ensure_root_collection(scene)
-    name = page_collection_name(page_id)
-    coll = bpy.data.collections.get(name)
+    coll = bpy.data.collections.get(page_id)
     if coll is None:
-        coll = bpy.data.collections.new(name)
-    if coll.name not in root.children:
-        if not _is_linked_anywhere_in_scene(scene, coll):
+        coll = bpy.data.collections.new(page_id)
+    if scene is not None and coll.name not in root.children:
+        try:
             root.children.link(coll)
+        except Exception:  # noqa: BLE001
+            pass
     return coll
 
 

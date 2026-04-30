@@ -389,6 +389,21 @@ def _sync_layer_stack_after_cut(context) -> None:
         )
     except Exception:  # noqa: BLE001
         _logger.exception("knife_cut: layer stack sync failed")
+    # Outliner mirror も追従させて新コマ Collection (c02 等) を即時生成
+    try:
+        from ..core.work import get_work
+        from ..utils import layer_object_sync as _los
+        from ..utils import mask_object as _mask
+
+        scene = context.scene
+        work = get_work(context)
+        if scene is not None and work is not None and getattr(work, "loaded", False):
+            _los.mirror_work_to_outliner(scene, work)
+            # 新コマのマスク Mesh も再生成
+            if getattr(context, "mode", "OBJECT") == "OBJECT":
+                _mask.regenerate_all_masks(scene, work)
+    except Exception:  # noqa: BLE001
+        _logger.exception("knife_cut: outliner mirror failed")
 
 
 def _page_world_offset_mm(work, page_index: int, scene=None) -> tuple[float, float]:

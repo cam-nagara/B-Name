@@ -84,10 +84,13 @@ class BNAME_OT_repair_hierarchy(bpy.types.Operator):
             else:
                 seen[bid] = obj
 
-        # 4. 全マスク再生成 + orphan 削除 (Edit Mode 中は skip)
+        # 4. 全マスク再生成 + orphan 削除 + 全レイヤーへ mask 適用 (Edit Mode は skip)
         if context.mode == "OBJECT":
             mask_result = mask_obj.regenerate_all_masks(scene, work)
             orphan_removed = mask_obj.remove_orphan_masks(scene, work)
+            from ..utils import mask_apply
+
+            mask_apply.apply_masks_to_all_managed(scene)
         else:
             mask_result = {"page_masks": 0, "coma_masks": 0}
             orphan_removed = 0

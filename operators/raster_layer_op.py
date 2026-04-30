@@ -465,6 +465,13 @@ def ensure_raster_plane(context, entry, *, mark_missing: bool = False):
             parent_key=stamp_parent_key,
             scene=context.scene,
         )
+        # コマ/ページマスクを Boolean Intersect で適用 (枠外を視覚的に切抜き)
+        try:
+            from ..utils import mask_apply
+
+            mask_apply.apply_mask_to_layer_object(obj)
+        except Exception:  # noqa: BLE001
+            _logger.exception("raster: mask_apply failed")
     except Exception:  # noqa: BLE001
         _logger.exception("raster: stamp_layer_object failed")
     return obj

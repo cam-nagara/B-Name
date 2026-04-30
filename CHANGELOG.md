@@ -3,6 +3,35 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-30 — 旧 page Collection 廃止 / コマカット trigger / マスク視覚化
+
+### 変更
+- 旧 `page_p0001` 形式 Collection を `p0001` (新 mirror Collection) に統一。
+  `ensure_page_collection` (gpencil 側) が呼ばれた時点で旧 Collection の
+  Object/子 Collection を新側に移送し、旧 Collection を削除する自動移行を
+  実装。`page_collection_name` の戻り値も `page_id` 直接へ変更。
+- 枠線カット (`bname.coma_knife_cut`) 完了時に Outliner mirror と
+  全マスク再生成を自動実行する trigger を追加。コマ追加直後に新コマ
+  Collection (例: `c02`) が即時生成される。
+- watch timer scan に「ページ/コマ/フォルダ件数の変化検出」を追加。
+  外部 op で entry が増減したときに自動で mirror を再走させる
+  (5 秒以内に反映)。
+
+### 追加
+- `utils/mask_apply.py`: コマ/ページマスク Mesh をレイヤー Object に適用。
+    - Mesh 系 (raster / image plane / balloon plane / text plane):
+      Boolean Modifier (Intersect, FAST solver) でマスク形状クリップ。
+    - GP 系: Blender 5.1 GP v3 では外部 Object をマスク source に取る一般
+      Modifier が無いため、現状は modifier 削除のみで no-op。
+      Phase 5d で `__bname_mask` 内蔵 layer 方式で実装予定。
+- raster の `ensure_raster_plane`、GP の `create_layer_gp_object`、
+  effect の `create_effect_line_object` で、Object 生成完了後に
+  `mask_apply.apply_mask_to_layer_object` を呼ぶよう統合。
+- watch の raster / effect writeback 完了後にもマスクを再適用し、親変更に
+  追従する。
+- `bname.repair_hierarchy` / `bname.mask_regenerate_all` で全レイヤーへ
+  マスクを再適用するよう統合。
+
 ## 2026-04-30 — Outliner 中心レイヤー管理へ全面移行
 
 ### 追加

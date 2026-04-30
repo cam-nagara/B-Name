@@ -32,6 +32,21 @@ _scan_generation = 0
 # 現世代の tick 関数参照 (timers.unregister 用)
 _active_tick = None
 
+# 前回 scan 時の entry 数 (page / coma / folder) スナップショット。
+# (page_count, coma_total_count, folder_count) で表現し、追加削除を検出する。
+_LAST_ENTRY_COUNTS: tuple[int, int, int] = (0, 0, 0)
+
+
+def _collect_entry_counts(scene) -> tuple[int, int, int]:
+    """work.pages / 各 page.comas / work.layer_folders の合計件数を返す."""
+    work = getattr(scene, "bname_work", None) if scene is not None else None
+    if work is None:
+        return (0, 0, 0)
+    pages = list(getattr(work, "pages", []))
+    coma_total = sum(len(getattr(p, "comas", [])) for p in pages)
+    folder_count = len(getattr(work, "layer_folders", []))
+    return (len(pages), coma_total, folder_count)
+
 
 def _writeback_raster_parent(scene, obj, new_kind: str, new_key: str) -> bool:
     """Outliner D&D を ``BNameRasterLayer`` に書き戻す (Phase 3a).
@@ -94,7 +109,13 @@ def _writeback_raster_parent(scene, obj, new_kind: str, new_key: str) -> bool:
         except Exception:  # noqa: BLE001
             pass
         los.update_snapshot(obj)
-    # UIList 再描画 (parent_kind/parent_key には update callback が無いため)
+        # マスク Modifier を新親に追従させる
+        try:
+            from . import mask_apply
+
+            mask_apply.apply_mask_to_layer_object(obj)
+        except Exception:  # noqa: BLE001
+            pass
     try:
         for area in bpy.context.screen.areas if bpy.context.screen else ():
             if area.type in {"VIEW_3D", "PROPERTIES"}:
@@ -162,6 +183,13 @@ def _writeback_effect_parent(scene, obj, new_kind: str, new_key: str) -> bool:
         except Exception:  # noqa: BLE001
             _logger.exception("effect writeback failed")
             return False
+        # GP マスクモディファイアを新親に追従させる
+        try:
+            from . import mask_apply
+
+            mask_apply.apply_mask_to_layer_object(obj)
+        except Exception:  # noqa: BLE001
+            pass
     _logger.info(
         "effect writeback: %s parent → %s/%s folder=%s",
         obj.get("bname_id", ""), new_pk, new_pkey, new_fk,
@@ -176,12 +204,28 @@ def _scan_once() -> float | None:
         - raster: BNameRasterLayer.parent_kind/parent_key を書戻し
         - effect / effect_legacy / gp: Object custom property を書戻し
     """
+    global _LAST_ENTRY_COUNTS
     if los.is_sync_in_progress():
         return SCAN_INTERVAL_SECONDS
     try:
         scene = bpy.context.scene
         if scene is None:
             return SCAN_INTERVAL_SECONDS
+        # entry 件数 (ページ/コマ/フォルダ) の増減を検出したら mirror 再走で
+        # Outliner Collection 階層を最新化 (例: 枠線カットで新コマ追加直後)
+        current_counts = _collect_entry_counts(scene)
+        if current_counts != _LAST_ENTRY_COUNTS:
+            work = getattr(scene, "bname_work", None)
+            if work is not None and getattr(work, "loaded", False):
+                try:
+                    los.mirror_work_to_outliner(scene, work)
+                    _logger.info(
+                        "outliner watch: entry counts %s → %s, mirror 再走",
+                        _LAST_ENTRY_COUNTS, current_counts,
+                    )
+                except Exception:  # noqa: BLE001
+                    _logger.exception("outliner watch: mirror failed")
+            _LAST_ENTRY_COUNTS = current_counts
         changes = los.detect_outliner_changes(scene)
         if changes:
             for obj, new_kind, new_key in changes:

@@ -106,6 +106,13 @@ def create_layer_gp_object(
         gp_utils.ensure_default_stroke_material(obj)
     except Exception:  # noqa: BLE001
         _logger.exception("create_layer_gp_object: default material failed")
+    # コマ/ページマスクを GP Mask Modifier で適用
+    try:
+        from . import mask_apply
+
+        mask_apply.apply_mask_to_layer_object(obj)
+    except Exception:  # noqa: BLE001
+        _logger.exception("create_layer_gp_object: mask_apply failed")
     return obj
 
 

@@ -41,10 +41,14 @@ class BNAME_OT_mask_regenerate_all(bpy.types.Operator):
         scene = context.scene
         result = mask_obj.regenerate_all_masks(scene, work)
         removed = mask_obj.remove_orphan_masks(scene, work)
+        # 全レイヤーへマスクを適用 (枠外を視覚的に切抜き)
+        from ..utils import mask_apply
+
+        applied = mask_apply.apply_masks_to_all_managed(scene)
         self.report(
             {"INFO"},
             f"page mask {result['page_masks']} 再生成 / coma mask {result['coma_masks']} 再生成、"
-            f"orphan {removed} 削除",
+            f"orphan {removed} 削除、{applied} レイヤーに適用",
         )
         return {"FINISHED"}
 
