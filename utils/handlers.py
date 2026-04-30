@@ -176,6 +176,17 @@ def save_scene_work_to_disk(context, *, reason: str = "") -> bool:
                 continue
             page_io.save_page_json(work_dir, page)
         _logger.info("B-Name metadata saved%s", f" ({reason})" if reason else "")
+        # Phase 1: 保存契機で Outliner mirror を最新化する。page/coma 追加削除
+        # 直後に save_scene_work_to_disk が呼ばれるため、ここでミラーを更新
+        # しておけば各 op に侵襲しない。冪等で安全。
+        try:
+            from . import layer_object_sync as _los
+
+            scene = getattr(context, "scene", None)
+            if scene is not None:
+                _los.mirror_work_to_outliner(scene, work)
+        except Exception:  # noqa: BLE001
+            _logger.exception("save_scene_work_to_disk: mirror refresh failed")
         return True
     except Exception:  # noqa: BLE001
         _logger.exception("B-Name metadata save failed%s", f" ({reason})" if reason else "")

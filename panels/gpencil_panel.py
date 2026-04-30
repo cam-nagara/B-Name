@@ -491,6 +491,18 @@ def _draw_layer_stack_box(layout, context) -> None:
     if stack is None:
         box.label(text="(レイヤーがありません)")
     else:
+        # Phase 1: Outliner 移行への案内 (計画書 Phase 1 完了条件)
+        info_row = box.row(align=True)
+        info_row.label(
+            text="Outliner で階層を編集できます",
+            icon="OUTLINER",
+        )
+        info_row.operator(
+            "bname.outliner_apply_view", text="", icon="VIS_SEL_11"
+        )
+        info_row.operator(
+            "bname.outliner_restore_view", text="", icon="LOOP_BACK"
+        )
         row = box.row()
         row.template_list(
             BNAME_UL_layer_stack.bl_idname,
