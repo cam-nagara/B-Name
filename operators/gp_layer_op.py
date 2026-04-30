@@ -3,6 +3,8 @@
 提供 operator:
     - ``bname.gp_layer_create_per_object``: 現在のアクティブコマ直下に新規
       GP Object を生成し、Outliner Collection 階層に正規 link する。
+    - ``bname.gp_layer_draw_enter`` / ``bname.gp_layer_draw_exit``: 選択中
+      の GP Object を Paint モード (PAINT_GREASE_PENCIL) へ切替/退出。
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ import uuid
 
 import bpy
 from bpy.props import IntProperty, StringProperty
+from bpy.types import Operator
 
 from ..utils import gp_object_layer as gpol
 from ..utils import log
@@ -140,8 +143,141 @@ class BNAME_OT_gp_layer_create_per_object(bpy.types.Operator):
         return {"FINISHED"}
 
 
+def _resolve_active_gp_object(context):
+    """アクティブな GP Object (kind=gp) を解決する.
+
+    優先順位:
+        1. ``context.view_layer.objects.active`` が GP Object かつ
+           ``bname_kind == "gp"`` ならそれ。
+        2. ``context.selected_objects`` の中で B-Name 管理 GP Object 1 つ目。
+        3. ``scene.bname_active_layer_kind == "gp"`` の場合のみ、最初に
+           見つかった B-Name 管理 GP Object (フォールバック)。
+    見つからなければ None。
+    """
+    def _is_bname_gp(obj):
+        return (
+            obj is not None
+            and getattr(obj, "type", "") == "GREASEPENCIL"
+            and bool(obj.get("bname_managed", False))
+            and str(obj.get("bname_kind", "")) == "gp"
+        )
+
+    view_layer = getattr(context, "view_layer", None)
+    if view_layer is not None:
+        active = getattr(view_layer.objects, "active", None)
+        if _is_bname_gp(active):
+            return active
+
+    for sel in tuple(getattr(context, "selected_objects", []) or []):
+        if _is_bname_gp(sel):
+            return sel
+
+    scene = getattr(context, "scene", None)
+    if scene is not None and getattr(scene, "bname_active_layer_kind", "") == "gp":
+        for obj in bpy.data.objects:
+            if _is_bname_gp(obj):
+                return obj
+    return None
+
+
+class BNAME_OT_gp_layer_draw_enter(Operator):
+    """選択中の GP レイヤーを描画モード (PAINT_GREASE_PENCIL) へ切替."""
+
+    bl_idname = "bname.gp_layer_draw_enter"
+    bl_label = "GP 描画モードへ"
+    bl_description = (
+        "選択中の B-Name GP レイヤーを描画モード (PAINT_GREASE_PENCIL) に"
+        "切替えます。3D ビューを Material Preview に切替えて即座に描画内容を"
+        "確認できる状態にします。"
+    )
+    bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, context):
+        scene = getattr(context, "scene", None)
+        work = getattr(scene, "bname_work", None) if scene is not None else None
+        return bool(work and getattr(work, "loaded", False))
+
+    def execute(self, context):
+        obj = _resolve_active_gp_object(context)
+        if obj is None:
+            self.report({"WARNING"}, "GP レイヤーを選択してください")
+            return {"CANCELLED"}
+        # 他選択を解除して GP Object を active にする
+        try:
+            for selected in tuple(getattr(context, "selected_objects", []) or []):
+                if selected is not obj:
+                    selected.select_set(False)
+            obj.select_set(True)
+            context.view_layer.objects.active = obj
+        except Exception:  # noqa: BLE001
+            _logger.exception("gp_layer_draw_enter: 選択切替失敗")
+        # 既存モーダル (コマカット等) を片付ける
+        try:
+            from . import coma_modal_state
+
+            coma_modal_state.finish_all(context)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if getattr(obj, "mode", "OBJECT") != "OBJECT":
+                bpy.ops.object.mode_set(mode="OBJECT")
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            bpy.ops.object.mode_set(mode="PAINT_GREASE_PENCIL")
+        except Exception as exc:  # noqa: BLE001
+            self.report({"WARNING"}, f"描画モードへ切替できません: {exc}")
+            return {"CANCELLED"}
+        # 3D ビューを Material Preview に切替えて GP の塗りも見えるようにする
+        try:
+            for area in context.screen.areas if context.screen else ():
+                if area.type != "VIEW_3D":
+                    continue
+                space = area.spaces.active
+                if space is None or space.type != "VIEW_3D":
+                    continue
+                shading = getattr(space, "shading", None)
+                if shading is None:
+                    continue
+                if shading.type not in {"MATERIAL", "RENDERED"}:
+                    try:
+                        shading.type = "MATERIAL"
+                    except Exception:  # noqa: BLE001
+                        pass
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            context.scene.bname_active_layer_kind = "gp"
+        except Exception:  # noqa: BLE001
+            pass
+        return {"FINISHED"}
+
+
+class BNAME_OT_gp_layer_draw_exit(Operator):
+    """GP 描画モードから Object モードへ戻る."""
+
+    bl_idname = "bname.gp_layer_draw_exit"
+    bl_label = "GP 描画モードを終了"
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        obj = getattr(context.view_layer.objects, "active", None)
+        if obj is None:
+            return {"CANCELLED"}
+        try:
+            if getattr(obj, "mode", "") != "OBJECT":
+                bpy.ops.object.mode_set(mode="OBJECT")
+        except Exception as exc:  # noqa: BLE001
+            self.report({"WARNING"}, f"Object モードへ戻せません: {exc}")
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
 _CLASSES = (
     BNAME_OT_gp_layer_create_per_object,
+    BNAME_OT_gp_layer_draw_enter,
+    BNAME_OT_gp_layer_draw_exit,
 )
 
 

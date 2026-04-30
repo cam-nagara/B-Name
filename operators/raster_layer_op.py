@@ -295,14 +295,20 @@ def ensure_raster_material(entry, image):
     except Exception:  # noqa: BLE001
         mat.diffuse_color = (0.0, 0.0, 0.0, 0.0)
     try:
-        mat.blend_method = "BLEND"
+        # 旧 EEVEE 互換用 (legacy). Blender 5.1 EEVEE Next では
+        # surface_render_method を主に参照する。
+        mat.blend_method = "CLIP"
+        mat.alpha_threshold = 0.01
         mat.use_screen_refraction = False
         mat.show_transparent_back = True
     except Exception:  # noqa: BLE001
         pass
-    # Blender 5.1 EEVEE Next 互換: surface_render_method を BLENDED に
+    # Blender 5.1 EEVEE Next: DITHERED は alpha-clip ベースで depth buffer
+    # に書込むため、overlay (POST_VIEW) の depth_test_set("LESS_EQUAL") が
+    # 効いてラスター画素は用紙塗りに上書きされない。BLENDED は depth を
+    # 書かないため overlay 用紙塗りに隠される問題があった。
     try:
-        mat.surface_render_method = "BLENDED"
+        mat.surface_render_method = "DITHERED"
     except (AttributeError, TypeError):
         pass
     nodes = _ensure_raster_material_nodes(mat)

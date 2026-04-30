@@ -3,6 +3,55 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-30 — GP 描画ボタン / Texture Paint 中 SPACE 抑止 / ラスター材質 DITHERED
+
+ユーザー報告 3 件:
+1. GP 描画モードへの入口がパネルに無い。
+2. ラスター描画中に SPACE を押すとブラシシェルフが出て view 操作不能。
+3. オーバーレイ用紙塗りがラスター paint 内容を覆い隠す。
+
+### 修正 1: GP 描画モード入口
+- `operators/gp_layer_op.py` に `bname.gp_layer_draw_enter` /
+  `bname.gp_layer_draw_exit` を追加。`_resolve_active_gp_object` でアクティブ
+  /選択 /scene.bname_active_layer_kind=="gp" の優先順で B-Name 管理 GP
+  Object を解決し、`PAINT_GREASE_PENCIL` モードへ切替える。3D ビューを
+  Material Preview に自動切替して即座に描画内容が確認できる状態にする。
+- `panels/outliner_layer_panel.py` に「GP 描画」セクションを追加 (描画開始 /
+  描画終了)。
+
+### 修正 2: Texture Paint 中の SPACE
+- `keymap/keymap.py` に `_populate_image_paint_overrides` メソッド追加。
+  "Image Paint" キーマップ (TEXTURE_PAINT モード) に `bname.view_navigate`
+  を SPACE で先取り登録し、Blender 既定の `wm.call_asset_shelf_popover`
+  (Brush Asset Shelf 表示) を抑止する。元の機能は ``C`` キーへ移設
+  (GP Paint と同じ規則)。
+
+### 修正 3: 用紙塗りがラスターを隠す問題
+- 原因: 旧設定 `surface_render_method = "BLENDED"` は alpha 合成だが
+  **depth buffer に書込まない**。`ui/overlay.py._draw_callback` は POST_VIEW
+  で動くため、3D 描画後に用紙塗りを描く際 `depth_test_set("LESS_EQUAL")`
+  が機能せず、ラスター paint が用紙白に覆い隠されていた。
+- 試行 (失敗): 用紙塗りを PRE_VIEW ハンドラに分離。EEVEE Next の
+  framebuffer 仕様で PRE_VIEW で描いた内容が視認できず、用紙塗りが
+  完全に消えてしまった (用紙が透明 = ビューポート背景色のグレーが見える)。
+- **採用解**: ラスター材質を `surface_render_method = "DITHERED"`、
+  `blend_method = "CLIP"` (alpha-clip + alpha_threshold=0.01) に変更。
+  DITHERED は alpha-clip ベースで **depth buffer に書込む**ため、
+  POST_VIEW の用紙塗り描画時に `depth_test_set("LESS_EQUAL")` が正しく
+  機能 → ラスター画素は用紙塗りに上書きされない。
+- `ui/overlay.py` から PRE_VIEW ハンドラを撤去し、`_draw_callback` は
+  POST_VIEW のみで動作 (旧仕様に戻す + depth_test_set 追加)。
+- `_draw_canvas_fill_only` は `depth_test_set("LESS_EQUAL")` で
+  ラスター画素 (z=0.005, depth=小) と用紙塗り (z=0, depth=大) の前後関係を
+  正しく扱う。
+
+### AI 目視 E2E 検証 (Blender 5.1.1 GUI)
+- N パネルに「GP 描画」セクション (描画開始 / 描画終了) 表示確認 OK
+- `bname.gp_layer_draw_enter` 実行 → mode=`PAINT_GREASE_PENCIL` 確認 OK
+- "Image Paint" keymap の SPACE → `bname.view_navigate` 登録確認 OK
+- 用紙真っ白 + ラスター paint (黒線) が用紙上にハッキリ表示確認 OK
+- 枠線 (cyan)、ページ番号 "001"、トンボも正しくレンダリング確認 OK
+
 ## 2026-04-30 — レイヤー Object の world 位置を page_grid と一致させる
 
 ### 重大バグ修正

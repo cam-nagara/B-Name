@@ -193,6 +193,20 @@ class KeymapState:
                     print(f"[B-Name][KEYMAP] GP keymap setup failed ({name}): {exc!r}")
         except Exception as exc:  # noqa: BLE001
             print(f"[B-Name][KEYMAP] GP keymap discovery failed: {exc!r}")
+
+        # Image Paint (= 3D View TEXTURE_PAINT mode) keymap への先取り。
+        # 既定では SPACE が wm.call_asset_shelf_popover (Brush Asset Shelf) に
+        # 割当てられているため、ラスター描画中に SPACE を押すとブラシシェルフ
+        # が出てしまい view 操作ができない。B-Name の view_navigate を SPACE
+        # に登録して先取りする。
+        try:
+            km_paint = kc.keymaps.new(
+                name="Image Paint", space_type="EMPTY", region_type="WINDOW"
+            )
+            self.bname_keymaps.append(km_paint)
+            self._populate_image_paint_overrides(km_paint)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[B-Name][KEYMAP] Image Paint keymap setup failed: {exc!r}")
         print(
             f"[B-Name][KEYMAP] bname keymap created: name={BNAME_KEYMAP_NAME}"
             f" items={len(self.bname_items)} kc_name={kc.name!r}"
@@ -267,6 +281,51 @@ class KeymapState:
         _add("bname.coma_knife_cut", "F")
         _add("bname.coma_edge_move", "G")
         _add("bname.text_tool", "T")
+
+    def _populate_image_paint_overrides(self, km) -> None:
+        """Image Paint (TEXTURE_PAINT) モードキーマップに先取り登録.
+
+        Blender 5.x の TEXTURE_PAINT モードでは既定で SPACE が
+        ``wm.call_asset_shelf_popover`` (Brush Asset Shelf) に割当てられて
+        おり、ラスター描画中に SPACE を押すとブラシシェルフが開いて
+        view 操作 (パン/回転/ズーム) ができなくなる。GP Paint モードと
+        同様に B-Name の view_navigate を SPACE で先取りし、ブラシ
+        切替を ``C`` キーへ移設する。
+
+        他のショートカット (E=消しゴム, X=Undo, V=Redo 等) は Blender
+        既定がラスター描画上で重要な役割を持つため、Texture Paint では
+        SPACE / C のみを上書きする。
+        """
+        try:
+            from ..preferences import get_preferences
+            prefs = get_preferences()
+            nav_key = getattr(prefs, "key_navigate", "SPACE") if prefs else "SPACE"
+            if not nav_key:
+                nav_key = "SPACE"
+        except Exception:  # noqa: BLE001
+            nav_key = "SPACE"
+
+        def _add(idname, key, **mods):
+            try:
+                kmi = km.keymap_items.new(idname, key, "PRESS", **mods)
+                self.bname_items.append(kmi)
+                print(
+                    f"[B-Name][KEYMAP] + {idname} (Image Paint) {key}"
+                    f" shift={kmi.shift} ctrl={kmi.ctrl} alt={kmi.alt}"
+                )
+                return kmi
+            except Exception as exc:  # noqa: BLE001
+                print(f"[B-Name][KEYMAP] Image Paint {key} override failed: {exc!r}")
+                return None
+
+        _add("bname.view_navigate", nav_key)
+        # SPACE がブラシシェルフを開いていた機能を C に移設
+        kmi = _add("wm.call_asset_shelf_popover", "C")
+        if kmi is not None:
+            try:
+                kmi.properties.name = "VIEW3D_AST_brush_texture_paint"
+            except Exception as exc:  # noqa: BLE001
+                print(f"[B-Name][KEYMAP] set asset shelf name failed: {exc!r}")
 
     def _populate_object_mode_overrides(self, kc) -> None:
         """Object Mode (mode keymap) にも Alt+drag / Alt+Shift+click を登録.
