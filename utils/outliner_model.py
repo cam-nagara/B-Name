@@ -246,21 +246,22 @@ def _normalize_collection_parent(
 
     管理外 Collection (``bname_managed`` False) は触らない。
     scene.collection を含めて走査するため、ユーザーが Outliner で
-    シーン直下に D&D したケースも検出する。
+    シーン直下に D&D したケースも検出する。``children`` の包含判定は
+    name 文字列ではなく **identity 比較** で行う (.001 自動付加リネーム後の
+    名前ズレで検出失敗するのを防ぐ)。
     """
     if not on.is_managed(child):
         return
     if on.should_skip_normalize(child):
         return
-    # 既に正しい親に居て、他に link されていなければ何もしない
+    # identity 比較で親を検出
     parents = [
         c
         for c in _iter_potential_parent_collections(scene)
-        if child.name in c.children
+        if any(cc is child for cc in c.children)
     ]
     if expected_parent in parents and len(parents) == 1:
         return
-    # 既存リンクをすべて外し、expected_parent のみにつける
     for p in parents:
         if p is expected_parent:
             continue
@@ -298,21 +299,21 @@ def link_object_to_parent(
         return None
 
     # 既存の B-Name 管理 Collection への link を全部外す (`bname_no_normalize`
-    # が立っていれば触らない)。scene.collection は管理外扱いなので残す
-    # (ユーザーの意図的多重 link を尊重)。
+    # が立っていれば触らない)。scene.collection は管理外扱いなので残す。
+    # users_collection で直接所属コレクションを取得 (O(M) → O(1) コレクション数)。
     if not on.should_skip_normalize(obj):
-        for coll in list(bpy.data.collections):
-            if coll == target:
+        for coll in list(getattr(obj, "users_collection", ()) or ()):
+            if coll is target:
                 continue
             if not on.is_managed(coll):
                 continue
-            if obj.name in coll.objects:
-                try:
-                    coll.objects.unlink(obj)
-                except Exception:  # noqa: BLE001
-                    pass
+            try:
+                coll.objects.unlink(obj)
+            except Exception:  # noqa: BLE001
+                pass
 
-    if obj.name not in target.objects:
+    # identity ベースで重複 link を回避
+    if not any(o is obj for o in target.objects):
         try:
             target.objects.link(obj)
         except Exception:  # noqa: BLE001
@@ -346,11 +347,10 @@ def find_managed_parent_collection(
     """``obj`` が現在 link されている B-Name 管理 Collection の 1 つを返す.
 
     複数あれば最初に見つかったもの (`§5.3` 正規化前提)。
-    scene.collection は管理外なのでここでは見ない。
+    scene.collection は管理外なのでここでは見ない。``users_collection`` を
+    直接参照して全 Collection 走査を避ける。
     """
-    for coll in bpy.data.collections:
-        if not on.is_managed(coll):
-            continue
-        if obj.name in coll.objects:
+    for coll in getattr(obj, "users_collection", ()) or ():
+        if on.is_managed(coll):
             return coll
     return None

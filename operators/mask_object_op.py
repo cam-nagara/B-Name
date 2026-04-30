@@ -24,18 +24,26 @@ class BNAME_OT_mask_regenerate_all(bpy.types.Operator):
         from ..core.work import get_work
 
         work = get_work(context)
-        return bool(work and getattr(work, "loaded", False))
+        # mask Mesh 再生成は Object Mode でのみ安全
+        return bool(
+            work
+            and getattr(work, "loaded", False)
+            and getattr(context, "mode", "OBJECT") == "OBJECT"
+        )
 
     def execute(self, context):
         from ..core.work import get_work
 
+        if context.mode != "OBJECT":
+            self.report({"WARNING"}, "Object Mode で実行してください")
+            return {"CANCELLED"}
         work = get_work(context)
         scene = context.scene
         result = mask_obj.regenerate_all_masks(scene, work)
         removed = mask_obj.remove_orphan_masks(scene, work)
         self.report(
             {"INFO"},
-            f"page mask {result['page_masks']} / coma mask {result['coma_masks']} 生成、"
+            f"page mask {result['page_masks']} 再生成 / coma mask {result['coma_masks']} 再生成、"
             f"orphan {removed} 削除",
         )
         return {"FINISHED"}

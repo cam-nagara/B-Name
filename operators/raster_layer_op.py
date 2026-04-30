@@ -387,10 +387,14 @@ def ensure_raster_plane(context, entry, *, mark_missing: bool = False):
         return None
     page = None
     parent_key = str(getattr(entry, "parent_key", "") or "")
-    for candidate in getattr(work, "pages", []):
-        if getattr(candidate, "id", "") == parent_key:
-            page = candidate
-            break
+    # parent_key は "pNNNN" (page) または "pNNNN:cNN" (coma) 形式。コマ配下では
+    # ":" の手前を page_id として扱い、ページ検索する。
+    page_id_part = parent_key.split(":", 1)[0] if parent_key else ""
+    if page_id_part:
+        for candidate in getattr(work, "pages", []):
+            if getattr(candidate, "id", "") == page_id_part:
+                page = candidate
+                break
     if page is None:
         page = get_active_page(context)
     if page is None:

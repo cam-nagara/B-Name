@@ -141,13 +141,16 @@ def migrate_master_effect_lines_to_objects(
     if not layers:
         return plan
     z = base_z_index
+    # parent_key (例: "p0001:c01") を bname_id にスコープとして混ぜ、ページ間の
+    # 同名 GP layer 衝突を防ぐ。
+    scope_token = parent_key.replace(":", "_") if parent_key else "default"
     for layer in layers:
         layer_name = str(getattr(layer, "name", "") or "")
         if not layer_name:
             plan["skipped"].append({"reason": "no name", "z_index": z})
             z += z_step
             continue
-        bname_id = f"effect_master_{layer_name}"
+        bname_id = f"effect_master_{scope_token}_{layer_name}"
         existing = on.find_object_by_bname_id(bname_id, kind="effect")
         if existing is not None:
             plan["skipped"].append({

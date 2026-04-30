@@ -25,6 +25,10 @@ def _find_outliner_areas(window):
     return [a for a in window.screen.areas if a.type == "OUTLINER"]
 
 
+_BACKUP_KEY = "bname_outliner_backup"
+_MANAGED_KEY = "bname_outliner_managed"
+
+
 class BNAME_OT_outliner_apply_view(bpy.types.Operator):
     """現在のウィンドウの Outliner を B-Name 表示 (VIEW_LAYER + alpha sort) に切替."""
 
@@ -34,7 +38,9 @@ class BNAME_OT_outliner_apply_view(bpy.types.Operator):
         "現在のウィンドウの Outliner を VIEW_LAYER 表示 + アルファ昇順ソートへ"
         "切替えます。元の設定はバックアップされ、復元 operator で戻せます。"
     )
-    bl_options = {"REGISTER", "UNDO"}
+    # screen レベル (area / space) の変更は Blender の Undo に乗らないため
+    # UNDO オプションは外す (Ctrl+Z で戻らない期待値乖離を防ぐ)。
+    bl_options = {"REGISTER"}
 
     def execute(self, context):
         window = context.window
@@ -44,34 +50,34 @@ class BNAME_OT_outliner_apply_view(bpy.types.Operator):
             return {"CANCELLED"}
         applied = 0
         for area in areas:
-            for space in area.spaces:
-                if space.type != "OUTLINER":
-                    continue
-                current_mode = str(getattr(space, "display_mode", ""))
-                current_sort = bool(getattr(space, "use_sort_alpha", False))
-                # バックアップは「現在が B-Name 表示と一致しないとき」だけ更新する。
-                # これにより:
-                #   - apply→apply (連打): 既に VIEW_LAYER + sort=True なので backup
-                #     は更新されず、初回の値が保持される
-                #   - apply→ユーザー手動変更→apply: 手動変更後の値が backup に
-                #     入り、restore で手動変更後の値に戻せる
-                already_in_bname_view = (
-                    current_mode == "VIEW_LAYER" and current_sort is True
-                )
-                if not already_in_bname_view:
-                    area["bname_outliner_backup"] = {
-                        "display_mode": current_mode,
-                        "use_sort_alpha": current_sort,
-                    }
-                try:
-                    space.display_mode = "VIEW_LAYER"
-                except Exception:  # noqa: BLE001
-                    _logger.exception("set display_mode failed")
-                try:
-                    space.use_sort_alpha = True
-                except Exception:  # noqa: BLE001
-                    _logger.exception("set use_sort_alpha failed")
-                applied += 1
+            # active space のみ対象 (全 spaces ループは backup 多重上書きの元)
+            space = area.spaces.active
+            if space is None or space.type != "OUTLINER":
+                continue
+            current_mode = str(getattr(space, "display_mode", ""))
+            current_sort = bool(getattr(space, "use_sort_alpha", False))
+            # バックアップは「現在が B-Name 表示と一致しないとき」だけ更新。
+            # これにより apply 連打で初回値が保持され、apply→手動変更→apply
+            # で手動変更後の値が新 backup に入る。
+            already_in_bname_view = (
+                current_mode == "VIEW_LAYER" and current_sort is True
+            )
+            if not already_in_bname_view:
+                area[_BACKUP_KEY] = {
+                    "display_mode": current_mode,
+                    "use_sort_alpha": current_sort,
+                }
+            # B-Name 管理マーカー (restore 時の対象判定に使う)
+            area[_MANAGED_KEY] = True
+            try:
+                space.display_mode = "VIEW_LAYER"
+            except Exception:  # noqa: BLE001
+                _logger.exception("set display_mode failed")
+            try:
+                space.use_sort_alpha = True
+            except Exception:  # noqa: BLE001
+                _logger.exception("set use_sort_alpha failed")
+            applied += 1
         self.report({"INFO"}, f"Outliner {applied} 件を B-Name 表示へ切替えました")
         return {"FINISHED"}
 
@@ -82,7 +88,7 @@ class BNAME_OT_outliner_restore_view(bpy.types.Operator):
     bl_idname = "bname.outliner_restore_view"
     bl_label = "Outliner 表示を元に戻す"
     bl_description = "B-Name 表示への切替前の display_mode / use_sort_alpha に戻します。"
-    bl_options = {"REGISTER", "UNDO"}
+    bl_options = {"REGISTER"}
 
     def execute(self, context):
         window = context.window
@@ -92,28 +98,33 @@ class BNAME_OT_outliner_restore_view(bpy.types.Operator):
             return {"CANCELLED"}
         restored = 0
         for area in areas:
-            backup = area.get("bname_outliner_backup")
-            if not backup:
+            # B-Name 管理マーカーが立っている area のみ復元
+            if not bool(area.get(_MANAGED_KEY, False)):
                 continue
-            for space in area.spaces:
-                if space.type != "OUTLINER":
-                    continue
+            backup = area.get(_BACKUP_KEY)
+            space = area.spaces.active
+            if space is None or space.type != "OUTLINER":
+                continue
+            if backup:
                 try:
-                    if backup.get("display_mode"):
-                        space.display_mode = str(backup["display_mode"])
+                    if "display_mode" in backup:
+                        mode_val = str(backup["display_mode"])
+                        if mode_val:
+                            space.display_mode = mode_val
                 except Exception:  # noqa: BLE001
                     pass
                 try:
                     space.use_sort_alpha = bool(backup.get("use_sort_alpha", False))
                 except Exception:  # noqa: BLE001
                     pass
-                restored += 1
-            try:
-                del area["bname_outliner_backup"]
-            except KeyError:
-                pass
+            restored += 1
+            for key in (_BACKUP_KEY, _MANAGED_KEY):
+                try:
+                    del area[key]
+                except KeyError:
+                    pass
         if restored == 0:
-            self.report({"INFO"}, "復元対象のバックアップがありません")
+            self.report({"INFO"}, "復元対象がありません (B-Name 管理マーカー無し)")
         else:
             self.report({"INFO"}, f"Outliner 表示を {restored} 件復元しました")
         return {"FINISHED"}

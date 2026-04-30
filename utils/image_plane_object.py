@@ -60,14 +60,23 @@ def image_material_name(image_id: str) -> str:
 
 
 def _ensure_image_datablock(filepath: str, image_id: str) -> Optional[bpy.types.Image]:
-    """Image data block を ensure。filepath が空なら空 image (1x1) を生成."""
+    """Image data block を ensure。filepath が空なら空 image (1x1) を生成.
+
+    既存 Image との filepath 比較は ``bpy.path.abspath`` で正規化してから
+    行う。Blender が自動的に ``//`` 相対パスへ変換する場合があるため、
+    生の文字列比較では毎回 reload してしまい paint 中の未保存内容が
+    破壊される事故が起きる。
+    """
     name = f"BNameImage_{image_id}"
     img = bpy.data.images.get(name)
     if img is not None:
-        if filepath and img.filepath != filepath:
+        if filepath:
             try:
-                img.filepath = filepath
-                img.reload()
+                cur_abs = bpy.path.abspath(img.filepath) if img.filepath else ""
+                new_abs = bpy.path.abspath(filepath)
+                if cur_abs != new_abs:
+                    img.filepath = filepath
+                    img.reload()
             except Exception:  # noqa: BLE001
                 pass
         return img
@@ -169,13 +178,32 @@ def _ensure_image_material(image_id: str, image: bpy.types.Image) -> bpy.types.M
     return mat
 
 
+_MESH_DIM_PROP = "bname_image_plane_dims"  # Mesh に保存する (w_m, h_m)
+
+
 def _ensure_image_mesh(image_id: str, width_m: float, height_m: float) -> bpy.types.Mesh:
-    """plane Mesh (4 頂点) を ensure。サイズ変化に追随する."""
+    """plane Mesh (4 頂点) を ensure。サイズ変化があれば再構築する.
+
+    既存 Mesh が既に同じサイズで生成されているなら **頂点を破壊せず再利用**
+    する (ユーザーの Edit Mode 編集 / Vertex Group / Shape Key を保持)。
+    Blender の浮動小数誤差は 1e-7 で十分。
+    """
     name = image_mesh_name(image_id)
     mesh = bpy.data.meshes.get(name)
     if mesh is None:
         mesh = bpy.data.meshes.new(name)
-    # 頂点を再構築 (既存頂点は捨てる)
+
+    # サイズ不変なら触らない
+    cached = mesh.get(_MESH_DIM_PROP)
+    if cached is not None:
+        try:
+            cw, ch = float(cached[0]), float(cached[1])
+            if abs(cw - width_m) < 1e-7 and abs(ch - height_m) < 1e-7 and len(mesh.vertices) == 4:
+                return mesh
+        except Exception:  # noqa: BLE001
+            pass
+
+    # サイズ変更あり: 再構築
     mesh.clear_geometry()
     verts = [
         (0.0, 0.0, 0.0),
@@ -186,7 +214,6 @@ def _ensure_image_mesh(image_id: str, width_m: float, height_m: float) -> bpy.ty
     faces = [(0, 1, 2, 3)]
     mesh.from_pydata(verts, [], faces)
     mesh.update()
-    # UV を 1:1 で
     if mesh.uv_layers:
         uv = mesh.uv_layers.active
     else:
@@ -194,6 +221,7 @@ def _ensure_image_mesh(image_id: str, width_m: float, height_m: float) -> bpy.ty
     coords = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
     for i, loop in enumerate(mesh.loops):
         uv.data[loop.index].uv = coords[i]
+    mesh[_MESH_DIM_PROP] = (width_m, height_m)
     return mesh
 
 
@@ -261,7 +289,7 @@ def ensure_image_plane_object(
     entry_parent_key = str(getattr(entry, "parent_key", "") or "")
     entry_folder_id = folder_id or str(getattr(entry, "folder_key", "") or "")
 
-    if entry_parent_kind == "none":
+    if entry_parent_kind in {"none", "outside"}:
         stamp_kind = "outside"
         stamp_key = ""
     elif entry_parent_kind == "coma" and entry_parent_key:

@@ -27,18 +27,16 @@ _logger = log.get_logger(__name__)
 
 
 def _make_gp_bname_id() -> str:
-    """``gp_<uuid12>`` 形式の安定 ID を生成.
-
-    UUID4 の上位 12 桁を採用。`time.time() * 1000` ベースの実装は同 ms 連打
-    で衝突するため UUID へ切替。万一の衝突 (実質 0%) も
-    ``find_object_by_bname_id`` で検出して再生成する。
-    """
+    """``gp_<uuid12>`` 形式の安定 ID を生成 (衝突時はフル UUID へ拡張)."""
     for _ in range(10):
         candidate = f"gp_{uuid.uuid4().hex[:12]}"
         if on.find_object_by_bname_id(candidate, kind="gp") is None:
             return candidate
-    # 10 回試して衝突するのは天文学的に低い確率だが、念のため最後の値を返す
-    return candidate
+    # 10 回連続衝突 (天文学的低確率) はフル uuid hex で再試行
+    full = f"gp_{uuid.uuid4().hex}"
+    if on.find_object_by_bname_id(full, kind="gp") is None:
+        return full
+    raise RuntimeError("gp bname_id 生成に失敗しました (UUID 衝突)")
 
 
 def _resolve_active_coma(context):

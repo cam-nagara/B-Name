@@ -170,6 +170,7 @@ def migrate_master_gp_layers_to_objects(
         return plan
 
     z = base_z_index
+    scope_token = parent_key.replace(":", "_") if parent_key else "default"
     for layer in layers:
         layer_name = str(getattr(layer, "name", "") or "")
         if not layer_name:
@@ -178,8 +179,8 @@ def migrate_master_gp_layers_to_objects(
             # 既存 Object と z_index 衝突するのを防ぐ。
             z += z_step
             continue
-        # 既に Object 化済みの layer は skip (z は進める)
-        bname_id = f"gp_master_{layer_name}"
+        # parent (page/coma) スコープ込みで bname_id を一意化
+        bname_id = f"gp_master_{scope_token}_{layer_name}"
         existing = on.find_object_by_bname_id(bname_id, kind="gp")
         if existing is not None:
             plan["skipped"].append(

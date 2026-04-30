@@ -60,9 +60,16 @@ def is_sync_in_progress() -> bool:
 
 # ---------- 差分キャッシュ (再 fire 抑止) ----------
 
-# 前回 scan 時の (parent_collection_name, location_z, custom props ハッシュ)
-# を obj.name → tuple で保持する。値が変化していなければ早期 return する。
+# 前回 scan 時の (parent_collection_name, location_z, parent_key, folder_id) を
+# **bname_id** キーで保持する。obj.name キーだとリネームでリーク + 同名再生成で
+# 偶発継承する事故が起きるため安定 ID を採用。
 _LAST_SNAPSHOT: dict[str, tuple] = {}
+
+
+def _snapshot_key(obj: bpy.types.Object) -> str:
+    """snapshot のキー。bname_id 優先、無ければ obj.name fallback."""
+    bid = str(obj.get(on.PROP_ID, "") or "")
+    return bid if bid else f"@name:{obj.name}"
 
 
 def _snapshot_for(obj: bpy.types.Object) -> tuple:
@@ -76,15 +83,23 @@ def _snapshot_for(obj: bpy.types.Object) -> tuple:
 
 def has_changed(obj: bpy.types.Object) -> bool:
     snap = _snapshot_for(obj)
-    return _LAST_SNAPSHOT.get(obj.name) != snap
+    return _LAST_SNAPSHOT.get(_snapshot_key(obj)) != snap
 
 
 def update_snapshot(obj: bpy.types.Object) -> None:
-    _LAST_SNAPSHOT[obj.name] = _snapshot_for(obj)
+    _LAST_SNAPSHOT[_snapshot_key(obj)] = _snapshot_for(obj)
 
 
 def clear_snapshots() -> None:
     _LAST_SNAPSHOT.clear()
+
+
+def prune_snapshots(valid_bname_ids: set[str]) -> int:
+    """指定された有効 bname_id 以外の snapshot を削除. orphan 解消用."""
+    stale = [k for k in _LAST_SNAPSHOT if not k.startswith("@name:") and k not in valid_bname_ids]
+    for k in stale:
+        del _LAST_SNAPSHOT[k]
+    return len(stale)
 
 
 # ---------- Z 座標と prefix (計画書 §4.2) ----------

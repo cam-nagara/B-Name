@@ -67,10 +67,13 @@ def _truncate_utf8(text: str, max_bytes: int) -> tuple[str, bool]:
     if len(encoded) <= max_bytes:
         return text, False
     # 文字境界で切詰める。UTF-8 の続行バイトは 0b10xxxxxx なので、後ろから
-    # リーディングバイトに当たる位置まで戻す。
-    cut = max_bytes
-    while cut > 0 and (encoded[cut] & 0xC0) == 0x80:
+    # リーディングバイトに当たる位置まで戻す。境界条件に注意:
+    # cut が len(encoded) を越えないこと、cut == 0 で空文字を返すこと。
+    cut = min(max_bytes, len(encoded) - 1)
+    while cut > 0 and cut < len(encoded) and (encoded[cut] & 0xC0) == 0x80:
         cut -= 1
+    if cut <= 0:
+        return "", True
     return encoded[:cut].decode("utf-8", errors="ignore"), True
 
 
@@ -143,7 +146,16 @@ def assign_canonical_name(obj, kind: str, z_index: int, sub_id: str, title: str)
 
     切詰め発生時は ``bname_title_truncated`` を立てる。Object 名衝突は
     Blender が ``.001`` を自動付加するため気にしない (``bname_id`` で逆引きする)。
+
+    library override / linked Object は名前変更が拒否されるため、リネームを
+    試みず custom property のみ更新する。
     """
+    # library 由来 (linked / override) は名前変更不可
+    try:
+        if getattr(getattr(obj, "id_data", obj), "library", None) is not None:
+            return obj.name
+    except Exception:
+        pass
     name, truncated = make_canonical_name(kind, z_index, sub_id, title)
     try:
         obj.name = name
@@ -256,11 +268,12 @@ def iter_managed_collections(kind: str = "") -> Iterable[bpy.types.Collection]:
 def page_id_to_z_number(page_id: str) -> int:
     """``p0001`` → 1, ``p0001-0002`` → 1 (見開きの最初を採用) を返す.
 
-    数値抽出に失敗した場合は 0。
+    数値抽出に失敗した場合は 0。先頭の `p`/`P` は **1 文字だけ** 除去する
+    (誤入力 ``pp0001`` のようなケースで複数ページが同 z 値に潰れないように)。
     """
     if not page_id:
         return 0
-    cleaned = page_id.lstrip("pP")
+    cleaned = page_id[1:] if page_id[0] in ("p", "P") else page_id
     head = cleaned.split("-", 1)[0]
     try:
         return int(head)
@@ -272,7 +285,7 @@ def coma_id_to_z_number(coma_id: str) -> int:
     """``c01`` → 1 を返す."""
     if not coma_id:
         return 0
-    cleaned = coma_id.lstrip("cC")
+    cleaned = coma_id[1:] if coma_id[0] in ("c", "C") else coma_id
     try:
         return int(cleaned)
     except ValueError:

@@ -55,7 +55,8 @@ def ensure_masks_collection(scene: bpy.types.Scene) -> Optional[bpy.types.Collec
         managed=False,  # Outliner D&D 正規化対象外
     )
     root = om.ensure_root_collection(scene)
-    if coll.name not in root.children:
+    # identity 比較で重複 link 回避 (.001 自動付加リネームに耐える)
+    if not any(c is coll for c in root.children):
         try:
             root.children.link(coll)
         except Exception:  # noqa: BLE001
@@ -120,11 +121,11 @@ def ensure_page_mask_object(
     obj.hide_render = True  # render には出さない (clip 用 reference のみ)
     # __masks__ Collection に link (他から外す)
     masks_coll = ensure_masks_collection(scene)
-    if masks_coll is not None and obj.name not in masks_coll.objects:
+    if masks_coll is not None and not any(o is obj for o in masks_coll.objects):
         try:
             masks_coll.objects.link(obj)
         except Exception:  # noqa: BLE001
-            _logger.exception("link page mask to masks failed")
+            _logger.exception("link mask object to masks failed")
     return obj
 
 
@@ -190,7 +191,7 @@ def ensure_coma_mask_object(
 
 
 def regenerate_all_masks(scene: bpy.types.Scene, work) -> dict:
-    """全 mask Object を再生成. work.pages の各 page/coma を走査."""
+    """全 mask Object を再生成して orphan も削除. 冪等で安全."""
     result = {"page_masks": 0, "coma_masks": 0}
     if scene is None or work is None:
         return result
@@ -205,11 +206,17 @@ def regenerate_all_masks(scene: bpy.types.Scene, work) -> dict:
                 continue
             if ensure_coma_mask_object(scene, page, coma):
                 result["coma_masks"] += 1
+    # orphan 掃除も同時に行う (冪等性)
+    remove_orphan_masks(scene, work)
     return result
 
 
 def remove_orphan_masks(scene: bpy.types.Scene, work) -> int:
-    """work に対応 entry が無い mask Object を削除する."""
+    """work に対応 entry が無い mask Object と orphan Mesh を削除する.
+
+    削除対象は **B-Name 標準名 prefix を持つもののみ** に限定し、ユーザーが
+    手動で rename した mask Object は残す。
+    """
     if scene is None or work is None:
         return 0
     valid_page_ids = set()
@@ -222,16 +229,37 @@ def remove_orphan_masks(scene: bpy.types.Scene, work) -> int:
             cid = str(getattr(coma, "id", "") or "")
             if cid:
                 valid_coma_ids.add(f"{pid}:{cid}")
-    removed = 0
+
+    # 削除対象を一旦 list 化してから削除 (走査中削除の連鎖切れ回避)
+    to_remove: list[bpy.types.Object] = []
     for obj in list(bpy.data.objects):
         kind = obj.get(PROP_MASK_KIND)
         if kind not in {"page", "coma"}:
             continue
+        # ユーザー rename 検出: 標準 prefix を持たないものはスキップ (尊重)
+        std_prefix = (
+            PAGE_MASK_NAME_PREFIX if kind == "page" else COMA_MASK_NAME_PREFIX
+        )
+        if not obj.name.startswith(std_prefix):
+            continue
         owner = str(obj.get(PROP_MASK_OWNER_ID, "") or "")
         if kind == "page" and owner not in valid_page_ids:
-            bpy.data.objects.remove(obj, do_unlink=True)
-            removed += 1
+            to_remove.append(obj)
         elif kind == "coma" and owner not in valid_coma_ids:
+            to_remove.append(obj)
+
+    removed = 0
+    for obj in to_remove:
+        try:
+            mesh_data = obj.data
             bpy.data.objects.remove(obj, do_unlink=True)
             removed += 1
+            # Mesh datablock も他に user がなければ掃除 (orphan 残置防止)
+            if mesh_data is not None and mesh_data.users == 0:
+                try:
+                    bpy.data.meshes.remove(mesh_data)
+                except Exception:  # noqa: BLE001
+                    pass
+        except Exception:  # noqa: BLE001
+            _logger.exception("remove orphan mask failed: %s", obj.name)
     return removed

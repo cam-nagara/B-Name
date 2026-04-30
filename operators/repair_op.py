@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 import bpy
 
 from ..utils import layer_object_sync as los
@@ -26,8 +28,8 @@ class BNAME_OT_repair_hierarchy(bpy.types.Operator):
     bl_idname = "bname.repair_hierarchy"
     bl_label = "B-Name 階層を修復"
     bl_description = (
-        "Outliner Collection 階層を再生成し、bname_id の整合性をチェックし、"
-        "マスク Object を再生成します。問題があれば Info にレポートします (Phase 6)。"
+        "Outliner Collection 階層を再生成し、bname_id 空白/重複を修正し、"
+        "マスク Object を再生成します (Phase 6)。"
     )
     bl_options = {"REGISTER", "UNDO"}
 
@@ -44,42 +46,66 @@ class BNAME_OT_repair_hierarchy(bpy.types.Operator):
         scene = context.scene
         work = get_work(context)
 
-        # 1. mirror 再走 (root / outside / page / coma / folder Collection)
+        # 1. mirror 再走 (失敗したら ERROR で打ち切り、二次破壊を防ぐ)
         try:
             los.mirror_work_to_outliner(scene, work)
-        except Exception:
+        except Exception as exc:
             _logger.exception("repair: mirror failed")
+            self.report({"ERROR"}, f"mirror 失敗: {exc}")
+            return {"CANCELLED"}
 
-        # 2. bname_id の整合性チェック
-        empty_id_count = 0
-        duplicate_ids: dict[str, int] = {}
+        # 2. bname_id 空白を新 uuid で修復
+        empty_fixed = 0
+        for obj in bpy.data.objects:
+            if not on.is_managed(obj):
+                continue
+            if not on.get_bname_id(obj):
+                kind = on.get_kind(obj) or "unknown"
+                obj[on.PROP_ID] = f"{kind}_repaired_{uuid.uuid4().hex[:8]}"
+                empty_fixed += 1
+
+        # 3. bname_id 重複を片方降格 (managed=False)
+        seen: dict[str, bpy.types.Object] = {}
+        dup_demoted = 0
         for obj in bpy.data.objects:
             if not on.is_managed(obj):
                 continue
             bid = on.get_bname_id(obj)
             if not bid:
-                empty_id_count += 1
                 continue
-            duplicate_ids[bid] = duplicate_ids.get(bid, 0) + 1
-        dup_summary = [bid for bid, n in duplicate_ids.items() if n > 1]
+            if bid in seen:
+                # 後発の方を managed=False に降格 (ID は維持: ユーザー追跡可能)
+                obj[on.PROP_MANAGED] = False
+                dup_demoted += 1
+                _logger.warning(
+                    "repair: bname_id %s 重複 → %s を managed=False へ降格",
+                    bid, obj.name,
+                )
+            else:
+                seen[bid] = obj
 
-        # 3. 全マスク再生成
-        mask_result = mask_obj.regenerate_all_masks(scene, work)
-        orphan_removed = mask_obj.remove_orphan_masks(scene, work)
+        # 4. 全マスク再生成 + orphan 削除 (Edit Mode 中は skip)
+        if context.mode == "OBJECT":
+            mask_result = mask_obj.regenerate_all_masks(scene, work)
+            orphan_removed = mask_obj.remove_orphan_masks(scene, work)
+        else:
+            mask_result = {"page_masks": 0, "coma_masks": 0}
+            orphan_removed = 0
+            self.report({"WARNING"}, "Edit Mode のためマスク再生成 skip")
 
-        # 4. snapshot をクリアして watch を新規状態にする
+        # 5. snapshot を最新化 (clear ではなく現状で再収集して重い再同期を避ける)
         try:
             los.clear_snapshots()
+            for obj in on.iter_managed_objects():
+                los.update_snapshot(obj)
         except Exception:
             pass
 
         msg = (
-            f"修復: empty_id={empty_id_count}, dup_ids={len(dup_summary)}, "
+            f"修復: empty_fixed={empty_fixed}, dup_demoted={dup_demoted}, "
             f"page_mask={mask_result['page_masks']}, coma_mask={mask_result['coma_masks']}, "
             f"orphan_removed={orphan_removed}"
         )
-        if dup_summary:
-            _logger.warning("repair: duplicate bname_ids: %s", dup_summary[:5])
         self.report({"INFO"}, msg)
         return {"FINISHED"}
 

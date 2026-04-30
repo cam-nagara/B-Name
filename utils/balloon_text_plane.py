@@ -54,13 +54,20 @@ def _resolve_parent_for_entry(
     entry_parent_kind = str(getattr(entry, "parent_kind", "") or "page")
     entry_parent_key = str(getattr(entry, "parent_key", "") or "")
     entry_folder_id = folder_id or str(getattr(entry, "folder_key", "") or "")
+    entry_id = str(getattr(entry, "id", "") or "")
 
-    if entry_parent_kind == "none":
+    if entry_parent_kind in {"none", "outside"}:
         return "outside", "", ""
     if entry_parent_kind == "coma" and entry_parent_key:
         return "coma", entry_parent_key, entry_folder_id
-    if entry_parent_kind == "folder" and entry_folder_id:
-        return "folder", entry_folder_id, entry_folder_id
+    if entry_parent_kind == "folder":
+        if entry_folder_id:
+            return "folder", entry_folder_id, entry_folder_id
+        # folder 指定なのに folder_id 空: 警告 + page fallback
+        _logger.warning(
+            "balloon/text entry %s: parent_kind=folder だが folder_id 空。page fallback",
+            entry_id,
+        )
     # page or fallback
     return "page", entry_parent_key or str(getattr(page, "id", "") or ""), entry_folder_id
 
@@ -174,25 +181,31 @@ def _ensure_simple_mesh(name: str, width_m: float, height_m: float) -> bpy.types
     return mesh
 
 
+# kind 別 z_index ベースオフセット (Outliner alpha sort で
+# raster < image < balloon < text < effect の順に並ぶよう base を分ける)
+BALLOON_Z_BASE = 1000
+TEXT_Z_BASE = 2000
+
+
 def _balloon_z_index_for_entry(page, entry_id: str) -> int:
-    """page.balloons 配列の index に 10 を掛けた z_index を返す."""
+    """page.balloons 配列 index に基づき BALLOON_Z_BASE + i*10 を返す."""
     balloons = getattr(page, "balloons", None)
     if balloons is None:
-        return 0
+        return BALLOON_Z_BASE
     for i, e in enumerate(balloons):
         if str(getattr(e, "id", "") or "") == entry_id:
-            return (i + 1) * 10
-    return 0
+            return BALLOON_Z_BASE + (i + 1) * 10
+    return BALLOON_Z_BASE
 
 
 def _text_z_index_for_entry(page, entry_id: str) -> int:
     texts = getattr(page, "texts", None)
     if texts is None:
-        return 0
+        return TEXT_Z_BASE
     for i, e in enumerate(texts):
         if str(getattr(e, "id", "") or "") == entry_id:
-            return (i + 1) * 10
-    return 0
+            return TEXT_Z_BASE + (i + 1) * 10
+    return TEXT_Z_BASE
 
 
 def ensure_balloon_object(

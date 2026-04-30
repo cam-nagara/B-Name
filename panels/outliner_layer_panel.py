@@ -12,6 +12,7 @@ from __future__ import annotations
 import bpy
 from bpy.types import Panel
 
+from ..core.mode import MODE_COMA, get_mode
 from ..core.work import get_work
 
 B_NAME_CATEGORY = "B-Name"
@@ -30,7 +31,10 @@ class BNAME_PT_outliner_layers(Panel):
     @classmethod
     def poll(cls, context):
         work = get_work(context)
-        return bool(work and getattr(work, "loaded", False))
+        if not (work and getattr(work, "loaded", False)):
+            return False
+        # コマ編集モードでは作品レベルレイヤーを作らない
+        return get_mode(context) != MODE_COMA
 
     def draw(self, context):
         layout = self.layout
@@ -55,11 +59,19 @@ class BNAME_PT_outliner_layers(Panel):
         # 移行 (master GP / 効果線)
         box = layout.box()
         box.label(text="既存データ移行", icon="MODIFIER")
+        # 破壊的操作警告
+        warn = box.row()
+        warn.alert = True
+        warn.label(
+            text="先に dry-run で計画を確認してから実行してください",
+            icon="ERROR",
+        )
         col = box.column(align=True)
         row = col.row(align=True)
         row.operator(
             "bname.gp_layer_migrate_master_dryrun", text="GP dry-run"
         )
+        # confirm=True を operator props に渡しつつ、UI で警告済を明示
         row.operator("bname.gp_layer_migrate_master", text="GP 実行").confirm = True
         row = col.row(align=True)
         row.operator(

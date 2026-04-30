@@ -19,10 +19,17 @@ def _make_effect_bname_id() -> str:
         candidate = f"effect_{uuid.uuid4().hex[:12]}"
         if on.find_object_by_bname_id(candidate, kind="effect") is None:
             return candidate
-    return candidate
+    full = f"effect_{uuid.uuid4().hex}"
+    if on.find_object_by_bname_id(full, kind="effect") is None:
+        return full
+    raise RuntimeError("effect bname_id 生成に失敗しました (UUID 衝突)")
 
 
 def _resolve_active_coma(context):
+    """gp_layer_op._resolve_active_coma と同じ優先度でアクティブコマを解決.
+
+    優先順位: scene.bname_current_coma_id > page.active_coma_index > 0。
+    """
     scene = getattr(context, "scene", None)
     if scene is None:
         return None, None
@@ -40,11 +47,19 @@ def _resolve_active_coma(context):
     comas = getattr(page, "comas", None)
     if not comas:
         return page_id, None
+
+    # 1. scene.bname_current_coma_id (cNN.blend 編集中) 最優先
+    current_coma_id = str(getattr(scene, "bname_current_coma_id", "") or "")
+    if current_coma_id:
+        for coma in comas:
+            if str(getattr(coma, "id", "") or "") == current_coma_id:
+                return page_id, current_coma_id
+
+    # 2. page.active_coma_index
     coma_idx = int(getattr(page, "active_coma_index", 0))
     if not (0 <= coma_idx < len(comas)):
         coma_idx = 0
-    coma = comas[coma_idx]
-    return page_id, str(getattr(coma, "id", "") or "")
+    return page_id, str(getattr(comas[coma_idx], "id", "") or "")
 
 
 class BNAME_OT_effect_line_create_object(bpy.types.Operator):
@@ -61,6 +76,12 @@ class BNAME_OT_effect_line_create_object(bpy.types.Operator):
     title: StringProperty(name="表示名", default="新規効果線")  # type: ignore[valid-type]
     z_index: IntProperty(name="z_index", default=200, min=0)  # type: ignore[valid-type]
     target_ref: StringProperty(name="参照対象", default="")  # type: ignore[valid-type]
+
+    @classmethod
+    def poll(cls, context):
+        scene = getattr(context, "scene", None)
+        work = getattr(scene, "bname_work", None) if scene is not None else None
+        return bool(work and getattr(work, "loaded", False))
 
     def execute(self, context):
         scene = context.scene

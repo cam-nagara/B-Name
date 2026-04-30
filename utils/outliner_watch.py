@@ -18,6 +18,7 @@ from bpy.app.handlers import persistent
 
 from . import log
 from . import layer_object_sync as los
+from . import object_naming as on
 
 _logger = log.get_logger(__name__)
 
@@ -27,6 +28,9 @@ SCAN_INTERVAL_SECONDS = 5.0
 
 # scan の世代番号 (アドオン unregister 時に既存タイマーを失効させるため)
 _scan_generation = 0
+
+# 現世代の tick 関数参照 (timers.unregister 用)
+_active_tick = None
 
 
 def _writeback_raster_parent(scene, obj, new_kind: str, new_key: str) -> bool:
@@ -85,13 +89,11 @@ def _writeback_raster_parent(scene, obj, new_kind: str, new_key: str) -> bool:
         except Exception:  # noqa: BLE001
             _logger.exception("raster writeback: parent_key set failed")
             return False
-        # Object 側 custom property も最新化し、Object↔entry の乖離を防ぐ。
-        # update_snapshot は detect_outliner_changes の末尾で呼ばれるが、
-        # bname_parent_key は読みのみで使われるため、明示的に揃える。
         try:
             obj["bname_parent_key"] = new_parent_key
         except Exception:  # noqa: BLE001
             pass
+        los.update_snapshot(obj)
     # UIList 再描画 (parent_kind/parent_key には update callback が無いため)
     try:
         for area in bpy.context.screen.areas if bpy.context.screen else ():
@@ -195,6 +197,7 @@ def _writeback_image_parent(scene, obj, new_kind: str, new_key: str) -> bool:
             obj["bname_folder_id"] = new_folder_key
         except Exception:  # noqa: BLE001
             pass
+        los.update_snapshot(obj)
     try:
         for area in bpy.context.screen.areas if bpy.context.screen else ():
             if area.type in {"VIEW_3D", "PROPERTIES"}:
@@ -214,7 +217,9 @@ def _resolve_parent_kind_key_folder(new_kind: str, new_key: str) -> tuple[str, s
 
     image / balloon / text 系で folder への移動を扱う。folder の場合、
     フォルダ Collection の親 (page or coma) を逆引きして parent_kind に
-    反映する。
+    反映する。逆引きできなかった場合は ``("", "", "")`` を返し、呼出側で
+    writeback を skip させる (entry.parent_kind="folder" は EnumProperty では
+    無効値のため代入例外を防ぐ)。
     """
     if new_kind in {"outside", "none"}:
         return "none", "", ""
@@ -223,16 +228,15 @@ def _resolve_parent_kind_key_folder(new_kind: str, new_key: str) -> tuple[str, s
     if new_kind == "coma":
         return "coma", new_key, ""
     if new_kind == "folder":
-        from . import object_naming as on
-
         folder_coll = on.find_collection_by_bname_id(new_key, kind="folder")
         if folder_coll is not None:
             for parent_coll in bpy.data.collections:
-                if folder_coll.name in parent_coll.children:
+                if any(cc is folder_coll for cc in parent_coll.children):
                     pkind = on.get_kind(parent_coll)
                     if pkind in {"page", "coma"}:
                         return pkind, on.get_bname_id(parent_coll), new_key
-        return "folder", "", new_key
+        # 親の page/coma が辿れなかった: writeback skip
+        return "", "", ""
     return "", "", ""
 
 
@@ -262,6 +266,7 @@ def _writeback_balloon_parent(scene, obj, new_kind: str, new_key: str) -> bool:
             entry.folder_key = new_fk
             obj["bname_parent_key"] = new_pkey
             obj["bname_folder_id"] = new_fk
+            los.update_snapshot(obj)
         except Exception:  # noqa: BLE001
             _logger.exception("balloon writeback failed")
             return False
@@ -291,6 +296,7 @@ def _writeback_effect_parent(scene, obj, new_kind: str, new_key: str) -> bool:
         try:
             obj["bname_parent_key"] = new_pkey
             obj["bname_folder_id"] = new_fk
+            los.update_snapshot(obj)
         except Exception:  # noqa: BLE001
             _logger.exception("effect writeback failed")
             return False
@@ -394,13 +400,23 @@ def _on_load_post(_filepath: str) -> None:
 
 
 def schedule_watch_timer() -> None:
-    """timer を起動 (既存 timer は世代カウンタで失効させる)."""
-    global _scan_generation
+    """timer を起動 (既存 timer は世代カウンタ + 明示 unregister で停止)."""
+    global _scan_generation, _active_tick
+    # 既存 tick を unregister
+    if _active_tick is not None:
+        try:
+            if bpy.app.timers.is_registered(_active_tick):
+                bpy.app.timers.unregister(_active_tick)
+        except Exception:  # noqa: BLE001
+            pass
+        _active_tick = None
     _scan_generation += 1
     gen = _scan_generation
+    tick = _make_tick(gen)
+    _active_tick = tick
     try:
         bpy.app.timers.register(
-            _make_tick(gen),
+            tick,
             first_interval=SCAN_INTERVAL_SECONDS,
             persistent=True,
         )
@@ -409,9 +425,16 @@ def schedule_watch_timer() -> None:
 
 
 def cancel_watch_timer() -> None:
-    """既存 timer を世代カウンタで失効させる (登録解除と同等の効果)."""
-    global _scan_generation
+    """既存 timer を実 unregister + 世代カウンタで失効させる."""
+    global _scan_generation, _active_tick
     _scan_generation += 1
+    if _active_tick is not None:
+        try:
+            if bpy.app.timers.is_registered(_active_tick):
+                bpy.app.timers.unregister(_active_tick)
+        except Exception:  # noqa: BLE001
+            pass
+        _active_tick = None
     los.clear_snapshots()
 
 
