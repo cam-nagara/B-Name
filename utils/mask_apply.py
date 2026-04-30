@@ -5,7 +5,7 @@ Object 側で参照して、コマ枠/ページ枠の外をクリップする。
 
 実装方針:
     - Mesh 系レイヤー (raster / image plane / balloon plane / text plane):
-      Boolean Modifier (Intersect, FAST solver) で実形状クリップ。
+      Boolean Modifier (Intersect, FLOAT solver) で実形状クリップ。
     - GP 系レイヤー (gp / effect): Blender 5.1 GP v3 では外部 Mesh Object
       をマスク source にする一般 Modifier が無いため、現状は no-op。
       Phase 5d で `__bname_mask` 内蔵 layer 方式で実装予定。
@@ -70,7 +70,17 @@ def _ensure_boolean_intersect_modifier(
             return
     try:
         mod.operation = "INTERSECT"
-        mod.solver = "FAST"
+        # Blender 5.1 EEVEE Next では solver enum が変更され、 "FAST" は
+        # 廃止されて "FLOAT" / "EXACT" / "MANIFOLD" に。"FLOAT" が旧 FAST
+        # 相当の高速版なのでこれを採用。enum 値非対応で例外なら無視
+        # (default solver で続行)。
+        try:
+            mod.solver = "FLOAT"
+        except (TypeError, AttributeError):
+            try:
+                mod.solver = "FAST"
+            except (TypeError, AttributeError):
+                pass
         mod.object = target
         # 反映を確実にするため depsgraph を更新
         try:

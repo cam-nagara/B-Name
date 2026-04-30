@@ -3,6 +3,65 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-30 — 全機能 AI 目視チェックで検出した 2 件のバグ修正
+
+全機能を一つ一つ AI 目視で動作確認した中で 2 件の重大バグを発見・修正。
+
+### バグ #6 (重大): マスククリッピングが効いていない
+- 症状: ``bname.mask_regenerate_all`` 後、ラスター Object に Boolean
+  Modifier (``BName Coma Mask``) は追加されるが ``mod.object = None``
+  のまま、 さらに ``solver = "FAST"`` 設定が ``TypeError: enum "FAST"
+  not found in ('FLOAT', 'EXACT', 'MANIFOLD')`` でエラー → solver 設定
+  ステップで例外発生して ``mod.object = target`` に到達せず → クリップ
+  対象が紐付かず、コマ範囲外のはみ出しが切られない
+- 修正 (utils/mask_apply.py): Blender 5.1 EEVEE Next で solver enum 値が
+  変更されたのに追従。``"FAST"`` → ``"FLOAT"`` に変更し、 旧版互換の
+  fallback も残す。 結果として ``mod.solver = "FLOAT"`` が成功し、
+  続く ``mod.object = target`` も正しく設定される
+- 検証: regen 後 raster Modifier が
+  ``[("BName Coma Mask", "BOOLEAN", "coma_mask_p0001_c02", "FLOAT")]``
+  を確認
+
+### バグ #5: コマファイル進入で「不正なコマ stem」エラー
+- 症状: ``BNameComaEntry`` には ``id`` と ``coma_id`` の 2 つの
+  StringProperty があり、新規コマ追加で ``id`` だけセットして
+  ``coma_id`` を空のままにすると ``bname.enter_coma_mode`` の poll/
+  execute で ``stem = entry.coma_id`` が ``""`` になり「不正なコマ
+  stem」エラーで cNN.blend に入れない
+- 修正 (operators/mode_op.py BNAME_OT_enter_coma_mode):
+  ``stem = entry.coma_id or entry.id`` の fallback で互換性確保。 さらに
+  fallback 発火時に ``entry.coma_id = entry.id`` をミラー設定して、
+  次回以降の整合性を保つ
+
+### AI 目視で確認できた機能 (バグなし)
+1. 開始ページ (start_side) 切替: 右/左で見開き配置反転、用紙白表示 OK
+2. コマ追加 + 枠線カット相当の挙動: c01/c02/c03 → master_sketch active
+   化なし、 ``__papers__`` 自動展開なし
+3. ラスターレイヤー作成 + paint mode: BLEND/BLENDED 維持、 paint enter で
+   paper_bg auto-hide、 paint exit で復帰
+4. GP レイヤー作成 + draw mode: ``L0100__gp__TestGP``, c01 配下,
+   z=10.0 (z_index=100 * 0.1), PAINT_GREASE_PENCIL 切替成功
+5. 効果線レイヤー: ``L0200__effect__新規効果線`` (GP type) c01 配下
+6. フキダシ生成: ``L1010__balloon__balloon_test_1`` (Curve)、 z=101 (要確認)
+7. 画像 Empty: ``L0010__image__テスト画像``、 用紙ローカル座標 OK
+8. Outliner ⇔ B-Name 双方向同期: 双方向で active 連動
+9. cNN.blend 進入/退出: enter_coma_mode → c01.blend、 exit_coma_mode_safe
+   → work.blend 復帰、 mode 同期
+11. オーバーレイ表示切替: true ↔ false toggle 確認
+
+### 既知の追加課題 (今回未修正)
+- バグ #1: ``bpy.types.LayerCollection.active`` が Blender 5.1.1 に存在
+  しないため active_collection_sync の msgbus subscribe が起動時に
+  毎回 stderr エラー。ただし depsgraph_update_post フォールバックで
+  実機能は動作中
+- バグ #2: 新規 work の ``page_number_start=3`` / ``page_number_end=9``
+  という不自然な default 値
+- バグ #3: ``start_side="left"`` で右端に余分な空白 paper_bg
+- バグ #4: ``bname.texts_to_empty_all`` が context 不正 poll で失敗
+- 観察: フキダシ z=101m と極端 (z_index=1010 × BNAME_Z_STEP_M=0.1)。
+  ユーザー要望「0.1 刻み」が base lift のみだったか、 z_index 別の差も
+  含むかの再確認が必要
+
 ## 2026-04-30 — レイヤー Z リフトを 0.1 刻みに拡大
 
 ユーザー要望: 「レイヤーを Z 方向に浮かせる場合は、0.005 では近すぎるので、

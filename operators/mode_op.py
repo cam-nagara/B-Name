@@ -142,10 +142,19 @@ class BNAME_OT_enter_coma_mode(Operator):
             self.report({"WARNING"}, "編集対象のコマが選択されていません")
             return {"CANCELLED"}
         entry = page.comas[page.active_coma_index]
-        stem = entry.coma_id
+        # BNameComaEntry は ``id`` と ``coma_id`` の 2 フィールドを持つ。
+        # 旧コード/移行データでは coma_id が空のまま id だけ設定される
+        # ケースがあるため、両方を fallback として参照する。
+        stem = entry.coma_id or entry.id
         if not paths.is_valid_coma_id(stem):
             self.report({"ERROR"}, f"不正なコマ stem: {stem}")
             return {"CANCELLED"}
+        # entry.coma_id が空だったら id をミラー (次回以降の整合のため)
+        if not entry.coma_id and entry.id:
+            try:
+                entry.coma_id = entry.id
+            except Exception:  # noqa: BLE001
+                pass
         page_id = page.id
         work_dir = Path(work.work_dir)
 
