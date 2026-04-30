@@ -208,16 +208,117 @@ def _writeback_image_parent(scene, obj, new_kind: str, new_key: str) -> bool:
     return True
 
 
+def _resolve_parent_kind_key_folder(new_kind: str, new_key: str) -> tuple[str, str, str]:
+    """Outliner の new_kind/new_key を ``(parent_kind, parent_key, folder_key)``
+    に変換する共通ヘルパ.
+
+    image / balloon / text 系で folder への移動を扱う。folder の場合、
+    フォルダ Collection の親 (page or coma) を逆引きして parent_kind に
+    反映する。
+    """
+    if new_kind in {"outside", "none"}:
+        return "none", "", ""
+    if new_kind == "page":
+        return "page", new_key, ""
+    if new_kind == "coma":
+        return "coma", new_key, ""
+    if new_kind == "folder":
+        from . import object_naming as on
+
+        folder_coll = on.find_collection_by_bname_id(new_key, kind="folder")
+        if folder_coll is not None:
+            for parent_coll in bpy.data.collections:
+                if folder_coll.name in parent_coll.children:
+                    pkind = on.get_kind(parent_coll)
+                    if pkind in {"page", "coma"}:
+                        return pkind, on.get_bname_id(parent_coll), new_key
+        return "folder", "", new_key
+    return "", "", ""
+
+
+def _writeback_balloon_parent(scene, obj, new_kind: str, new_key: str) -> bool:
+    """``BNameBalloonEntry`` を Outliner D&D に追従させる (Phase 4)."""
+    from . import balloon_text_plane as btp
+
+    balloon_id = str(obj.get("bname_id", "") or "")
+    if not balloon_id:
+        return False
+    page, entry = btp.find_balloon_entry(scene, balloon_id)
+    if entry is None:
+        return False
+    new_pk, new_pkey, new_fk = _resolve_parent_kind_key_folder(new_kind, new_key)
+    if not new_pk:
+        return False
+    if (
+        str(getattr(entry, "parent_kind", "") or "") == new_pk
+        and str(getattr(entry, "parent_key", "") or "") == new_pkey
+        and str(getattr(entry, "folder_key", "") or "") == new_fk
+    ):
+        return False
+    with los.suppress_sync():
+        try:
+            entry.parent_kind = new_pk
+            entry.parent_key = new_pkey
+            entry.folder_key = new_fk
+            obj["bname_parent_key"] = new_pkey
+            obj["bname_folder_id"] = new_fk
+        except Exception:  # noqa: BLE001
+            _logger.exception("balloon writeback failed")
+            return False
+    _logger.info(
+        "balloon writeback: %s parent → %s/%s folder=%s",
+        balloon_id, new_pk, new_pkey, new_fk,
+    )
+    return True
+
+
+def _writeback_text_parent(scene, obj, new_kind: str, new_key: str) -> bool:
+    """``BNameTextEntry`` を Outliner D&D に追従させる (Phase 4)."""
+    from . import balloon_text_plane as btp
+
+    text_id = str(obj.get("bname_id", "") or "")
+    if not text_id:
+        return False
+    page, entry = btp.find_text_entry(scene, text_id)
+    if entry is None:
+        return False
+    new_pk, new_pkey, new_fk = _resolve_parent_kind_key_folder(new_kind, new_key)
+    if not new_pk:
+        return False
+    if (
+        str(getattr(entry, "parent_kind", "") or "") == new_pk
+        and str(getattr(entry, "parent_key", "") or "") == new_pkey
+        and str(getattr(entry, "folder_key", "") or "") == new_fk
+    ):
+        return False
+    with los.suppress_sync():
+        try:
+            entry.parent_kind = new_pk
+            entry.parent_key = new_pkey
+            entry.folder_key = new_fk
+            obj["bname_parent_key"] = new_pkey
+            obj["bname_folder_id"] = new_fk
+        except Exception:  # noqa: BLE001
+            _logger.exception("text writeback failed")
+            return False
+    _logger.info(
+        "text writeback: %s parent → %s/%s folder=%s",
+        text_id, new_pk, new_pkey, new_fk,
+    )
+    return True
+
+
 def _scan_once() -> float | None:
     """1 回分の scan。差分があれば実 entry へ反映する.
 
-    対応 kind:
-        - raster: BNameRasterLayer.parent_kind/parent_key 書戻し
-        - image: BNameImageLayer.parent_kind/parent_key/folder_key 書戻し
-        - その他 (gp / balloon / text / effect): 警告ログのみ (Phase 4 以降)
+    対応 kind (Phase 4 時点):
+        - raster: BNameRasterLayer
+        - image: BNameImageLayer
+        - balloon: BNameBalloonEntry (page.balloons)
+        - text: BNameTextEntry (page.texts)
+        - その他 (gp / effect): 警告ログのみ (Phase 5b で対応)
     """
     if los.is_sync_in_progress():
-        # B-Name operator 実行中は次のスロットで再試行
         return SCAN_INTERVAL_SECONDS
     try:
         scene = bpy.context.scene
@@ -231,8 +332,11 @@ def _scan_once() -> float | None:
                     _writeback_raster_parent(scene, obj, new_kind, new_key)
                 elif kind == "image":
                     _writeback_image_parent(scene, obj, new_kind, new_key)
+                elif kind == "balloon":
+                    _writeback_balloon_parent(scene, obj, new_kind, new_key)
+                elif kind == "text":
+                    _writeback_text_parent(scene, obj, new_kind, new_key)
                 else:
-                    # gp / balloon / text / effect は Phase 4 以降
                     _logger.info(
                         "outliner watch: %s (kind=%s) → %s/%s "
                         "(write-back 未対応 kind)",
