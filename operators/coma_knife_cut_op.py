@@ -404,6 +404,30 @@ def _sync_layer_stack_after_cut(context) -> None:
                 _mask.regenerate_all_masks(scene, work)
     except Exception:  # noqa: BLE001
         _logger.exception("knife_cut: outliner mirror failed")
+    # mask 再生成や mirror で ``__masks__`` Collection が active になり
+    # ``bname_master_sketch`` が active object として残る副作用がある。
+    # B-Name 側 active コマ (page.active_coma_index) を Outliner にも反映
+    # して、ユーザーが期待するコマを Outliner で active 状態に戻す。
+    try:
+        from ..core.work import get_work
+        from ..utils import active_collection_sync as _acs
+
+        work = get_work(context)
+        if work is not None and getattr(work, "loaded", False):
+            idx = int(getattr(work, "active_page_index", -1))
+            pages = list(getattr(work, "pages", []) or [])
+            if 0 <= idx < len(pages):
+                page = pages[idx]
+                page_id = str(getattr(page, "id", "") or "")
+                comas = list(getattr(page, "comas", []) or [])
+                cidx = int(getattr(page, "active_coma_index", -1))
+                coma_id = ""
+                if 0 <= cidx < len(comas):
+                    coma_id = str(getattr(comas[cidx], "id", "") or "")
+                if page_id:
+                    _acs.request_active_coma(context, page_id, coma_id)
+    except Exception:  # noqa: BLE001
+        _logger.exception("knife_cut: active coma 復帰失敗")
 
 
 def _page_world_offset_mm(work, page_index: int, scene=None) -> tuple[float, float]:

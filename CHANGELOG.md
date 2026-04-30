@@ -3,6 +3,50 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-30 — Outliner ⇔ B-Name 双方向同期 / 枠線カット master_sketch 抑制 / 開始ページ UI
+
+### 1. 逆方向同期 (B-Name → Outliner) 追加
+- ``utils/active_collection_sync.py`` を双方向対応に拡張:
+  - 旧: Outliner active 変化 → B-Name 側 (forward only)
+  - 新: B-Name 側 (`work.active_page_index` / `page.active_coma_index` /
+    `scene.bname_current_coma_id`) 変化 → Outliner の
+    `view_layer.active_layer_collection` も追従 (reverse)
+  - どちらが新しく変わったかは `_LAST_SYNCED` キャッシュとの差分で判定し、
+    変わった側を正として他方を追従させる
+  - `_SYNCING` 再入禁止フラグで forward/reverse の相互発火ループを防止
+- 公開 API `request_active_coma(context, page_id, coma_id)` を追加。
+  特定の page/coma を Outliner & B-Name 両方の active に強制セットする
+  ヘルパで、knife cut 等の operator 後の状態正規化に使う。
+
+### 2. 枠線カット (`bname.coma_knife_cut`) 後の active 自動復帰
+ユーザー報告: 「枠線カットでコマを割ると `__masks__` Collection が
+開いてしまい、`bname_master_sketch` がアクティブになってしまう」
+- 原因: `mask_object.regenerate_all_masks` がマスク Mesh を `__masks__`
+  Collection に新規 link する際、Blender 5.x の挙動で `__masks__` が
+  自動展開される / `mirror_work_to_outliner` 後に master_sketch 経由で
+  active object が `bname_master_sketch` に残ることがある。
+- 修正: `coma_knife_cut_op._sync_layer_stack_after_cut` の最後で
+  `active_collection_sync.request_active_coma(...)` を呼び、ユーザーが
+  カット直後に期待するコマ (page.active_coma_index で示される) を
+  Outliner active に強制復帰。同時に `bname_master_sketch` が active に
+  なっていれば解除する。
+
+### 3. 作品情報パネルから「開始ページ位置」「読む方向」を編集可能に
+ユーザー要望: 「開始ページを左か右か、作品情報内で設定可能に」
+- ``panels/work_panel.py`` の作品情報セクションに `paper.start_side`
+  (左/右) と `paper.read_direction` (左/右) を追加。
+- 元々 `paper.py` に `EnumProperty` として定義済だが UI 入口がなかった
+  ものを露出。`update=_on_paper_layout_changed` 経由で overview / overlay
+  の再計算が自動でかかる。
+
+### E2E 検証 OK (Blender 5.1.1 GUI)
+- 逆方向 sync: B-Name 側で `work.active_page_index=1` `bname_current_coma_id="c03"`
+  に書込み → Outliner active が `p0002:c03` に追従 ✓
+- `request_active_coma(p0002, c03)`: Outliner と B-Name 両方が p0002:c03 に
+  同時切替 ✓
+- master_sketch 自動 active 抑制: `view_layer.objects.active=bname_master_sketch`
+  状態から `request_active_coma(...)` 実行 → active_obj=None に解除 ✓
+
 ## 2026-04-30 — active_collection_sync 徹底チェック修正
 
 直前の Outliner→B-Name 同期実装を徹底チェックして 2 件の問題を修正。

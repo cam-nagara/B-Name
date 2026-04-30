@@ -78,6 +78,12 @@ class BNAME_PT_work(Panel):
         row.enabled = mode == MODE_PAGE
         row.prop(info, "page_number_start", text="開始")
         row.prop(info, "page_number_end", text="終了")
+        # 綴じ方向 / 読む方向 (paper の設定だが、作品単位で決める情報なので
+        # 作品情報パネルから直接編集できるようにする)
+        sub = box.column(align=True)
+        sub.enabled = mode == MODE_PAGE
+        sub.prop(work.paper, "start_side", text="開始ページ")
+        sub.prop(work.paper, "read_direction", text="読む方向")
 
         box = layout.box()
         box.label(text="コマ3Dテンプレート", icon="FILE_BLEND")
