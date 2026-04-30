@@ -81,6 +81,23 @@ class BNAME_PT_outliner_layers(Panel):
         box.label(text="アクティブレイヤー", icon="OBJECT_DATA")
         box.operator("bname.layer_detail_open", text="詳細設定を開く", icon="PREFERENCES")
 
+        # ラスター描画モード
+        box = layout.box()
+        box.label(text="ラスター描画", icon="BRUSH_DATA")
+        col = box.column(align=True)
+        row = col.row(align=True)
+        row.operator_context = "INVOKE_DEFAULT"
+        row.operator(
+            "bname.raster_layer_paint_enter",
+            text="描画開始 (Texture Paint)",
+            icon="GREASEPENCIL",
+        )
+        col.operator(
+            "bname.raster_layer_paint_exit",
+            text="描画終了 (Object モードへ)",
+            icon="OBJECT_DATAMODE",
+        )
+
         # オーバーレイ表示切替 (Phase 3c)
         box = layout.box()
         scene = context.scene

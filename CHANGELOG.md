@@ -3,6 +3,41 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-04-30 — ラスター描画フロー徹底チェック: 重複生成バグ修正 / 自動 Paint モード
+
+### 重大バグ修正
+- **`ensure_raster_plane` が canonical 名リネーム後に名前で逆引きできず、
+  ペイント開始のたびに新しい Object が `.001` `.002` で重複生成される問題**
+  を修正。`stamp_layer_object` 経由で raster plane の名前は
+  `L0010__raster__ラスター 1` などへリネームされるため、`bpy.data.objects.get
+  (raster_plane_<id>)` では取れない。`object_naming.find_object_by_bname_id`
+  で `bname_id` 逆引きする経路を追加。これにより Texture Paint で描こうと
+  しても **対象 Object が毎回別物になり描画が紐付かない**深刻な問題が解消。
+
+### フロー改善
+- `bname.raster_layer_add` に `enter_paint` (BoolProperty, default=True) を
+  追加。**作成直後に自動的に Texture Paint モードへ切替え**、ユーザーが
+  「作って即描ける」状態へ到達できる。
+- `bname.raster_layer_paint_enter` 末尾で **3D ビューを Material Preview に
+  自動切替**。Solid モードでは Image Texture (= 描いたピクセル) が反映され
+  ず「描いても見えない」状態になるため、Material 以外なら Material へ切替。
+- N パネル「Outliner レイヤー」に **「描画開始 (Texture Paint)」** ボタンと
+  **「描画終了 (Object モードへ)」** ボタンを追加。アクティブな raster
+  レイヤーを直接操作可能。
+
+### E2E (1 ページ完全フロー)
+work 作成 → page 追加 → coma 追加 → mirror → raster 追加 → paint enter まで
+全 5 ステップを通しで検証:
+- step1 work.loaded=True, work_dir 正常
+- step2 page_count=1
+- step3 coma_count=1, root/p0001/c01 Collection 全て生成
+- step4 raster Object 1 個 (重複なし)、kind="raster", managed=True、
+  location=(0,0,0.001)、Mesh 4 頂点 (0,0,0.005)→(0.257,0.364,0.005) で
+  ページピッタリ、Material blend_method="BLEND"、Image 3035×4299 px
+  (300 dpi で B5 サイズの正しい解像度)、p0001 Collection 配下
+- step5 paint_canvas が raster image に紐付き、active_object_mode=
+  TEXTURE_PAINT、active_obj_name="L0010__raster__ラスター 1" (重複なし)
+
 ## 2026-04-30 — 右クリックメニュー: Outliner 選択も拾う / メニュー append 範囲拡大
 
 ### 修正

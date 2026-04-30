@@ -422,7 +422,16 @@ def ensure_raster_plane(context, entry, *, mark_missing: bool = False):
     if image is None:
         return None
     mesh = _ensure_raster_mesh(work, raster_id)
-    obj = bpy.data.objects.get(raster_plane_name(raster_id))
+    # bname_id (= raster_id) で既存 Object を逆引き。stamp_layer_object 経由で
+    # canonical 名 (L0010__raster__title) にリネームされた後でも同 Object を
+    # 再利用できる。これがないと毎回 raster_plane_<id> 名で新規 Object を
+    # 作ってしまい、Object と Image の二重存在 + 描画対象のズレを招く。
+    from ..utils import object_naming as _on
+
+    obj = _on.find_object_by_bname_id(raster_id, kind="raster")
+    if obj is None:
+        # 旧名で残置されている可能性 (mirror 前のレガシー) を救出
+        obj = bpy.data.objects.get(raster_plane_name(raster_id))
     if obj is None:
         obj = bpy.data.objects.new(raster_plane_name(raster_id), mesh)
     else:
@@ -749,6 +758,11 @@ class BNAME_OT_raster_layer_add(Operator):
         items=(("gray8", "グレー 8bit", ""), ("gray1", "1bit", "")),
         default="gray8",
     )
+    enter_paint: BoolProperty(  # type: ignore[valid-type]
+        name="作成後すぐ描画開始",
+        description="生成完了後、自動的に Texture Paint モードへ切替えます。",
+        default=True,
+    )
 
     @classmethod
     def poll(cls, context):
@@ -763,6 +777,8 @@ class BNAME_OT_raster_layer_add(Operator):
         if self.dpi_preset == "custom":
             layout.prop(self, "dpi")
         layout.prop(self, "bit_depth")
+        layout.separator()
+        layout.prop(self, "enter_paint")
 
     def _resolved_dpi(self) -> int:
         if self.dpi_preset == "custom":
@@ -808,6 +824,14 @@ class BNAME_OT_raster_layer_add(Operator):
                 if layer_stack_utils.stack_item_uid(item) == uid:
                     layer_stack_utils.select_stack_index(context, i)
                     break
+        # 作成完了後に自動的に Texture Paint モードへ入る (enter_paint=True 時)
+        if bool(self.enter_paint):
+            try:
+                bpy.ops.bname.raster_layer_paint_enter(
+                    "INVOKE_DEFAULT", raster_id=raster_id
+                )
+            except Exception:  # noqa: BLE001
+                _logger.exception("raster_layer_add: paint_enter 自動切替失敗")
         return {"FINISHED"}
 
 
@@ -906,6 +930,26 @@ class BNAME_OT_raster_layer_paint_enter(Operator):
             return {"CANCELLED"}
         force_active_brush_grayscale(context)
         _start_brush_grayscale_timer()
+        # 3D ビューをマテリアルプレビューに切替えて、Image Texture (= 描いた
+        # ピクセル) が即座に見える状態にする。Solid モードでは Image Texture
+        # が反映されず「描いても見えない」状態になるため。
+        try:
+            for area in context.screen.areas if context.screen else ():
+                if area.type != "VIEW_3D":
+                    continue
+                space = area.spaces.active
+                if space is None or space.type != "VIEW_3D":
+                    continue
+                shading = getattr(space, "shading", None)
+                if shading is None:
+                    continue
+                if shading.type not in {"MATERIAL", "RENDERED"}:
+                    try:
+                        shading.type = "MATERIAL"
+                    except Exception:  # noqa: BLE001
+                        pass
+        except Exception:  # noqa: BLE001
+            pass
         return {"FINISHED"}
 
 
