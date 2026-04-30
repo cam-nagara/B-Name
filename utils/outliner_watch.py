@@ -29,8 +29,73 @@ SCAN_INTERVAL_SECONDS = 5.0
 _scan_generation = 0
 
 
+def _writeback_raster_parent(scene, obj, new_kind: str, new_key: str) -> bool:
+    """Outliner D&D を ``BNameRasterLayer`` に書き戻す (Phase 3a).
+
+    対応する parent_kind マッピング:
+        - "page" → ``parent_kind="page"``
+        - "coma" → ``parent_kind="coma"``
+        - "outside" / "none" → ``parent_kind="none"`` / ``parent_key=""``
+        - "folder" → 未対応 (BNameRasterLayer.parent_kind に folder enum が無い)。
+                    警告ログのみ。
+
+    Returns:
+        書戻しを実行したら True。
+    """
+    raster_id = str(obj.get("bname_id", "") or "")
+    if not raster_id:
+        return False
+    coll = getattr(scene, "bname_raster_layers", None)
+    if coll is None:
+        return False
+    entry = None
+    for e in coll:
+        if str(getattr(e, "id", "") or "") == raster_id:
+            entry = e
+            break
+    if entry is None:
+        return False
+    if new_kind == "folder":
+        _logger.warning(
+            "raster %s: folder への移動は Phase 3a では未対応 (skip)", raster_id
+        )
+        return False
+    if new_kind in {"outside", "none"}:
+        new_parent_kind = "none"
+        new_parent_key = ""
+    elif new_kind in {"page", "coma"}:
+        new_parent_kind = new_kind
+        new_parent_key = new_key
+    else:
+        return False
+    # 既に同値なら no-op (再帰検出を避ける)
+    if (
+        str(getattr(entry, "parent_kind", "") or "") == new_parent_kind
+        and str(getattr(entry, "parent_key", "") or "") == new_parent_key
+    ):
+        return False
+    with los.suppress_sync():
+        try:
+            entry.parent_kind = new_parent_kind
+        except Exception:  # noqa: BLE001
+            _logger.exception("raster writeback: parent_kind set failed")
+            return False
+        try:
+            entry.parent_key = new_parent_key
+        except Exception:  # noqa: BLE001
+            _logger.exception("raster writeback: parent_key set failed")
+            return False
+    _logger.info(
+        "raster writeback: %s parent → %s/%s",
+        raster_id,
+        new_parent_kind,
+        new_parent_key,
+    )
+    return True
+
+
 def _scan_once() -> float | None:
-    """1 回分の scan。差分があれば警告ログを出す.
+    """1 回分の scan。差分があれば実 entry へ反映する (raster は書戻し対応).
 
     Returns:
         次回までの秒数。停止する場合は None。
@@ -45,12 +110,16 @@ def _scan_once() -> float | None:
         changes = los.detect_outliner_changes(scene)
         if changes:
             for obj, new_kind, new_key in changes:
-                _logger.info(
-                    "outliner watch: %s moved to %s/%s (Phase 3 で実 entry へ反映)",
-                    obj.name,
-                    new_kind,
-                    new_key,
-                )
+                kind = str(obj.get("bname_kind", "") or "")
+                if kind == "raster":
+                    _writeback_raster_parent(scene, obj, new_kind, new_key)
+                else:
+                    # image / gp / balloon / text などは Phase 3b 以降で対応
+                    _logger.info(
+                        "outliner watch: %s (kind=%s) → %s/%s "
+                        "(write-back 未対応 kind)",
+                        obj.name, kind, new_kind, new_key,
+                    )
     except Exception:  # noqa: BLE001
         _logger.exception("outliner watch scan failed")
     return SCAN_INTERVAL_SECONDS

@@ -415,6 +415,36 @@ def ensure_raster_plane(context, entry, *, mark_missing: bool = False):
     obj.hide_render = not bool(getattr(entry, "visible", True))
     coll = gp_utils.ensure_page_collection(context.scene, page.id)
     _link_object_to_collection_only(obj, coll)
+
+    # Phase 3a: raster Object に B-Name 安定 ID と parent を stamp し、
+    # Outliner mirror の管理下に取り込む。Phase 1 で実装した
+    # stamp_layer_object 経由で Outliner Collection 階層にも link 同期する。
+    try:
+        from ..utils import layer_object_sync as _los
+
+        # raster の親キーは entry.parent_kind / entry.parent_key を採用。
+        # entry.parent_key が "<page_id>:<coma_id>" 形式ならコマ配下、
+        # "<page_id>" のみならページ直下。空なら outside にしない (ensure_raster_plane
+        # は page 必須なので outside ではない)。
+        entry_parent_key = str(getattr(entry, "parent_key", "") or "")
+        entry_parent_kind = str(getattr(entry, "parent_kind", "") or "page")
+        if entry_parent_kind not in {"page", "coma", "folder", "outside", "none"}:
+            entry_parent_kind = "page"
+        if not entry_parent_key:
+            entry_parent_key = str(getattr(page, "id", "") or "")
+            entry_parent_kind = "page"
+        _los.stamp_layer_object(
+            obj,
+            kind="raster",
+            bname_id=str(raster_id),
+            title=str(getattr(entry, "title", "") or raster_id),
+            z_index=int(getattr(entry, "z_index", 0) or 0),
+            parent_kind=entry_parent_kind,
+            parent_key=entry_parent_key,
+            scene=context.scene,
+        )
+    except Exception:  # noqa: BLE001
+        _logger.exception("raster: stamp_layer_object failed")
     return obj
 
 
