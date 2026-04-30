@@ -39,6 +39,9 @@ PAPER_BG_MATERIAL_NAME = "BName_PaperBackground"
 
 PROP_BG_KIND = "bname_paper_bg_kind"
 PROP_BG_OWNER_ID = "bname_paper_bg_page_id"
+# ページが ``page_number_start..end`` レンジ内にいるかどうか。
+# 「自然な可視性」を保持し、 paint mode の一時 hide とは独立に管理する。
+PROP_BG_IN_RANGE = "bname_paper_bg_in_range"
 
 
 def _ensure_papers_collection(scene: bpy.types.Scene) -> Optional[bpy.types.Collection]:
@@ -143,13 +146,21 @@ def _ensure_paper_mesh(width_m: float, height_m: float) -> bpy.types.Mesh:
 def ensure_paper_bg_for_page(
     scene: bpy.types.Scene, work, page_index: int
 ) -> Optional[bpy.types.Object]:
-    """1 ページ分の用紙背景 Mesh を ensure し、page_grid 位置に配置."""
+    """1 ページ分の用紙背景 Mesh を ensure し、page_grid 位置に配置.
+
+    ページ範囲外 (``in_page_range=False``) のページは、 paper_bg Object を
+    生成するが ``hide_viewport=True`` にして viewport から隠す。 これにより
+    ``page_number_end`` を縮めて範囲外になったページの白紙が viewport に
+    取り残されない。 paint mode 中の一時 hide とは独立した
+    ``bname_paper_bg_in_range`` 属性で「自然な可視性」を保持する。
+    """
     if scene is None or work is None or not (0 <= page_index < len(work.pages)):
         return None
     page = work.pages[page_index]
     page_id = str(getattr(page, "id", "") or "")
     if not page_id:
         return None
+    in_range = bool(getattr(page, "in_page_range", True))
     paper = work.paper
     width_mm = float(getattr(paper, "canvas_width_mm", 257.0) or 257.0)
     height_mm = float(getattr(paper, "canvas_height_mm", 364.0) or 364.0)
@@ -169,9 +180,16 @@ def ensure_paper_bg_for_page(
         obj.data = mesh
     obj[PROP_BG_KIND] = "page"
     obj[PROP_BG_OWNER_ID] = page_id
+    obj[PROP_BG_IN_RANGE] = bool(in_range)
     obj[on.PROP_MANAGED] = False  # Outliner mirror 正規化対象外
     obj.hide_select = True  # ユーザーが触って動かさないように
     obj.hide_render = True  # B-Name の export は別 path で行うため render off
+    # ページ範囲外なら viewport から隠す (paint mode hide が立っていない限り)
+    if not _LAST_PAINT_HIDDEN:
+        try:
+            obj.hide_viewport = not in_range
+        except Exception:  # noqa: BLE001
+            pass
     # display_type = TEXTURED で普通に塗りが見える状態に
     try:
         obj.display_type = "TEXTURED"
@@ -208,6 +226,44 @@ def ensure_paper_bg_for_page(
     return obj
 
 
+def refresh_paper_bg_visibility(scene: bpy.types.Scene, work) -> int:
+    """既存 paper_bg Object の ``PROP_BG_IN_RANGE`` と ``hide_viewport`` を、
+    ``work.pages[*].in_page_range`` の現在値に合わせて再同期する.
+
+    ``page_number_start`` / ``page_number_end`` 変更時に
+    ``update_page_range_visibility`` が page entry の ``in_page_range`` を
+    切替えた直後にこの関数を呼ぶことで、 Mesh / Material は触らずに
+    可視性だけを軽量更新する。
+
+    Returns: 触れた Object 数。
+    """
+    if scene is None or work is None:
+        return 0
+    page_in_range_map: dict[str, bool] = {}
+    for page in getattr(work, "pages", []) or []:
+        pid = str(getattr(page, "id", "") or "")
+        if pid:
+            page_in_range_map[pid] = bool(getattr(page, "in_page_range", True))
+    count = 0
+    for obj in bpy.data.objects:
+        if obj.get(PROP_BG_KIND) != "page":
+            continue
+        pid = str(obj.get(PROP_BG_OWNER_ID, "") or "")
+        if pid not in page_in_range_map:
+            continue
+        in_range = page_in_range_map[pid]
+        try:
+            obj[PROP_BG_IN_RANGE] = in_range
+            # paint mode hide が有効な間は触らない (paint exit 時に
+            # set_paper_bg_visible(True) が改めて反映する)
+            if not _LAST_PAINT_HIDDEN:
+                obj.hide_viewport = not in_range
+            count += 1
+        except Exception:  # noqa: BLE001
+            pass
+    return count
+
+
 def regenerate_all_paper_bgs(scene: bpy.types.Scene, work) -> int:
     """全ページの用紙背景 Mesh を ensure。戻り値: 生成/更新したページ数."""
     if scene is None or work is None:
@@ -242,6 +298,11 @@ def set_paper_bg_visible(visible: bool) -> int:
     干渉して active raster mesh の UV 取得が失敗 → 「何も描けない」現象が
     起きる。paint モード入退出時にこの関数で表示切替する。
 
+    ``visible=True`` (paint mode 退出時の復帰) では、 ``PROP_BG_IN_RANGE``
+    custom property が False (= ページ範囲外) の Object は隠したままにする。
+    これにより、 ``page_number_end`` を縮めて範囲外にしたページの白紙が
+    paint exit で viewport に再表示されてしまう問題を防ぐ。
+
     Returns: 切替えた Object 数。
     """
     count = 0
@@ -249,7 +310,12 @@ def set_paper_bg_visible(visible: bool) -> int:
         if obj.get(PROP_BG_KIND) != "page":
             continue
         try:
-            obj.hide_viewport = not visible
+            if not visible:
+                obj.hide_viewport = True
+            else:
+                # 復帰: ページ範囲内なら表示、 範囲外なら隠したまま
+                in_range = bool(obj.get(PROP_BG_IN_RANGE, True))
+                obj.hide_viewport = not in_range
             count += 1
         except Exception:  # noqa: BLE001
             pass

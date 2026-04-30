@@ -3,6 +3,47 @@
 このファイルは B-Name の主要な変更履歴を記録します。
 Blender 5.1.1 を対象としています。
 
+## 2026-05-01 — ページ範囲外 (in_page_range=False) ページの paper_bg を viewport から隠す
+
+### 症状
+- ``page_number_end`` を縮めて末尾ページを範囲外にしたとき、 overlay 描画
+  (コマ枠 / GP / 効果線 / 画像 / テキスト / フキダシ) は
+  ``overlay_visibility.page_visible(page)`` で正しくスキップされるのに、
+  ``paper_bg`` は実 Mesh Object のため viewport に白紙として残り続けて
+  「使われていない空ページ」が見える状態になっていた
+
+### 原因
+- ``regenerate_all_paper_bgs`` が全ページに paper_bg を生成し、
+  ``in_page_range`` を考慮せず ``hide_viewport=False`` のままにしていた
+- ``set_paper_bg_visible(True)`` (paint mode 退出復帰) も全 paper_bg を
+  無条件に再表示していたため、 paint で隠したあとの復帰で範囲外
+  paper_bg が再出現していた
+
+### 修正
+- ``utils/paper_bg_object.py``:
+  - ``PROP_BG_IN_RANGE`` (``bname_paper_bg_in_range``) custom property を
+    追加し、 paper_bg Object 自身に「自然な可視性」を保持
+  - ``ensure_paper_bg_for_page``: 生成 / 更新時に ``page.in_page_range``
+    から ``PROP_BG_IN_RANGE`` を書き込み、 paint hide が立っていなければ
+    ``hide_viewport = not in_range`` を適用
+  - ``set_paper_bg_visible(True)`` (paint exit 復帰) は ``PROP_BG_IN_RANGE``
+    を見て、 範囲外 paper_bg は隠したまま復帰する
+  - ``refresh_paper_bg_visibility(scene, work)`` を追加: Mesh / Material は
+    再生成せず可視性だけを軽量更新する
+- ``utils/page_range.update_page_range_visibility``: page entry の
+  ``in_page_range`` を更新したあと ``refresh_paper_bg_visibility`` を呼び、
+  ``page_number_start`` / ``page_number_end`` 変更が即座に paper_bg 表示
+  に反映されるようにした
+
+### 検証 (Blender 5.1.1 実機)
+- 8 ページ work で ``page_number_end`` を 4 / 5 / 10 にラウンドトリップ:
+  範囲内ページの paper_bg は表示、 範囲外ページは ``hide_viewport=True``
+  に切替わることを確認
+- paint mode 模擬 (``set_paper_bg_visible(False)`` → 全 hide → ``True``):
+  復帰後、 範囲内ページのみ表示、 範囲外ページは隠れたままを確認
+- 8 ページ + start_side=left + end=9 (p0008 が out of range) のスクリーン
+  ショットで、 row 2 にあった単独 white page が消失することを目視確認
+
 ## 2026-05-01 — バグ #3 修正 (start_side 変更でコマ配下レイヤーが旧位置に取り残される)
 
 ### 症状

@@ -79,6 +79,19 @@ def update_page_range_visibility(work) -> bool:
         changed = True
     if _apply_range_visibility_to_gp_layers(work):
         changed = True
+    if changed:
+        # 範囲外になったページの paper_bg Mesh を viewport から隠す。
+        # 範囲内に戻ったページは表示を復帰させる。
+        try:
+            import bpy
+
+            from . import paper_bg_object as _pbg
+
+            scene = bpy.context.scene if bpy.context else None
+            if scene is not None:
+                _pbg.refresh_paper_bg_visibility(scene, work)
+        except Exception:  # noqa: BLE001
+            _logger.exception("paper_bg visibility refresh failed")
     return changed
 
 
